@@ -7,6 +7,7 @@ import type { User } from "@supabase/supabase-js";
 interface DiscordProfile {
   username?: string;
   full_name?: string;
+  email?: string;
 }
 
 function OrderPage() {
@@ -15,7 +16,7 @@ function OrderPage() {
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
     name: "",
-    discordTag: "",
+    email: "",
   });
 
   useEffect(() => {
@@ -31,7 +32,7 @@ function OrderPage() {
       const discordProfile = session.user.user_metadata as DiscordProfile;
       setFormData({
         name: discordProfile.full_name || "",
-        discordTag: discordProfile.username || "",
+        email: session.user.email || "",
       });
       setLoading(false);
     });
@@ -51,6 +52,14 @@ function OrderPage() {
   }, [navigate]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Prevent changes if the data came from Discord
+    if (user?.user_metadata?.full_name && e.target.name === "name") {
+      return;
+    }
+    if (user?.email && e.target.name === "email") {
+      return;
+    }
+
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,
@@ -67,7 +76,7 @@ function OrderPage() {
       const { error } = await supabase.from("orders").insert([
         {
           user_id: user.id,
-          discord_username: formData.discordTag,
+          email: formData.email,
           full_name: formData.name,
           status: "pending",
         },
@@ -75,7 +84,7 @@ function OrderPage() {
 
       if (error) throw error;
 
-      alert("Order submitted! We'll contact you on Discord soon.");
+      alert("Order submitted! We'll contact you via email soon.");
       navigate("/");
     } catch (error) {
       console.error("Error submitting order:", error);
@@ -150,35 +159,43 @@ function OrderPage() {
                   value={formData.name}
                   onChange={handleInputChange}
                   placeholder="John Doe"
-                  className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  className={`w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400 ${
+                    user?.user_metadata?.full_name
+                      ? "opacity-75 cursor-not-allowed"
+                      : ""
+                  }`}
                   required
+                  readOnly={!!user?.user_metadata?.full_name}
                 />
               </div>
 
               <div>
                 <label
-                  htmlFor="discordTag"
+                  htmlFor="email"
                   className="block text-sm font-medium text-white mb-2"
                 >
-                  Discord Username
+                  Email Address
                 </label>
                 <input
-                  type="text"
-                  id="discordTag"
-                  name="discordTag"
-                  value={formData.discordTag}
+                  type="email"
+                  id="email"
+                  name="email"
+                  value={formData.email}
                   onChange={handleInputChange}
-                  placeholder="username"
-                  className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  placeholder="you@example.com"
+                  className={`w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400 ${
+                    user?.email ? "opacity-75 cursor-not-allowed" : ""
+                  }`}
                   required
+                  readOnly={!!user?.email}
                 />
               </div>
 
               <div className="text-white/70 text-sm">
                 <p>After submitting your order:</p>
                 <ul className="list-disc ml-5 mt-2 space-y-1">
-                  <li>We'll contact you on Discord</li>
-                  <li>Payment will be handled through Discord</li>
+                  <li>We'll contact you via email</li>
+                  <li>Payment instructions will be sent to your email</li>
                   <li>
                     Your account will be activated after payment confirmation
                   </li>

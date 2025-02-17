@@ -19,11 +19,6 @@ function StorePage() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
-
-      // If we have a user, redirect to the order page
-      if (session?.user) {
-        navigate("/order");
-      }
     });
 
     // Listen for changes on auth state (sign in, sign out, etc.)
@@ -32,18 +27,12 @@ function StorePage() {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setLoading(false);
-
-      // Redirect to order page on successful sign in
-      if (session?.user) {
-        navigate("/order");
-      }
     });
 
     // Handle OAuth callback
     if (window.location.hash.includes("access_token")) {
       // The hash contains the OAuth response
       // Supabase client will automatically handle this
-      // Just wait for the auth state change event above
       return;
     }
 
