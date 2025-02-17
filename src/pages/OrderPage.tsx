@@ -1,83 +1,27 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CreditCard, ArrowLeft, User, LogOut } from "lucide-react";
-import { supabase } from "../lib/supabase";
-import type { User } from "@supabase/supabase-js";
+import { ArrowLeft, Send } from "lucide-react";
 
 function OrderPage() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<User | null>(null);
   const [formData, setFormData] = useState({
-    cardNumber: "",
-    expiryDate: "",
-    cvv: "",
     name: "",
+    discordTag: "",
   });
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-
-      if (!session?.user) {
-        navigate("/");
-      }
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (!session?.user) {
-        navigate("/");
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [navigate]);
-
-  const handleLogout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      navigate("/");
-    } catch (error) {
-      console.error("Error logging out:", error);
-    }
-  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    let formattedValue = value;
-
-    // Format card number with spaces
-    if (name === "cardNumber") {
-      formattedValue = value
-        .replace(/\s/g, "")
-        .replace(/(\d{4})/g, "$1 ")
-        .trim();
-    }
-    // Format expiry date with slash
-    if (name === "expiryDate") {
-      formattedValue = value
-        .replace(/\D/g, "")
-        .replace(/(\d{2})(\d)/, "$1/$2")
-        .slice(0, 5);
-    }
-    // Limit CVV to 3 or 4 digits
-    if (name === "cvv") {
-      formattedValue = value.slice(0, 4);
-    }
-
     setFormData((prev) => ({
       ...prev,
-      [name]: formattedValue,
+      [name]: value,
     }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Here you would typically process the payment
-    alert("Payment processing would happen here!");
+    // Here you would typically process the order
+    alert("Order submitted! We'll contact you on Discord.");
+    navigate("/");
   };
 
   return (
@@ -106,24 +50,6 @@ function OrderPage() {
             Back to Store
           </button>
           <h1 className="text-4xl font-bold text-emerald-400">CHECKOUT</h1>
-
-          {user && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-white">
-                <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">
-                  <User size={20} className="text-white" />
-                </div>
-                <span>{user.user_metadata.full_name || "User"}</span>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="text-white hover:text-red-400 transition-colors"
-                title="Logout"
-              >
-                <LogOut size={20} />
-              </button>
-            </div>
-          )}
         </header>
 
         {/* Main Content */}
@@ -140,76 +66,16 @@ function OrderPage() {
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>
                 <label
-                  htmlFor="cardNumber"
-                  className="block text-sm font-medium text-white mb-2"
-                >
-                  Card Number
-                </label>
-                <input
-                  type="text"
-                  id="cardNumber"
-                  name="cardNumber"
-                  value={formData.cardNumber}
-                  onChange={handleInputChange}
-                  placeholder="1234 5678 9012 3456"
-                  className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                  maxLength={19}
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="expiryDate"
-                    className="block text-sm font-medium text-white mb-2"
-                  >
-                    Expiry Date
-                  </label>
-                  <input
-                    type="text"
-                    id="expiryDate"
-                    name="expiryDate"
-                    value={formData.expiryDate}
-                    onChange={handleInputChange}
-                    placeholder="MM/YY"
-                    className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cvv"
-                    className="block text-sm font-medium text-white mb-2"
-                  >
-                    CVV
-                  </label>
-                  <input
-                    type="text"
-                    id="cvv"
-                    name="cvv"
-                    value={formData.cvv}
-                    onChange={handleInputChange}
-                    placeholder="123"
-                    className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label
                   htmlFor="name"
                   className="block text-sm font-medium text-white mb-2"
                 >
-                  Cardholder Name
+                  Full Name
                 </label>
                 <input
                   type="text"
                   id="name"
                   name="name"
-                  value={formData.name || user?.user_metadata.full_name || ""}
+                  value={formData.name}
                   onChange={handleInputChange}
                   placeholder="John Doe"
                   className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
@@ -217,21 +83,46 @@ function OrderPage() {
                 />
               </div>
 
+              <div>
+                <label
+                  htmlFor="discordTag"
+                  className="block text-sm font-medium text-white mb-2"
+                >
+                  Discord Username
+                </label>
+                <input
+                  type="text"
+                  id="discordTag"
+                  name="discordTag"
+                  value={formData.discordTag}
+                  onChange={handleInputChange}
+                  placeholder="username"
+                  className="w-full px-4 py-2 rounded-md bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  required
+                />
+              </div>
+
+              <div className="text-white/70 text-sm">
+                <p>After submitting your order:</p>
+                <ul className="list-disc ml-5 mt-2 space-y-1">
+                  <li>We'll contact you on Discord</li>
+                  <li>Payment will be handled through Discord</li>
+                  <li>
+                    Your account will be activated after payment confirmation
+                  </li>
+                </ul>
+              </div>
+
               <button
                 type="submit"
                 className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-md flex items-center justify-center gap-2 transition-colors"
               >
-                <CreditCard size={20} />
-                Pay $15.00
+                <Send size={20} />
+                Submit Order
               </button>
             </form>
           </div>
         </main>
-
-        {/* Footer */}
-        <footer className="absolute bottom-0 w-full p-4 text-center text-white/80 text-sm">
-          Copyright © 2024-2025 Cipher. All Rights Reserved.
-        </footer>
       </div>
     </div>
   );
