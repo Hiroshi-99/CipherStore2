@@ -5,7 +5,16 @@
 
 [functions]
   node_bundler = "esbuild"
+  included_files = ["node_modules/discord.js/**/*"]
 
+# API redirects for Discord functions
+[[redirects]]
+  from = "/api/discord/*"
+  to = "/.netlify/functions/discord-:splat"
+  status = 200
+  force = true
+
+# SPA fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"

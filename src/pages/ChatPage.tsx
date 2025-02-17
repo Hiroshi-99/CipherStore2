@@ -28,6 +28,13 @@ interface DiscordWebhookMessage {
   timestamp: string;
 }
 
+// Update the API endpoints
+const API_ENDPOINTS = {
+  createChannel: "/.netlify/functions/discord-create-channel",
+  sendMessage: "/.netlify/functions/discord-send-message",
+  getMessages: "/.netlify/functions/discord-get-messages",
+};
+
 function ChatPage() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
@@ -127,7 +134,7 @@ function ChatPage() {
 
   const createDiscordChannel = async (orderId: string, user: User) => {
     try {
-      const response = await fetch("/api/discord/create-channel", {
+      const response = await fetch(API_ENDPOINTS.createChannel, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -138,6 +145,10 @@ function ChatPage() {
           username: user.user_metadata.full_name,
         }),
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
       const { channelId, webhookUrl } = await response.json();
 
@@ -153,12 +164,19 @@ function ChatPage() {
       setDiscordChannel(channelId);
     } catch (error) {
       console.error("Error creating Discord channel:", error);
+      // Add user-friendly error handling
+      alert("Failed to create Discord channel. Please try again.");
     }
   };
 
   const fetchDiscordMessages = async (channelId: string) => {
     try {
-      const response = await fetch(`/api/discord/messages/${channelId}`);
+      const response = await fetch(`${API_ENDPOINTS.getMessages}/${channelId}`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const messages: DiscordWebhookMessage[] = await response.json();
 
       // Convert Discord messages to our format
@@ -178,6 +196,7 @@ function ChatPage() {
       scrollToBottom();
     } catch (error) {
       console.error("Error fetching Discord messages:", error);
+      alert("Failed to load messages. Please refresh the page.");
     }
   };
 
@@ -186,8 +205,7 @@ function ChatPage() {
     if (!newMessage.trim() || !user || !order || !discordChannel) return;
 
     try {
-      // Send message to Discord
-      const response = await fetch("/api/discord/send-message", {
+      const response = await fetch(API_ENDPOINTS.sendMessage, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -199,6 +217,10 @@ function ChatPage() {
           avatar_url: user.user_metadata.avatar_url,
         }),
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
       const discordMessage = await response.json();
 
@@ -219,6 +241,7 @@ function ChatPage() {
       setNewMessage("");
     } catch (error) {
       console.error("Error sending message:", error);
+      alert("Failed to send message. Please try again.");
     }
   };
 
