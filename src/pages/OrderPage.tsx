@@ -84,10 +84,8 @@ function OrderPage() {
   };
 
   const handleBackToStore = () => {
-    // Clear any existing auth session before navigating
-    supabase.auth.signOut().then(() => {
-      navigate("/");
-    });
+    // Simply navigate back to the store page
+    navigate("/");
   };
 
   if (loading) {

@@ -1,11 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { ShoppingCart, Check } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
-import type { User } from '@supabase/supabase-js';
+import React, { useEffect, useState } from "react";
+import { ShoppingCart, Check, LogOut, User } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
+
+interface DiscordProfile {
+  username?: string;
+  avatar_url?: string;
+}
 
 function StorePage() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
@@ -14,26 +19,28 @@ function StorePage() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
-      
+
       // If we have a user, redirect to the order page
       if (session?.user) {
-        navigate('/order');
+        navigate("/order");
       }
     });
 
     // Listen for changes on auth state (sign in, sign out, etc.)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setLoading(false);
-      
+
       // Redirect to order page on successful sign in
       if (session?.user) {
-        navigate('/order');
+        navigate("/order");
       }
     });
 
     // Handle OAuth callback
-    if (window.location.hash.includes('access_token')) {
+    if (window.location.hash.includes("access_token")) {
       // The hash contains the OAuth response
       // Supabase client will automatically handle this
       // Just wait for the auth state change event above
@@ -46,30 +53,33 @@ function StorePage() {
   const handleDiscordLogin = async () => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'discord',
+        provider: "discord",
         options: {
-          redirectTo: window.location.origin + window.location.pathname
-        }
+          redirectTo: window.location.origin + window.location.pathname,
+        },
       });
-      
+
       if (error) throw error;
     } catch (error) {
-      console.error('Error logging in with Discord:', error);
+      console.error("Error logging in with Discord:", error);
     }
   };
 
   const handleLogout = async () => {
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      await supabase.auth.signOut();
     } catch (error) {
-      console.error('Error logging out:', error);
+      console.error("Error signing out:", error);
     }
+  };
+
+  const getDiscordProfile = (): DiscordProfile => {
+    return user?.user_metadata || {};
   };
 
   const handlePurchase = () => {
     if (user) {
-      navigate('/order');
+      navigate("/order");
     } else {
       handleDiscordLogin();
     }
@@ -86,52 +96,72 @@ function StorePage() {
   return (
     <div className="min-h-screen relative">
       {/* Background Image */}
-      <div 
+      <div
         className="absolute inset-0 z-0"
         style={{
-          backgroundImage: 'url("https://images.unsplash.com/photo-1623984109622-f9c970ba32fc?q=80&w=2940")',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          filter: 'brightness(0.7)'
+          backgroundImage:
+            'url("https://images.unsplash.com/photo-1623984109622-f9c970ba32fc?q=80&w=2940")',
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "brightness(0.7)",
         }}
       />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        {/* Header */}
+        {/* Header with Profile */}
         <header className="p-6 flex justify-between items-center">
           <h1 className="text-4xl font-bold text-emerald-400">STORE</h1>
-          {user ? (
-            <div className="flex items-center gap-4">
-              <span className="text-white">Welcome, {user.user_metadata.full_name || user.email}</span>
-              <button 
-                onClick={handleLogout}
-                className="bg-red-500 text-white px-6 py-2 rounded-md hover:bg-red-600 transition-colors"
+          <div className="flex items-center gap-4">
+            {user ? (
+              <>
+                <div className="flex items-center gap-3">
+                  {getDiscordProfile().avatar_url ? (
+                    <img
+                      src={getDiscordProfile().avatar_url}
+                      alt="Profile"
+                      className="w-8 h-8 rounded-full border-2 border-emerald-400"
+                    />
+                  ) : (
+                    <User className="w-8 h-8 text-emerald-400" />
+                  )}
+                  <span className="text-white">
+                    {getDiscordProfile().username || "User"}
+                  </span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="text-white hover:text-emerald-400 transition-colors"
+                >
+                  <LogOut size={24} />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleDiscordLogin}
+                className="flex items-center gap-2 bg-[#5865F2] text-white px-4 py-2 rounded-md hover:bg-[#4752C4] transition-colors"
               >
-                Logout
+                <img
+                  src="https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0a6a49cf127bf92de1e2_icon_clyde_white_RGB.png"
+                  alt="Discord"
+                  className="w-6 h-6"
+                />
+                Login with Discord
               </button>
-            </div>
-          ) : (
-            <button 
-              onClick={handleDiscordLogin}
-              className="bg-[#5865F2] text-white px-6 py-2 rounded-md flex items-center gap-2 hover:bg-[#4752c4] transition-colors"
-            >
-              <img 
-                src="https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0a6a49cf127bf92de1e2_icon_clyde_white_RGB.png" 
-                alt="Discord" 
-                className="w-6 h-6" 
-              />
-              Login with Discord
-            </button>
-          )}
+            )}
+          </div>
         </header>
 
         {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">
           <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-md">
-            <h2 className="text-4xl font-bold text-white text-center mb-8">Elite Account</h2>
-            
-            <div className="text-5xl font-bold text-emerald-400 text-center mb-8">$15.00</div>
+            <h2 className="text-4xl font-bold text-white text-center mb-8">
+              Elite Account
+            </h2>
+
+            <div className="text-5xl font-bold text-emerald-400 text-center mb-8">
+              $15.00
+            </div>
 
             {/* Features List */}
             <div className="space-y-4 mb-8">
@@ -150,12 +180,12 @@ function StorePage() {
             </div>
 
             {/* Purchase Button */}
-            <button 
+            <button
               onClick={handlePurchase}
               className="w-full bg-gray-400/30 hover:bg-gray-400/40 text-white py-3 rounded-md flex items-center justify-center gap-2 transition-colors"
             >
               <ShoppingCart size={20} />
-              {user ? 'Purchase' : 'Login to Purchase'}
+              {user ? "Purchase" : "Login to Purchase"}
             </button>
           </div>
         </main>
