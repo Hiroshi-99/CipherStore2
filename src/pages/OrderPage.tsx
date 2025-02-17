@@ -84,8 +84,8 @@ function OrderPage() {
 
       if (error) throw error;
 
-      alert("Order submitted! We'll contact you via email soon.");
-      navigate("/");
+      alert("Order submitted! Redirecting to support chat...");
+      navigate("/chat");
     } catch (error) {
       console.error("Error submitting order:", error);
       alert("There was an error submitting your order. Please try again.");
