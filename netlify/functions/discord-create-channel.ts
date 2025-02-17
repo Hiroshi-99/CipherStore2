@@ -6,6 +6,11 @@ const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const SUPPORT_CATEGORY_ID = process.env.DISCORD_SUPPORT_CATEGORY_ID;
 
+// Validate required environment variables
+if (!DISCORD_TOKEN || !GUILD_ID || !SUPPORT_CATEGORY_ID) {
+  throw new Error("Missing required environment variables");
+}
+
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
@@ -15,7 +20,8 @@ export const handler: Handler = async (event) => {
     const { orderId, username } = JSON.parse(event.body || "{}");
 
     await client.login(DISCORD_TOKEN);
-    const guild = await client.guilds.fetch(GUILD_ID);
+    // Use type assertion since we validated GUILD_ID above
+    const guild = await client.guilds.fetch(GUILD_ID as string);
 
     // Create channel
     const channel = await guild.channels.create({
