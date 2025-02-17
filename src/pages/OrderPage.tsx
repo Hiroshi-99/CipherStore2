@@ -1,13 +1,54 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Send } from "lucide-react";
+import { supabase } from "../lib/supabase";
+import type { User } from "@supabase/supabase-js";
+
+interface DiscordProfile {
+  username?: string;
+  full_name?: string;
+}
 
 function OrderPage() {
   const navigate = useNavigate();
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
     name: "",
     discordTag: "",
   });
+
+  useEffect(() => {
+    // Check active session and get user data
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user) {
+        navigate("/");
+        return;
+      }
+      setUser(session.user);
+
+      // Get Discord profile data from user metadata
+      const discordProfile = session.user.user_metadata as DiscordProfile;
+      setFormData({
+        name: discordProfile.full_name || "",
+        discordTag: discordProfile.username || "",
+      });
+      setLoading(false);
+    });
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.user) {
+        navigate("/");
+        return;
+      }
+      setUser(session.user);
+    });
+
+    return () => subscription.unsubscribe();
+  }, [navigate]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -17,12 +58,45 @@ function OrderPage() {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Here you would typically process the order
-    alert("Order submitted! We'll contact you on Discord.");
-    navigate("/");
+    if (!user) return;
+
+    try {
+      // Store order in Supabase
+      const { error } = await supabase.from("orders").insert([
+        {
+          user_id: user.id,
+          discord_username: formData.discordTag,
+          full_name: formData.name,
+          status: "pending",
+        },
+      ]);
+
+      if (error) throw error;
+
+      alert("Order submitted! We'll contact you on Discord soon.");
+      navigate("/");
+    } catch (error) {
+      console.error("Error submitting order:", error);
+      alert("There was an error submitting your order. Please try again.");
+    }
   };
+
+  const handleBackToStore = () => {
+    // Clear any existing auth session before navigating
+    supabase.auth.signOut().then(() => {
+      navigate("/");
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen relative">
@@ -43,7 +117,7 @@ function OrderPage() {
         {/* Header */}
         <header className="p-6 flex justify-between items-center">
           <button
-            onClick={() => navigate("/")}
+            onClick={handleBackToStore}
             className="text-white flex items-center gap-2 hover:text-emerald-400 transition-colors"
           >
             <ArrowLeft size={24} />
