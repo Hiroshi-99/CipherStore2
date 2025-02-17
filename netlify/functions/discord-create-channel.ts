@@ -1,5 +1,5 @@
 import { Handler } from "@netlify/functions";
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, PermissionFlagsBits } from "discord.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -19,15 +19,35 @@ export const handler: Handler = async (event) => {
   try {
     const { orderId, username } = JSON.parse(event.body || "{}");
 
+    if (!orderId || !username) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "Missing orderId or username" }),
+      };
+    }
+
     await client.login(DISCORD_TOKEN);
-    // Use type assertion since we validated GUILD_ID above
     const guild = await client.guilds.fetch(GUILD_ID as string);
 
-    // Create channel
+    // Create channel with proper permissions
     const channel = await guild.channels.create({
       name: `order-${orderId}`,
-      parent: SUPPORT_CATEGORY_ID,
+      parent: SUPPORT_CATEGORY_ID as string,
       topic: `Support channel for ${username}'s order`,
+      permissionOverwrites: [
+        {
+          id: guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: client.user!.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageWebhooks,
+          ],
+        },
+      ],
     });
 
     // Create webhook for the channel
@@ -47,7 +67,12 @@ export const handler: Handler = async (event) => {
     console.error("Error:", error);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Failed to create Discord channel" }),
+      body: JSON.stringify({
+        error: "Failed to create Discord channel",
+        details: error instanceof Error ? error.message : "Unknown error",
+      }),
     };
+  } finally {
+    client.destroy();
   }
 };
