@@ -15,13 +15,25 @@ const client = new Client({
   ],
 });
 
-const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const GUILD_ID = process.env.DISCORD_GUILD_ID;
-const SUPPORT_CATEGORY_ID = process.env.DISCORD_SUPPORT_CATEGORY_ID;
+// Add debug logging for environment variables
+console.log("Checking environment variables...");
+console.log("DISCORD_TOKEN exists:", !!process.env.DISCORD_BOT_TOKEN);
+console.log("GUILD_ID exists:", !!process.env.DISCORD_GUILD_ID);
+console.log(
+  "SUPPORT_CATEGORY_ID exists:",
+  !!process.env.DISCORD_SUPPORT_CATEGORY_ID
+);
+
+const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN?.trim();
+const GUILD_ID = process.env.DISCORD_GUILD_ID?.trim();
+const SUPPORT_CATEGORY_ID = process.env.DISCORD_SUPPORT_CATEGORY_ID?.trim();
 
 // Validate required environment variables
 if (!DISCORD_TOKEN || !GUILD_ID || !SUPPORT_CATEGORY_ID) {
-  throw new Error("Missing required environment variables");
+  throw new Error(`Missing required environment variables. 
+    Token: ${!!DISCORD_TOKEN}, 
+    Guild: ${!!GUILD_ID}, 
+    Category: ${!!SUPPORT_CATEGORY_ID}`);
 }
 
 export const handler: Handler = async (event) => {
@@ -66,7 +78,21 @@ export const handler: Handler = async (event) => {
     }
 
     console.log("Logging in to Discord...");
-    await client.login(DISCORD_TOKEN);
+    try {
+      await client.login(DISCORD_TOKEN);
+    } catch (loginError) {
+      console.error("Discord login error:", loginError);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: "Failed to login to Discord",
+          details:
+            loginError instanceof Error
+              ? loginError.message
+              : "Unknown login error",
+        }),
+      };
+    }
 
     console.log("Fetching guild...");
     const guild = await client.guilds.fetch(GUILD_ID);
