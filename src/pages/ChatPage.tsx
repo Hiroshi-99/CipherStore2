@@ -145,18 +145,25 @@ function ChatPage() {
   const createDiscordChannel = async (orderId: string, user: User) => {
     try {
       const headers = await getAuthHeaders();
+      console.log("Creating Discord channel for order:", orderId);
+
       const response = await fetch(API_ENDPOINTS.createChannel, {
         method: "POST",
         headers,
         body: JSON.stringify({
           orderId,
           userId: user.id,
-          username: user.user_metadata.full_name,
+          username: user.user_metadata.full_name || user.email,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(
+          `HTTP error! status: ${response.status}, details: ${
+            errorData.details || errorData.error || "Unknown error"
+          }`
+        );
       }
 
       const { channelId, webhookUrl } = await response.json();
@@ -170,11 +177,19 @@ function ChatPage() {
         },
       ]);
 
-      if (error) throw error;
+      if (error) {
+        console.error("Supabase error:", error);
+        throw error;
+      }
+
       setDiscordChannel(channelId);
     } catch (error) {
       console.error("Error creating Discord channel:", error);
-      alert("Failed to create Discord channel. Please try again.");
+      alert(
+        `Failed to create Discord channel. Please try again. Error: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   };
 

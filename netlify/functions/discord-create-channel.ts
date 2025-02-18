@@ -14,6 +14,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
+
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const SUPPORT_CATEGORY_ID = process.env.DISCORD_SUPPORT_CATEGORY_ID;
@@ -34,15 +35,20 @@ export const handler: Handler = async (event) => {
   }
 
   try {
+    console.log("Verifying user authentication...");
     const {
       data: { user },
-      error,
+      error: authError,
     } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
 
-    if (error || !user) {
+    if (authError || !user) {
+      console.error("Authentication error:", authError);
       return {
         statusCode: 401,
-        body: JSON.stringify({ error: "Invalid token" }),
+        body: JSON.stringify({
+          error: "Invalid token",
+          details: authError?.message,
+        }),
       };
     }
 
@@ -59,13 +65,21 @@ export const handler: Handler = async (event) => {
       };
     }
 
+    console.log("Logging in to Discord...");
     await client.login(DISCORD_TOKEN);
-    const guild = await client.guilds.fetch(GUILD_ID as string);
 
-    // Create channel with proper permissions
+    console.log("Fetching guild...");
+    const guild = await client.guilds.fetch(GUILD_ID);
+
+    if (!guild) {
+      throw new Error("Could not find Discord server");
+    }
+
+    console.log("Creating channel...");
     const channel = await guild.channels.create({
-      name: `order-${orderId}`,
-      parent: SUPPORT_CATEGORY_ID as string,
+      name: `order-${orderId.substring(0, 8)}`,
+      type: 0, // Text channel
+      parent: SUPPORT_CATEGORY_ID,
       topic: `Support channel for ${username}'s order`,
       permissionOverwrites: [
         {
@@ -83,11 +97,25 @@ export const handler: Handler = async (event) => {
       ],
     });
 
-    // Create webhook for the channel
+    console.log("Creating webhook...");
     const webhook = await channel.createWebhook({
       name: "Order Bot",
       avatar: "https://your-bot-avatar.png",
     });
+
+    console.log("Storing channel info in database...");
+    const { error: dbError } = await supabase.from("discord_channels").insert([
+      {
+        order_id: orderId,
+        channel_id: channel.id,
+        webhook_url: webhook.url,
+      },
+    ]);
+
+    if (dbError) {
+      console.error("Database error:", dbError);
+      throw dbError;
+    }
 
     return {
       statusCode: 200,
@@ -97,15 +125,19 @@ export const handler: Handler = async (event) => {
       }),
     };
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Error creating Discord channel:", error);
     return {
       statusCode: 500,
       body: JSON.stringify({
         error: "Failed to create Discord channel",
         details: error instanceof Error ? error.message : "Unknown error",
+        stack: error instanceof Error ? error.stack : undefined,
       }),
     };
   } finally {
-    client.destroy();
+    if (client) {
+      console.log("Destroying Discord client...");
+      await client.destroy();
+    }
   }
 };
