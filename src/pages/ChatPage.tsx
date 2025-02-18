@@ -132,13 +132,22 @@ function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const getAuthHeaders = async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session?.access_token}`,
+    };
+  };
+
   const createDiscordChannel = async (orderId: string, user: User) => {
     try {
+      const headers = await getAuthHeaders();
       const response = await fetch(API_ENDPOINTS.createChannel, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           orderId,
           userId: user.id,
@@ -153,7 +162,7 @@ function ChatPage() {
       const { channelId, webhookUrl } = await response.json();
 
       // Store Discord channel info in Supabase
-      await supabase.from("discord_channels").insert([
+      const { error } = await supabase.from("discord_channels").insert([
         {
           order_id: orderId,
           channel_id: channelId,
@@ -161,17 +170,23 @@ function ChatPage() {
         },
       ]);
 
+      if (error) throw error;
       setDiscordChannel(channelId);
     } catch (error) {
       console.error("Error creating Discord channel:", error);
-      // Add user-friendly error handling
       alert("Failed to create Discord channel. Please try again.");
     }
   };
 
   const fetchDiscordMessages = async (channelId: string) => {
     try {
-      const response = await fetch(`${API_ENDPOINTS.getMessages}/${channelId}`);
+      const headers = await getAuthHeaders();
+      const response = await fetch(
+        `${API_ENDPOINTS.getMessages}/${channelId}`,
+        {
+          headers,
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -186,7 +201,7 @@ function ChatPage() {
         content: msg.content,
         user_id: msg.author.bot ? "admin" : user?.id || "",
         order_id: order?.id || "",
-        is_admin: msg.author.bot,
+        is_admin: !!msg.author.bot,
         user_avatar: msg.author.avatar,
         user_name: msg.author.username,
         discord_message_id: msg.id,
@@ -205,11 +220,10 @@ function ChatPage() {
     if (!newMessage.trim() || !user || !order || !discordChannel) return;
 
     try {
+      const headers = await getAuthHeaders();
       const response = await fetch(API_ENDPOINTS.sendMessage, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           channelId: discordChannel,
           content: newMessage.trim(),

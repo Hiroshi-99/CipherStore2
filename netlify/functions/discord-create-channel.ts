@@ -1,5 +1,11 @@
 import { Handler } from "@netlify/functions";
 import { Client, GatewayIntentBits, PermissionFlagsBits } from "discord.js";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.VITE_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -12,11 +18,32 @@ if (!DISCORD_TOKEN || !GUILD_ID || !SUPPORT_CATEGORY_ID) {
 }
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
+  // Verify authentication
+  const authHeader = event.headers.authorization;
+  if (!authHeader) {
+    return {
+      statusCode: 401,
+      body: JSON.stringify({ error: "No authorization header" }),
+    };
   }
 
   try {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
+
+    if (error || !user) {
+      return {
+        statusCode: 401,
+        body: JSON.stringify({ error: "Invalid token" }),
+      };
+    }
+
+    if (event.httpMethod !== "POST") {
+      return { statusCode: 405, body: "Method Not Allowed" };
+    }
+
     const { orderId, username } = JSON.parse(event.body || "{}");
 
     if (!orderId || !username) {
