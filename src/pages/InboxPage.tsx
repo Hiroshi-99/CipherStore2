@@ -15,7 +15,7 @@ interface InboxMessage {
 
 function InboxPage() {
   const navigate = useNavigate();
-  const [_user, setUser] = useState<User | null>(null);
+  const [, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
 
@@ -29,7 +29,6 @@ function InboxPage() {
         return;
       }
       if (mounted) {
-        setUser(session.user);
         fetchMessages(session.user.id);
       }
     });
@@ -43,7 +42,6 @@ function InboxPage() {
         return;
       }
       if (mounted) {
-        setUser(session.user);
         fetchMessages(session.user.id);
       }
     });

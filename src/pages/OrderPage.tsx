@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Send, Upload } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
+import { getAuthHeaders } from "../lib/auth";
 
 interface DiscordProfile {
   username?: string;
@@ -149,28 +150,33 @@ function OrderPage() {
       }
 
       // Create Discord channel/thread
-      const headers = await getAuthHeaders();
-      const response = await fetch("/api/discord-create-channel", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: headers.Authorization,
-        },
-        body: JSON.stringify({
-          orderId: order.id,
-          customerName: formData.name,
-          paymentProofUrl: proofUrl,
-          userId: user.id,
-        }),
-      });
+      try {
+        const headers = await getAuthHeaders();
+        const response = await fetch("/api/discord-create-channel", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: headers.Authorization,
+          },
+          body: JSON.stringify({
+            orderId: order.id,
+            customerName: formData.name,
+            paymentProofUrl: proofUrl,
+            userId: user.id,
+          }),
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          `Failed to create Discord channel: ${
-            errorData.details || errorData.error || "Unknown error"
-          }`
-        );
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(
+            `Failed to create Discord channel: ${
+              errorData.details || errorData.error || "Unknown error"
+            }`
+          );
+        }
+      } catch (discordError) {
+        console.error("Discord channel creation failed:", discordError);
+        // Continue with navigation even if Discord channel creation fails
       }
 
       // Navigate to inbox page
