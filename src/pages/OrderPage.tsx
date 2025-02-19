@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Send, Upload } from "lucide-react";
+import { ArrowLeft, Send, Upload, Eye } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import { getAuthHeaders } from "../lib/auth";
@@ -23,6 +23,7 @@ function OrderPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentProof, setPaymentProof] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [showQRModal, setShowQRModal] = useState(false);
 
   useEffect(() => {
     // Check active session and get user data
@@ -79,25 +80,52 @@ function OrderPage() {
   };
 
   const uploadPaymentProof = async (orderId: string) => {
-    if (!paymentProof) return null;
+    if (!paymentProof) {
+      throw new Error("No payment proof file selected");
+    }
 
-    const fileExt = paymentProof.name.split(".").pop();
-    const fileName = `${orderId}-proof.${fileExt}`;
-    const filePath = `payment-proofs/${fileName}`;
+    try {
+      const fileExt = paymentProof.name.split(".").pop();
+      const fileName = `${orderId}-proof.${fileExt}`;
+      const filePath = `payment-proofs/${fileName}`;
 
-    // Upload to Supabase Storage
-    const { error: uploadError } = await supabase.storage
-      .from("payment-proofs")
-      .upload(filePath, paymentProof);
+      // Check file size (max 5MB)
+      if (paymentProof.size > 5 * 1024 * 1024) {
+        throw new Error("File size must be less than 5MB");
+      }
 
-    if (uploadError) throw uploadError;
+      // Check file type
+      if (!paymentProof.type.startsWith("image/")) {
+        throw new Error("Only image files are allowed");
+      }
 
-    // Get public URL
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from("payment-proofs").getPublicUrl(filePath);
+      // Upload to Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from("payment-proofs")
+        .upload(filePath, paymentProof);
 
-    return publicUrl;
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // Get public URL
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("payment-proofs").getPublicUrl(filePath);
+
+      if (!publicUrl) {
+        throw new Error("Failed to get public URL for uploaded file");
+      }
+
+      return publicUrl;
+    } catch (error) {
+      console.error("Error uploading payment proof:", error);
+      throw new Error(
+        `Failed to upload payment proof: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -108,12 +136,23 @@ function OrderPage() {
 
     try {
       // Validate form data
-      if (formData.name.trim() === "") {
-        alert("Please enter your name before submitting the order.");
-        return;
+      if (!formData.name.trim() || !formData.email.trim()) {
+        throw new Error("Please fill in all required fields");
       }
 
-      // Store order in Supabase
+      if (!paymentProof) {
+        throw new Error("Please upload your payment proof");
+      }
+
+      // Upload payment proof first
+      setIsUploading(true);
+      const proofUrl = await uploadPaymentProof(crypto.randomUUID()); // Generate temporary ID for file name
+
+      if (!proofUrl) {
+        throw new Error("Failed to upload payment proof");
+      }
+
+      // Create order
       const { data: order, error: orderError } = await supabase
         .from("orders")
         .insert([
@@ -131,23 +170,19 @@ function OrderPage() {
         throw new Error(orderError?.message || "Failed to create order");
       }
 
-      // Upload payment proof if exists
-      let proofUrl = null;
-      if (paymentProof) {
-        setIsUploading(true);
-        proofUrl = await uploadPaymentProof(order.id);
+      // Store payment proof record
+      const { error: proofError } = await supabase
+        .from("payment_proofs")
+        .insert([
+          {
+            order_id: order.id,
+            image_url: proofUrl,
+            status: "pending",
+          },
+        ]);
 
-        // Store payment proof record
-        const { error: proofError } = await supabase
-          .from("payment_proofs")
-          .insert([
-            {
-              order_id: order.id,
-              image_url: proofUrl,
-            },
-          ]);
-
-        if (proofError) throw proofError;
+      if (proofError) {
+        throw new Error(`Failed to store payment proof: ${proofError.message}`);
       }
 
       // Create Discord channel/thread
@@ -167,12 +202,13 @@ function OrderPage() {
           }),
         });
 
+        const responseData = await response.json();
+
         if (!response.ok) {
-          const errorData = await response.json();
           throw new Error(
-            `Failed to create Discord channel: ${
-              errorData.details || errorData.error || "Unknown error"
-            }`
+            responseData.details ||
+              responseData.error ||
+              "Failed to create Discord channel"
           );
         }
       } catch (discordError) {
@@ -185,7 +221,7 @@ function OrderPage() {
         "Order submitted successfully! Check your inbox for updates. Click OK to return to the store."
       );
 
-      // Navigate back to store
+      // Navigate based on user choice
       if (confirmed) {
         navigate("/");
       } else {
@@ -194,7 +230,7 @@ function OrderPage() {
     } catch (error) {
       console.error("Error submitting order:", error);
       alert(
-        `There was an error submitting your order. Please try again. Error: ${
+        `There was an error submitting your order: ${
           error instanceof Error ? error.message : "Unknown error"
         }`
       );
@@ -293,6 +329,38 @@ function OrderPage() {
                 />
               </div>
 
+              {/* Payment Instructions and QR Code */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium text-white">
+                  Payment Instructions
+                </h3>
+                <div className="relative group">
+                  <img
+                    src="https://cdn.discordapp.com/attachments/1326517715279810674/1341748229770969108/qr.jpg?ex=67b71fea&is=67b5ce6a&hm=52a9f607ce191c6c368c79b7c1098ffaade0fdceb2a62d11354ee4eb3184884f&" // Add your QR code image here
+                    alt="Payment QR Code"
+                    className="w-full rounded-lg border-2 border-emerald-400/50 cursor-pointer transition-transform hover:scale-[1.02]"
+                    onClick={() => setShowQRModal(true)}
+                  />
+                  <button
+                    type="button"
+                    className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => setShowQRModal(true)}
+                  >
+                    <Eye className="w-8 h-8 text-white" />
+                  </button>
+                </div>
+                <div className="bg-emerald-400/10 rounded-lg p-4 text-white/90 text-sm">
+                  <p className="font-medium mb-2">Payment Steps:</p>
+                  <ol className="list-decimal ml-4 space-y-1">
+                    <li>Scan the QR code above or click to view full size</li>
+                    <li>Send exactly $15.00 to the displayed address</li>
+                    <li>Take a screenshot of your payment confirmation</li>
+                    <li>Upload the screenshot below as proof of payment</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Payment Proof Upload */}
               <div>
                 <label
                   htmlFor="payment-proof"
@@ -354,6 +422,44 @@ function OrderPage() {
             </form>
           </div>
         </main>
+
+        {/* QR Code Modal */}
+        {showQRModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+            onClick={() => setShowQRModal(false)}
+          >
+            <div
+              className="relative max-w-2xl w-full mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src="/payment-qr.png" // Same QR code image
+                alt="Payment QR Code"
+                className="w-full rounded-lg"
+              />
+              <button
+                type="button"
+                className="absolute -top-4 -right-4 bg-white/10 hover:bg-white/20 rounded-full p-2 text-white transition-colors"
+                onClick={() => setShowQRModal(false)}
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
