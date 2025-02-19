@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import { CheckCircle, XCircle, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
+import { createClient } from "@supabase/supabase-js";
 
 interface Order {
   id: string;
@@ -23,6 +24,12 @@ interface Admin {
   user_id: string;
   created_at: string;
 }
+
+// Create a Supabase client with the service role key (this has admin privileges)
+const supabaseAdmin = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 function AdminPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -260,15 +267,8 @@ function AdminPage() {
     setUploadedFileUrl(fileUrl);
     if (selectedOrderId) {
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
-          throw new Error("User not authenticated");
-        }
-
         // First, get the order details to get the user_id
-        const { data: order, error: orderFetchError } = await supabase
+        const { data: order, error: orderFetchError } = await supabaseAdmin
           .from("orders")
           .select("user_id")
           .eq("id", selectedOrderId)
@@ -278,8 +278,8 @@ function AdminPage() {
           throw new Error("Failed to fetch order details");
         }
 
-        // Update the order with the file URL
-        const { error: orderError } = await supabase
+        // Update the order with the file URL using admin client
+        const { error: orderError } = await supabaseAdmin
           .from("orders")
           .update({ account_file_url: fileUrl })
           .eq("id", selectedOrderId);
@@ -288,12 +288,12 @@ function AdminPage() {
           throw new Error(orderError.message);
         }
 
-        // Send file to user's inbox - use the order's user_id
-        const { error: inboxError } = await supabase
+        // Send file to user's inbox using admin client
+        const { error: inboxError } = await supabaseAdmin
           .from("inbox_messages")
           .insert([
             {
-              user_id: order.user_id, // Use the order owner's user_id
+              user_id: order.user_id,
               title: "Account File Uploaded",
               content: `Your account file has been uploaded. You can view it in your inbox.`,
               type: "account_file",
