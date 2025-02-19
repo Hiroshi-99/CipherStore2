@@ -178,6 +178,8 @@ ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_proofs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE discord_channels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inbox_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 
 -- Owner check function
 CREATE OR REPLACE FUNCTION is_owner()
@@ -189,86 +191,24 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Admin access policies
-CREATE POLICY "Allow owner and admins to view all orders"
-ON orders FOR SELECT
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
+-- Admin check function (to avoid recursion)
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM admin_users
+    WHERE user_id = auth.uid()
+  ) OR is_owner();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE POLICY "Allow owner and admins to update orders"
-ON orders FOR UPDATE
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
-
--- Payment proofs policies
-CREATE POLICY "Allow owner and admins to view all payment proofs"
-ON payment_proofs FOR SELECT
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
-
-CREATE POLICY "Allow owner and admins to update payment proofs"
-ON payment_proofs FOR UPDATE
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
-
--- Admin management policies
+-- Admin users policies
 CREATE POLICY "Only owner can manage admins"
 ON admin_users
 FOR ALL
 TO authenticated
 USING (is_owner())
 WITH CHECK (is_owner());
-
--- Discord channels policies
-CREATE POLICY "Allow owner and admins to manage discord channels"
-ON discord_channels FOR ALL
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
-
-CREATE POLICY "Users can view their own discord channels"
-ON discord_channels FOR SELECT
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM orders
-        WHERE orders.id = order_id
-        AND orders.user_id = auth.uid()
-    )
-);
-
-------------------------------------------
--- Row Level Security Policies
-------------------------------------------
 
 -- Orders policies
 CREATE POLICY "Users can create their own orders"
@@ -279,7 +219,12 @@ WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can view their own orders"
 ON orders FOR SELECT
 TO authenticated
-USING (auth.uid() = user_id);
+USING (auth.uid() = user_id OR is_admin());
+
+CREATE POLICY "Allow admins to update orders"
+ON orders FOR UPDATE
+TO authenticated
+USING (is_admin());
 
 -- Payment proofs policies
 CREATE POLICY "Users can create payment proofs for their orders"
@@ -293,59 +238,30 @@ WITH CHECK (
     )
 );
 
-CREATE POLICY "Users can view payment proofs for their orders"
+CREATE POLICY "Users can view payment proofs"
 ON payment_proofs FOR SELECT
 TO authenticated
 USING (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
-        AND orders.user_id = auth.uid()
+        AND (orders.user_id = auth.uid() OR is_admin())
     )
 );
 
--- Inbox messages policies
-CREATE POLICY "Users can view their own inbox messages"
-ON inbox_messages FOR SELECT
+CREATE POLICY "Allow admins to update payment proofs"
+ON payment_proofs FOR UPDATE
 TO authenticated
-USING (auth.uid() = user_id);
+USING (is_admin());
 
-CREATE POLICY "Users can update their own inbox messages"
-ON inbox_messages FOR UPDATE
+-- Discord channels policies
+CREATE POLICY "Allow admins to manage discord channels"
+ON discord_channels FOR ALL
 TO authenticated
-USING (auth.uid() = user_id);
+USING (is_admin());
 
--- Enable RLS on remaining tables
-ALTER TABLE inbox_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-
--- Admin policies for inbox messages
-CREATE POLICY "Allow owner and admins to manage inbox messages"
-ON inbox_messages FOR ALL
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
-
--- Admin policies for messages
-CREATE POLICY "Allow owner and admins to manage messages"
-ON messages FOR ALL
-TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM admin_users
-        WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-);
-
--- Messages policies for users
-CREATE POLICY "Users can view messages for their orders"
-ON messages FOR SELECT
+CREATE POLICY "Users can view their own discord channels"
+ON discord_channels FOR SELECT
 TO authenticated
 USING (
     EXISTS (
@@ -355,7 +271,19 @@ USING (
     )
 );
 
-CREATE POLICY "Users can create messages for their orders"
+-- Messages policies
+CREATE POLICY "Users can view messages"
+ON messages FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND (orders.user_id = auth.uid() OR is_admin())
+    )
+);
+
+CREATE POLICY "Users can create messages"
 ON messages FOR INSERT
 TO authenticated
 WITH CHECK (
@@ -364,7 +292,24 @@ WITH CHECK (
         WHERE orders.id = order_id
         AND orders.user_id = auth.uid()
     )
+    OR is_admin()
 );
+
+-- Inbox messages policies
+CREATE POLICY "Users can view their own inbox messages"
+ON inbox_messages FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id OR is_admin());
+
+CREATE POLICY "Users can update their own inbox messages"
+ON inbox_messages FOR UPDATE
+TO authenticated
+USING (auth.uid() = user_id OR is_admin());
+
+CREATE POLICY "Allow admins to create inbox messages"
+ON inbox_messages FOR INSERT
+TO authenticated
+WITH CHECK (is_admin());
 
 ------------------------------------------
 -- Permissions
