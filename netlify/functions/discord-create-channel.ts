@@ -64,50 +64,66 @@ export const handler: Handler = async (event) => {
     );
 
     // Create the channel
-    const channel = await guild.channels.create({
-      name: `support-${orderId.slice(0, 8)}`,
-      type: ChannelType.GuildText,
-      parent: process.env.DISCORD_SUPPORT_CATEGORY_ID,
-      topic: `Support channel for ${customerName} - Order ID: ${orderId}`,
-    });
+    try {
+      const channel = await guild.channels.create({
+        name: `support-${orderId.slice(0, 8)}`,
+        type: ChannelType.GuildText,
+        parent: process.env.DISCORD_SUPPORT_CATEGORY_ID,
+        topic: `Support channel for ${customerName} - Order ID: ${orderId}`,
+      });
 
-    // Create webhook for the channel
-    const webhook = await channel.createWebhook({
-      name: "Chat Relay",
-      reason: "Relay messages between web app and Discord",
-    });
+      // Create webhook for the channel
+      const webhook = await channel.createWebhook({
+        name: "Chat Relay",
+        reason: "Relay messages between web app and Discord",
+      });
 
-    // Store channel info in database
-    const { error: dbError } = await supabase.from("discord_channels").insert([
-      {
-        order_id: orderId,
-        channel_id: channel.id,
-        webhook_url: webhook.url,
-      },
-    ]);
+      // Store channel info in database
+      const { error: dbError } = await supabase
+        .from("discord_channels")
+        .insert([
+          {
+            order_id: orderId,
+            channel_id: channel.id,
+            webhook_url: webhook.url,
+          },
+        ]);
 
-    if (dbError) {
-      throw new Error(`Database error: ${dbError.message}`);
+      if (dbError) {
+        throw new Error(`Database error: ${dbError.message}`);
+      }
+
+      // Send initial message
+      await channel.send(
+        `New support channel created for ${customerName}\nOrder ID: ${orderId}`
+      );
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          channelId: channel.id,
+          webhookUrl: webhook.url,
+        }),
+      };
+    } catch (channelError) {
+      console.error("Error creating Discord channel:", channelError);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: "Failed to create Discord channel",
+          details:
+            channelError instanceof Error
+              ? channelError.message
+              : "Unknown error",
+        }),
+      };
     }
-
-    // Send initial message
-    await channel.send(
-      `New support channel created for ${customerName}\nOrder ID: ${orderId}`
-    );
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        channelId: channel.id,
-        webhookUrl: webhook.url,
-      }),
-    };
   } catch (error) {
-    console.error("Error creating Discord channel:", error);
+    console.error("Error in Discord channel creation process:", error);
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error: "Failed to create Discord channel",
+        error: "An error occurred during channel creation",
         details: error instanceof Error ? error.message : "Unknown error",
       }),
     };

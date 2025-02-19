@@ -72,6 +72,12 @@ function OrderPage() {
     if (!user) return;
 
     try {
+      // Validate form data
+      if (formData.name.trim() === "") {
+        alert("Please enter your name before submitting the order.");
+        return;
+      }
+
       // Store order in Supabase
       const { data: order, error: orderError } = await supabase
         .from("orders")
@@ -124,9 +130,12 @@ function OrderPage() {
 
       // Navigate to chat page
       navigate(`/chat?orderId=${order.id}`);
+
+      // Show success message
+      alert("Order submitted successfully! Redirecting to support chat...");
     } catch (error) {
       console.error("Error submitting order:", error);
-      // Handle error (show error message to user)
+      alert("There was an error submitting your order. Please try again.");
     }
   };
 
