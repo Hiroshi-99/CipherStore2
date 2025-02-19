@@ -44,37 +44,37 @@ export const handler: Handler = async (event) => {
       };
     }
 
+    if (event.httpMethod !== "GET") {
+      return {
+        statusCode: 405,
+        body: JSON.stringify({ error: "Method Not Allowed" }),
+      };
+    }
+
     const channelId = event.path.split("/").pop();
 
     if (!channelId) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: "Channel ID is required" }),
-      };
-    }
-
-    // Verify channel belongs to user
-    const { data: channelData, error: dbError } = await supabase
-      .from("discord_channels")
-      .select("channel_id")
-      .eq("channel_id", channelId)
-      .single();
-
-    if (dbError || !channelData) {
-      return {
-        statusCode: 404,
-        body: JSON.stringify({ error: "Channel not found" }),
+        body: JSON.stringify({ error: "Missing channelId" }),
       };
     }
 
     await client.login(DISCORD_TOKEN);
+
     const channel = await client.channels.fetch(channelId);
 
-    if (!channel?.isTextBased()) {
-      throw new Error("Invalid channel");
+    if (!channel || channel.type !== 0) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          error: "Channel not found or not a text channel",
+        }),
+      };
     }
 
     const messages = await channel.messages.fetch({ limit: 100 });
+
     const formattedMessages = messages.map((msg) => ({
       id: msg.id,
       content: msg.content,
@@ -84,7 +84,7 @@ export const handler: Handler = async (event) => {
         avatar: msg.author.avatarURL(),
         bot: msg.author.bot,
       },
-      timestamp: msg.createdTimestamp,
+      timestamp: msg.createdAt.toISOString(),
     }));
 
     return {
@@ -101,6 +101,13 @@ export const handler: Handler = async (event) => {
       }),
     };
   } finally {
-    client.destroy();
+    if (client.isReady()) {
+      console.log("Destroying Discord client...");
+      try {
+        await client.destroy();
+      } catch (error) {
+        console.error("Error destroying client:", error);
+      }
+    }
   }
 };

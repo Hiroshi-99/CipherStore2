@@ -112,7 +112,9 @@ function ChatPage() {
           scrollToBottom();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("Subscription status:", status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
