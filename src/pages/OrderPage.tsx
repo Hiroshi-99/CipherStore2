@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Send, Upload, Eye } from "lucide-react";
+import { Send, Upload, Eye } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import { getAuthHeaders } from "../lib/auth";
@@ -43,10 +43,7 @@ function OrderPage() {
       setLoading(false);
     });
 
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session?.user) {
         navigate("/");
         return;
@@ -66,7 +63,7 @@ function OrderPage() {
             table: "orders",
             filter: `user_id=eq.${user.id}`,
           },
-          (payload) => {
+          (payload: { new: { status: string } }) => {
             if (payload.new.status === "active") {
               navigate("/inbox");
             }
@@ -296,11 +293,6 @@ function OrderPage() {
       setIsSubmitting(false);
       setIsUploading(false);
     }
-  };
-
-  const handleBackToStore = () => {
-    // Simply navigate back to the store page
-    navigate("/");
   };
 
   if (loading) {

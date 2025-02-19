@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { ArrowLeft, Bell, User, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
+import { debounce } from "lodash";
 
 interface HeaderProps {
   title: string;
@@ -19,6 +20,36 @@ interface DiscordProfile {
 function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
   const navigate = useNavigate();
   const [unreadCount, setUnreadCount] = useState(0);
+  const [lastFetchTime, setLastFetchTime] = useState(0);
+
+  const fetchUnreadCount = async () => {
+    if (!user) return;
+
+    const now = Date.now();
+    if (now - lastFetchTime < 5000) return;
+    setLastFetchTime(now);
+
+    try {
+      const { count, error } = await supabase
+        .from("inbox_messages")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("is_read", false);
+
+      if (!error && count !== null) {
+        setUnreadCount(count);
+      }
+    } catch (error) {
+      console.error("Error fetching unread count:", error);
+    }
+  };
+
+  const debouncedFetchUnreadCount = useCallback(
+    debounce(() => {
+      fetchUnreadCount();
+    }, 1000),
+    [fetchUnreadCount]
+  );
 
   useEffect(() => {
     if (user) {
@@ -34,9 +65,7 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
             table: "inbox_messages",
             filter: `user_id=eq.${user.id}`,
           },
-          () => {
-            fetchUnreadCount();
-          }
+          debouncedFetchUnreadCount
         )
         .subscribe();
 
@@ -44,21 +73,7 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
         subscription.unsubscribe();
       };
     }
-  }, [user]);
-
-  const fetchUnreadCount = async () => {
-    if (!user) return;
-
-    const { count, error } = await supabase
-      .from("inbox_messages")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", user.id)
-      .eq("is_read", false);
-
-    if (!error && count !== null) {
-      setUnreadCount(count);
-    }
-  };
+  }, [user, debouncedFetchUnreadCount]);
 
   const getDiscordProfile = (): DiscordProfile => {
     return user?.user_metadata || {};
