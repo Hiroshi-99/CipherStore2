@@ -90,7 +90,7 @@ function StorePage() {
         className="absolute inset-0 z-0"
         style={{
           backgroundImage:
-            'url("https://cdn.discordapp.com/attachments/1335202613913849857/1341845927022825653/gggif.gif?ex=67b77ae7&is=67b62967&hm=4a1cc9c79faf89c3812d8de194e89e80c7ef350a49a907083368e2a0814f863f&)',
+            'url("https://cdn.discordapp.com/attachments/1335202613913849857/1341847795807813815/wallpaperflare.com_wallpaper.jpg?ex=67b77ca4&is=67b62b24&hm=17f869720e0d7d178e5a1d6140243b37f248c32e837142aded205cd3c4453de1&")',
           backgroundSize: "cover",
           backgroundPosition: "center",
           filter: "brightness(0.7)",
