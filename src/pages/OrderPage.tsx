@@ -85,33 +85,49 @@ function OrderPage() {
     }
 
     try {
-      const fileExt = paymentProof.name.split(".").pop();
-      const fileName = `${orderId}-proof.${fileExt}`;
-      const filePath = `payment-proofs/${fileName}`;
-
-      // Check file size (max 5MB)
+      // Validate file
       if (paymentProof.size > 5 * 1024 * 1024) {
         throw new Error("File size must be less than 5MB");
       }
 
-      // Check file type
       if (!paymentProof.type.startsWith("image/")) {
         throw new Error("Only image files are allowed");
       }
 
+      const fileExt = paymentProof.name.split(".").pop()?.toLowerCase();
+      if (!fileExt || !["jpg", "jpeg", "png", "gif"].includes(fileExt)) {
+        throw new Error("Only JPG, PNG, and GIF files are allowed");
+      }
+
+      const fileName = `${orderId}-proof.${fileExt}`;
+      const filePath = `payment-proofs/${fileName}`;
+
+      // Create a copy of the file with proper name
+      const renamedFile = new File([paymentProof], fileName, {
+        type: paymentProof.type,
+      });
+
       // Upload to Supabase Storage
-      const { error: uploadError } = await supabase.storage
+      const { data, error: uploadError } = await supabase.storage
         .from("payment-proofs")
-        .upload(filePath, paymentProof);
+        .upload(filePath, renamedFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
 
       if (uploadError) {
-        throw uploadError;
+        console.error("Upload error details:", uploadError);
+        throw new Error(uploadError.message);
+      }
+
+      if (!data?.path) {
+        throw new Error("Upload successful but no path returned");
       }
 
       // Get public URL
       const {
         data: { publicUrl },
-      } = supabase.storage.from("payment-proofs").getPublicUrl(filePath);
+      } = supabase.storage.from("payment-proofs").getPublicUrl(data.path);
 
       if (!publicUrl) {
         throw new Error("Failed to get public URL for uploaded file");
@@ -120,11 +136,10 @@ function OrderPage() {
       return publicUrl;
     } catch (error) {
       console.error("Error uploading payment proof:", error);
-      throw new Error(
-        `Failed to upload payment proof: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
+      if (error instanceof Error) {
+        throw new Error(`Failed to upload payment proof: ${error.message}`);
+      }
+      throw new Error("Failed to upload payment proof: Unknown error occurred");
     }
   };
 
@@ -133,6 +148,7 @@ function OrderPage() {
     if (!user || isSubmitting) return;
 
     setIsSubmitting(true);
+    setIsUploading(true);
 
     try {
       // Validate form data
@@ -144,13 +160,18 @@ function OrderPage() {
         throw new Error("Please upload your payment proof");
       }
 
+      // Generate a unique ID for the order
+      const tempOrderId = crypto.randomUUID();
+
       // Upload payment proof first
-      setIsUploading(true);
-      const proofUrl = await uploadPaymentProof(crypto.randomUUID()); // Generate temporary ID for file name
+      console.log("Uploading payment proof...");
+      const proofUrl = await uploadPaymentProof(tempOrderId);
 
       if (!proofUrl) {
-        throw new Error("Failed to upload payment proof");
+        throw new Error("Failed to get URL for uploaded payment proof");
       }
+
+      console.log("Payment proof uploaded successfully:", proofUrl);
 
       // Create order
       const { data: order, error: orderError } = await supabase
@@ -231,7 +252,7 @@ function OrderPage() {
       console.error("Error submitting order:", error);
       alert(
         `There was an error submitting your order: ${
-          error instanceof Error ? error.message : "Unknown error"
+          error instanceof Error ? error.message : "Unknown error occurred"
         }`
       );
     } finally {
@@ -409,15 +430,18 @@ function OrderPage() {
                 disabled={isSubmitting || isUploading}
               >
                 {isSubmitting || isUploading ? (
-                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                    <span>
+                      {isUploading ? "Uploading..." : "Submitting..."}
+                    </span>
+                  </>
                 ) : (
-                  <Send size={20} />
+                  <>
+                    <Send size={20} />
+                    <span>Submit Order</span>
+                  </>
                 )}
-                {isSubmitting || isUploading
-                  ? isUploading
-                    ? "Uploading..."
-                    : "Submitting..."
-                  : "Submit Order"}
               </button>
             </form>
           </div>

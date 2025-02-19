@@ -95,4 +95,25 @@ CREATE INDEX idx_inbox_messages_is_read ON inbox_messages(is_read);
 CREATE TRIGGER update_payment_proofs_updated_at
     BEFORE UPDATE ON payment_proofs
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column(); 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Create storage bucket for payment proofs
+insert into storage.buckets (id, name, public) 
+values ('payment-proofs', 'payment-proofs', true);
+
+-- Set up storage policy to allow authenticated uploads
+create policy "Allow authenticated uploads"
+  on storage.objects
+  for insert
+  to authenticated
+  with check (
+    bucket_id = 'payment-proofs' 
+    and (storage.foldername(name))[1] = 'payment-proofs'
+  );
+
+-- Set up storage policy to allow public reads
+create policy "Allow public reads"
+  on storage.objects
+  for select
+  to public
+  using (bucket_id = 'payment-proofs'); 
