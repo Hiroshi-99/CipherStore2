@@ -118,7 +118,7 @@ export const handler: Handler = async (event) => {
     const webhook = await channel.createWebhook({
       name: "Order Bot",
       avatar:
-        "https://cdn.discordapp.com/attachments/1326517715279810674/1335257183373230241/proof_679e312803ecb.png?ex=67b694e8&is=67b54368&hm=7b010d0d43c7d8261118db44f1ea6eb6ad03bb12ee55a401dc9bd0d7951d8933&",
+        "https://discord.com/api/webhooks/1341696416212451389/-GNkm-LtbfNuniDQoj78vU7sBLaqQFHYQZepAqAncbHvShIWYQKS1k0swTTQ6PI75jCv",
     });
     console.log("Webhook created");
 
