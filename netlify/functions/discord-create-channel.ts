@@ -158,7 +158,13 @@ export const handler: Handler = async (event) => {
     }
 
     // Send initial message
-    await thread.send({ embeds: [embed] });
+    try {
+      await thread.send({ embeds: [embed] });
+      console.log("Successfully sent initial message to thread");
+    } catch (messageError) {
+      console.error("Failed to send initial message:", messageError);
+      throw new Error("Failed to send initial message to thread");
+    }
 
     // Create webhook
     let webhook;
@@ -174,33 +180,47 @@ export const handler: Handler = async (event) => {
     }
 
     // Store channel info in database
-    const { error: dbError } = await supabase.from("discord_channels").insert([
-      {
-        order_id: orderId,
-        channel_id: channel.id,
-        thread_id: thread.id,
-        webhook_url: webhook.url,
-      },
-    ]);
+    try {
+      const { error: dbError } = await supabase
+        .from("discord_channels")
+        .insert([
+          {
+            order_id: orderId,
+            channel_id: channel.id,
+            thread_id: thread.id,
+            webhook_url: webhook.url,
+          },
+        ]);
 
-    if (dbError) {
-      throw new Error(
-        `Failed to store channel info in database: ${dbError.message}`
-      );
+      if (dbError) {
+        throw new Error(
+          `Failed to store channel info in database: ${dbError.message}`
+        );
+      }
+    } catch (dbInsertError) {
+      console.error("Database insertion error:", dbInsertError);
+      throw dbInsertError;
     }
 
     // Create initial inbox message
-    const { error: inboxError } = await supabase.from("inbox_messages").insert([
-      {
-        user_id: userId,
-        title: "Order Received",
-        content: `Your order (ID: ${orderId}) has been received and is pending review. We'll notify you once your payment has been verified.`,
-        type: "order_status",
-      },
-    ]);
+    try {
+      const { error: inboxError } = await supabase
+        .from("inbox_messages")
+        .insert([
+          {
+            user_id: userId,
+            title: "Order Received",
+            content: `Your order (ID: ${orderId}) has been received and is pending review. We'll notify you once your payment has been verified.`,
+            type: "order_status",
+          },
+        ]);
 
-    if (inboxError) {
-      console.error("Failed to create inbox message:", inboxError);
+      if (inboxError) {
+        console.error("Failed to create inbox message:", inboxError);
+        // Don't throw here as it's not critical
+      }
+    } catch (inboxInsertError) {
+      console.error("Inbox message insertion error:", inboxInsertError);
       // Don't throw here as it's not critical
     }
 
@@ -224,6 +244,7 @@ export const handler: Handler = async (event) => {
   } finally {
     if (discordClient) {
       await discordClient.destroy();
+      console.log("Discord client destroyed");
     }
   }
 };
