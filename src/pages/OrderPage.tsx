@@ -90,6 +90,9 @@ function OrderPage() {
         throw new Error(orderError?.message || "Failed to create order");
       }
 
+      // Ensure customerName is set
+      const customerName = formData.name.trim() || "Anonymous Customer";
+
       // Get auth headers for Discord API call
       const {
         data: { session },
@@ -104,7 +107,7 @@ function OrderPage() {
         },
         body: JSON.stringify({
           orderId: order.id,
-          customerName: formData.name,
+          customerName: customerName,
         }),
       });
 
