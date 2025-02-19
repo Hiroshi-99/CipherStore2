@@ -103,56 +103,43 @@ function OrderPage() {
   };
 
   const uploadPaymentProof = async (orderId: string) => {
-    if (!paymentProof || !user) {
-      throw new Error(
-        "No payment proof file selected or user not authenticated"
-      );
-    }
+    if (!paymentProof) return null;
 
     try {
-      // Validate file
-      if (paymentProof.size > 5 * 1024 * 1024) {
-        throw new Error("File size must be less than 5MB");
-      }
+      setIsUploading(true);
+      const fileName = `${orderId}-${Date.now()}-payment-proof.${paymentProof.name
+        .split(".")
+        .pop()}`;
+      const filePath = `${orderId}/${fileName}`;
 
-      if (!paymentProof.type.startsWith("image/")) {
-        throw new Error("Only image files are allowed");
-      }
-
-      const fileExt = paymentProof.name.split(".").pop()?.toLowerCase();
-      if (!fileExt || !["jpg", "jpeg", "png", "gif"].includes(fileExt)) {
-        throw new Error("Only JPG, PNG, and GIF files are allowed");
-      }
-
-      const fileName = `${orderId}-proof.${fileExt}`;
-      const filePath = `payment-proofs/${user.id}/${fileName}`; // Include user ID in path
-
-      // Create a copy of the file with proper name
-      const renamedFile = new File([paymentProof], fileName, {
-        type: paymentProof.type,
-      });
-
-      // Upload to Supabase Storage
       const { data, error: uploadError } = await supabase.storage
-        .from("payment-proofs")
-        .upload(filePath, renamedFile, {
+        .from(import.meta.env.VITE_SUPABASE_PAYMENT_PROOFS_BUCKET)
+        .upload(filePath, paymentProof, {
           cacheControl: "3600",
-          upsert: false,
+          upsert: true,
+          onUploadProgress: (progress) => {
+            // Optional: Add progress tracking if needed
+            console.log(
+              `Upload progress: ${(progress.loaded / progress.total) * 100}%`
+            );
+          },
         });
 
       if (uploadError) {
-        console.error("Upload error details:", uploadError);
-        throw new Error(uploadError.message);
+        throw new Error(
+          `Failed to upload payment proof: ${uploadError.message}`
+        );
       }
 
       if (!data?.path) {
         throw new Error("Upload successful but no path returned");
       }
 
-      // Get public URL
       const {
         data: { publicUrl },
-      } = supabase.storage.from("payment-proofs").getPublicUrl(data.path);
+      } = supabase.storage
+        .from(import.meta.env.VITE_SUPABASE_PAYMENT_PROOFS_BUCKET)
+        .getPublicUrl(data.path);
 
       if (!publicUrl) {
         throw new Error("Failed to get public URL for uploaded file");
@@ -161,10 +148,9 @@ function OrderPage() {
       return publicUrl;
     } catch (error) {
       console.error("Error uploading payment proof:", error);
-      if (error instanceof Error) {
-        throw new Error(`Failed to upload payment proof: ${error.message}`);
-      }
-      throw new Error("Failed to upload payment proof: Unknown error occurred");
+      throw error;
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -194,42 +180,20 @@ function OrderPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || isSubmitting) return;
+    if (!user || !paymentProof) return;
 
     setIsSubmitting(true);
     setIsUploading(true);
 
     try {
-      // Validate form data
-      if (!formData.name.trim() || !formData.email.trim()) {
-        throw new Error("Please fill in all required fields");
-      }
-
-      if (!paymentProof) {
-        throw new Error("Please upload your payment proof");
-      }
-
-      // Generate a unique ID for the order
-      const tempOrderId = crypto.randomUUID();
-
-      // Upload payment proof first
-      console.log("Uploading payment proof...");
-      const proofUrl = await uploadPaymentProof(tempOrderId);
-
-      if (!proofUrl) {
-        throw new Error("Failed to get URL for uploaded payment proof");
-      }
-
-      console.log("Payment proof uploaded successfully:", proofUrl);
-
-      // Create order
+      // Create order first
       const { data: order, error: orderError } = await supabase
         .from("orders")
         .insert([
           {
             user_id: user.id,
-            email: formData.email,
             full_name: formData.name,
+            email: formData.email,
             status: "pending",
           },
         ])
@@ -237,10 +201,18 @@ function OrderPage() {
         .single();
 
       if (orderError || !order) {
-        throw new Error(orderError?.message || "Failed to create order");
+        throw new Error(
+          `Failed to create order: ${orderError?.message || "Unknown error"}`
+        );
       }
 
-      // Store payment proof record
+      // Upload payment proof
+      const proofUrl = await uploadPaymentProof(order.id);
+      if (!proofUrl) {
+        throw new Error("No payment proof provided");
+      }
+
+      // Create payment proof record
       const { error: proofError } = await supabase
         .from("payment_proofs")
         .insert([
@@ -252,7 +224,7 @@ function OrderPage() {
         ]);
 
       if (proofError) {
-        throw new Error(`Failed to store payment proof: ${proofError.message}`);
+        throw new Error(`Failed to save payment proof: ${proofError.message}`);
       }
 
       // Create Discord channel/thread
