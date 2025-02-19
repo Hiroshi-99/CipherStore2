@@ -177,6 +177,7 @@ ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_proofs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE discord_channels ENABLE ROW LEVEL SECURITY;
 
 -- Owner check function
 CREATE OR REPLACE FUNCTION is_owner()
@@ -241,6 +242,78 @@ FOR ALL
 TO authenticated
 USING (is_owner())
 WITH CHECK (is_owner());
+
+-- Discord channels policies
+CREATE POLICY "Allow owner and admins to manage discord channels"
+ON discord_channels FOR ALL
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+CREATE POLICY "Users can view their own discord channels"
+ON discord_channels FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+
+------------------------------------------
+-- Row Level Security Policies
+------------------------------------------
+
+-- Orders policies
+CREATE POLICY "Users can create their own orders"
+ON orders FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can view their own orders"
+ON orders FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+
+-- Payment proofs policies
+CREATE POLICY "Users can create payment proofs for their orders"
+ON payment_proofs FOR INSERT
+TO authenticated
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+
+CREATE POLICY "Users can view payment proofs for their orders"
+ON payment_proofs FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+
+-- Inbox messages policies
+CREATE POLICY "Users can view their own inbox messages"
+ON inbox_messages FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own inbox messages"
+ON inbox_messages FOR UPDATE
+TO authenticated
+USING (auth.uid() = user_id);
 
 ------------------------------------------
 -- Permissions

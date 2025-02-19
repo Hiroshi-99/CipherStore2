@@ -22,31 +22,21 @@ console.log("DISCORD_CHANNEL_ID:", process.env.DISCORD_CHANNEL_ID);
 export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
 
-  // Log the incoming request
-  console.log("Received request body:", event.body);
-
-  // Verify authentication
-  const authHeader = event.headers.authorization;
-  if (!authHeader) {
-    return {
-      statusCode: 401,
-      body: JSON.stringify({ error: "No authorization header" }),
-    };
-  }
-
   try {
+    // Verify authentication
+    const authHeader = event.headers.authorization;
+    if (!authHeader) {
+      return {
+        statusCode: 401,
+        body: JSON.stringify({ error: "No authorization header" }),
+      };
+    }
+
     console.log("Raw event body:", event.body);
     const parsedBody = JSON.parse(event.body || "{}");
     console.log("Parsed event body:", parsedBody);
 
     const { orderId, customerName, paymentProofUrl, userId } = parsedBody;
-
-    console.log("Extracted fields:", {
-      orderId,
-      customerName,
-      paymentProofUrl,
-      userId,
-    });
 
     if (!orderId || !customerName || !userId) {
       console.log("Missing fields:", { orderId, customerName, userId });
@@ -72,34 +62,25 @@ export const handler: Handler = async (event) => {
     try {
       await discordClient.login(process.env.DISCORD_TOKEN);
     } catch (loginError) {
-      console.error("Error logging in to Discord:", loginError);
-      if (
-        loginError instanceof Error &&
-        loginError.message.includes("TokenInvalid")
-      ) {
-        return {
-          statusCode: 401,
-          body: JSON.stringify({
-            error:
-              "Invalid Discord token. Please check your DISCORD_TOKEN environment variable.",
-            details: loginError.message,
-          }),
-        };
-      }
-      throw loginError;
+      console.error("Discord login error:", loginError);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: "Failed to login to Discord",
+          details:
+            loginError instanceof Error ? loginError.message : "Unknown error",
+        }),
+      };
     }
 
+    // Fetch guild and channel
     const guild = await discordClient.guilds.fetch(
       process.env.DISCORD_GUILD_ID!
     );
-
-    // Fetch the existing channel
     const channel = await guild.channels.fetch(process.env.DISCORD_CHANNEL_ID!);
 
     if (!channel || channel.type !== ChannelType.GuildText) {
-      throw new Error(
-        "The specified channel was not found or is not a text channel."
-      );
+      throw new Error("Channel not found or is not a text channel");
     }
 
     // Create initial message with order details and payment proof
@@ -117,20 +98,35 @@ export const handler: Handler = async (event) => {
       embed.setImage(paymentProofUrl);
     }
 
-    // Create the thread
-    const thread = await channel.threads.create({
-      name: `Order #${orderId} - ${customerName}`,
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-      reason: `Order thread for ${customerName}`,
-    });
+    // Create thread
+    let thread;
+    try {
+      thread = await channel.threads.create({
+        name: `Order #${orderId} - ${customerName}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: `Order thread for ${customerName}`,
+      });
+    } catch (threadError) {
+      console.error("Thread creation error:", threadError);
+      throw new Error("Failed to create thread");
+    }
 
-    // Create webhook for the thread
-    const webhook = await thread.createWebhook({
-      name: "Order Bot",
-      avatar: "https://i.imgur.com/AfFp7pu.png", // Add your bot's avatar URL
-    });
+    // Send initial message
+    await thread.send({ embeds: [embed] });
 
-    // Store channel and webhook info in database
+    // Create webhook
+    let webhook;
+    try {
+      webhook = await thread.createWebhook({
+        name: "Order Bot",
+        avatar: "https://i.imgur.com/AfFp7pu.png",
+      });
+    } catch (webhookError) {
+      console.error("Webhook creation error:", webhookError);
+      throw new Error("Failed to create webhook");
+    }
+
+    // Store channel info in database
     const { error: dbError } = await supabase.from("discord_channels").insert([
       {
         order_id: orderId,
@@ -141,12 +137,12 @@ export const handler: Handler = async (event) => {
     ]);
 
     if (dbError) {
-      console.error("Error storing Discord channel info:", dbError);
+      console.error("Database error:", dbError);
       throw new Error(`Database error: ${dbError.message}`);
     }
 
-    // Create initial inbox message for customer
-    const { error: inboxError } = await supabase.from("inbox_messages").insert([
+    // Create initial inbox message
+    await supabase.from("inbox_messages").insert([
       {
         user_id: userId,
         title: "Order Received",
@@ -154,10 +150,6 @@ export const handler: Handler = async (event) => {
         type: "order_status",
       },
     ]);
-
-    if (inboxError) {
-      console.error("Error creating inbox message:", inboxError);
-    }
 
     return {
       statusCode: 200,
@@ -168,22 +160,17 @@ export const handler: Handler = async (event) => {
       }),
     };
   } catch (error) {
-    console.error("Error in Discord channel creation process:", error);
+    console.error("Error in Discord channel creation:", error);
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error: "An error occurred during channel creation",
+        error: "Failed to create Discord channel",
         details: error instanceof Error ? error.message : "Unknown error",
       }),
     };
   } finally {
-    if (discordClient?.isReady()) {
-      console.log("Destroying Discord client...");
-      try {
-        await discordClient.destroy();
-      } catch (error) {
-        console.error("Error destroying client:", error);
-      }
+    if (discordClient) {
+      discordClient.destroy();
     }
   }
 };
