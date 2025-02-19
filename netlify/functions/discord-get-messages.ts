@@ -1,5 +1,5 @@
 import { Handler } from "@netlify/functions";
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, ChannelType } from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -51,20 +51,31 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const channelId = event.path.split("/").pop();
+    // Extract channelId and threadId from path
+    const pathParts = event.path.split("/");
+    const channelId = pathParts[pathParts.indexOf("threads") - 1];
+    const threadId = pathParts[pathParts.indexOf("threads") + 1];
 
-    if (!channelId) {
+    if (!channelId || !threadId) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: "Missing channelId" }),
+        body: JSON.stringify({ error: "Missing channelId or threadId" }),
       };
     }
 
+    console.log(
+      "Fetching messages for channel:",
+      channelId,
+      "thread:",
+      threadId
+    );
+
     await client.login(DISCORD_TOKEN);
 
+    // Fetch the channel first
     const channel = await client.channels.fetch(channelId);
 
-    if (!channel || channel.type !== 0) {
+    if (!channel || channel.type !== ChannelType.GuildText) {
       return {
         statusCode: 404,
         body: JSON.stringify({
@@ -73,7 +84,20 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const messages = await channel.messages.fetch({ limit: 100 });
+    // Fetch the thread
+    const thread = await channel.threads.fetch(threadId);
+
+    if (!thread) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          error: "Thread not found",
+        }),
+      };
+    }
+
+    // Fetch messages from the thread
+    const messages = await thread.messages.fetch({ limit: 100 });
 
     const formattedMessages = messages.map((msg) => ({
       id: msg.id,

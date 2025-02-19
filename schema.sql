@@ -55,4 +55,10 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_orders_updated_at
     BEFORE UPDATE ON orders
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column(); 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Remove the unique constraint from channel_id
+ALTER TABLE discord_channels DROP CONSTRAINT IF EXISTS discord_channels_channel_id_key;
+
+-- Add a composite index for better query performance
+CREATE INDEX IF NOT EXISTS idx_discord_channels_order_channel ON discord_channels(order_id, channel_id); 
