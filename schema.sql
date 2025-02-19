@@ -173,7 +173,7 @@ ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 -- Admin Access Control
 ------------------------------------------
 
--- Enable RLS on tables that need policies
+-- Enable RLS on tables
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_proofs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
@@ -181,40 +181,24 @@ ALTER TABLE discord_channels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inbox_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 
--- Owner check function
+-- Drop existing policies and functions
+DROP POLICY IF EXISTS "Admin users owner access" ON admin_users;
+DROP POLICY IF EXISTS "Admin users view access" ON admin_users;
+DROP FUNCTION IF EXISTS is_admin();
+
+-- Create owner check function
 CREATE OR REPLACE FUNCTION is_owner()
 RETURNS BOOLEAN AS $$
 BEGIN
-  RETURN (
-    auth.jwt() ->> 'sub' = current_setting('app.owner_id', TRUE)
-  );
+  RETURN auth.jwt() ->> 'sub' = current_setting('app.owner_id', TRUE);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Admin check function (to avoid recursion)
-CREATE OR REPLACE FUNCTION is_admin()
-RETURNS BOOLEAN AS $$
-BEGIN
-  RETURN EXISTS (
-    SELECT 1 FROM admin_users
-    WHERE user_id = auth.uid()
-  ) OR is_owner();
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Update the admin users policy
-DROP POLICY IF EXISTS "Only owner can manage admins" ON admin_users;
-
-CREATE POLICY "Allow owner to manage admins"
-ON admin_users FOR ALL 
-TO authenticated
-USING (is_owner())
-WITH CHECK (is_owner());
-
-CREATE POLICY "Allow admins to view admin list"
+-- Admin users table policies
+CREATE POLICY "Allow authenticated users to view admin_users"
 ON admin_users FOR SELECT
 TO authenticated
-USING (is_admin());
+USING (true);
 
 -- Orders policies
 CREATE POLICY "Users can create their own orders"
@@ -225,12 +209,12 @@ WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can view their own orders"
 ON orders FOR SELECT
 TO authenticated
-USING (auth.uid() = user_id OR is_admin());
+USING (auth.uid() = user_id OR is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
 
 CREATE POLICY "Allow admins to update orders"
 ON orders FOR UPDATE
 TO authenticated
-USING (is_admin());
+USING (is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
 
 -- Payment proofs policies
 CREATE POLICY "Users can create payment proofs for their orders"
@@ -251,19 +235,16 @@ USING (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
-        AND (orders.user_id = auth.uid() OR is_admin())
+        AND (orders.user_id = auth.uid() OR is_owner())
     )
 );
 
 CREATE POLICY "Allow admins to update payment proofs"
 ON payment_proofs FOR UPDATE
 TO authenticated
-USING (is_admin());
+USING (is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
 
 -- Discord channels policies
-DROP POLICY IF EXISTS "Users can view their own discord channels" ON discord_channels;
-DROP POLICY IF EXISTS "Allow admins to manage discord channels" ON discord_channels;
-
 CREATE POLICY "Users can view their own discord channels"
 ON discord_channels FOR SELECT
 TO authenticated
@@ -271,14 +252,14 @@ USING (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
-        AND (orders.user_id = auth.uid() OR is_admin())
+        AND (orders.user_id = auth.uid() OR is_owner())
     )
 );
 
 CREATE POLICY "Allow admins to manage discord channels"
 ON discord_channels FOR ALL
 TO authenticated
-USING (is_admin());
+USING (is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
 
 CREATE POLICY "Allow users to create discord channels for their orders"
 ON discord_channels FOR INSERT
@@ -299,7 +280,7 @@ USING (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
-        AND (orders.user_id = auth.uid() OR is_admin())
+        AND (orders.user_id = auth.uid() OR is_owner())
     )
 );
 
@@ -312,14 +293,11 @@ WITH CHECK (
         WHERE orders.id = order_id
         AND orders.user_id = auth.uid()
     )
-    OR is_admin()
+    OR is_owner()
+    OR auth.uid() IN (SELECT user_id FROM admin_users)
 );
 
 -- Inbox messages policies
-DROP POLICY IF EXISTS "Users can view their own inbox messages" ON inbox_messages;
-DROP POLICY IF EXISTS "Users can update their own inbox messages" ON inbox_messages;
-DROP POLICY IF EXISTS "Allow admins to create inbox messages" ON inbox_messages;
-
 CREATE POLICY "Users can view their own inbox messages"
 ON inbox_messages FOR SELECT
 TO authenticated
@@ -333,14 +311,15 @@ USING (auth.uid() = user_id);
 CREATE POLICY "Allow admins to manage inbox messages"
 ON inbox_messages FOR ALL
 TO authenticated
-USING (is_admin());
+USING (is_owner());
 
 CREATE POLICY "Allow system to create inbox messages"
 ON inbox_messages FOR INSERT
 TO authenticated
 WITH CHECK (
     auth.uid() = user_id
-    OR is_admin()
+    OR is_owner()
+    OR auth.uid() IN (SELECT user_id FROM admin_users)
     OR EXISTS (
         SELECT 1 FROM orders
         WHERE orders.user_id = user_id
@@ -356,6 +335,10 @@ ON auth.users
 FOR SELECT
 TO authenticated
 USING (auth.uid() = id);
+
+-- Grant permissions
+GRANT ALL ON admin_users TO authenticated;
+GRANT USAGE ON SCHEMA public TO authenticated;
 
 ------------------------------------------
 -- Permissions
@@ -378,7 +361,7 @@ BEGIN
   RETURN EXISTS (
     SELECT 1 FROM orders
     WHERE orders.id = order_id
-    AND (orders.user_id = auth.uid() OR is_admin())
+    AND (orders.user_id = auth.uid() OR is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users))
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER; 

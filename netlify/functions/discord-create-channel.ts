@@ -40,13 +40,22 @@ export const handler: Handler = async (event) => {
   try {
     // Verify authentication
     const authHeader = event.headers.authorization;
-    if (!authHeader) {
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return {
         statusCode: 401,
-        body: JSON.stringify({
-          error: "Unauthorized",
-          details: "No authorization header provided",
-        }),
+        body: JSON.stringify({ error: "Unauthorized" }),
+      };
+    }
+
+    const token = authHeader.split(" ")[1];
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token);
+    if (authError || !user) {
+      return {
+        statusCode: 401,
+        body: JSON.stringify({ error: "Invalid token" }),
       };
     }
 
@@ -175,9 +184,8 @@ export const handler: Handler = async (event) => {
     ]);
 
     if (dbError) {
-      console.error("Database error:", dbError);
       throw new Error(
-        `Failed to store Discord channel info: ${dbError.message}`
+        `Failed to store channel info in database: ${dbError.message}`
       );
     }
 
@@ -200,25 +208,22 @@ export const handler: Handler = async (event) => {
       statusCode: 200,
       body: JSON.stringify({
         success: true,
-        channelId: channel.id,
         threadId: thread.id,
         webhookUrl: webhook.url,
       }),
     };
   } catch (error) {
-    console.error("Error in Discord channel creation:", error);
+    console.error("Error in discord-create-channel:", error);
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error: "Discord Channel Creation Failed",
-        details:
-          error instanceof Error ? error.message : "Unknown error occurred",
+        error: "Failed to create Discord channel",
+        details: error.message,
       }),
     };
   } finally {
-    if (discordClient?.isReady()) {
+    if (discordClient) {
       await discordClient.destroy();
-      console.log("Discord client destroyed");
     }
   }
 };
