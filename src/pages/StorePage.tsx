@@ -90,7 +90,7 @@ function StorePage() {
         className="absolute inset-0 z-0"
         style={{
           backgroundImage:
-            'url("https://images.unsplash.com/photo-1623984109622-f9c970ba32fc?q=80&w=2940")',
+            'url("https://cdn.discordapp.com/attachments/1335202613913849857/1341845927022825653/gggif.gif?ex=67b77ae7&is=67b62967&hm=4a1cc9c79faf89c3812d8de194e89e80c7ef350a49a907083368e2a0814f863f&)',
           backgroundSize: "cover",
           backgroundPosition: "center",
           filter: "brightness(0.7)",
