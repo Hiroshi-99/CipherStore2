@@ -97,23 +97,37 @@ CREATE TRIGGER update_payment_proofs_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Create storage bucket for payment proofs
-insert into storage.buckets (id, name, public) 
-values ('payment-proofs', 'payment-proofs', true);
+-- Create storage bucket for payment proofs if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM storage.buckets
+        WHERE id = 'payment-proofs'
+    ) THEN
+        INSERT INTO storage.buckets (id, name, public)
+        VALUES ('payment-proofs', 'payment-proofs', true);
+    END IF;
+END $$;
 
--- Set up storage policy to allow authenticated uploads
-create policy "Allow authenticated uploads"
-  on storage.objects
-  for insert
-  to authenticated
-  with check (
-    bucket_id = 'payment-proofs' 
-    and (storage.foldername(name))[1] = 'payment-proofs'
-  );
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public reads" ON storage.objects;
 
--- Set up storage policy to allow public reads
-create policy "Allow public reads"
-  on storage.objects
-  for select
-  to public
-  using (bucket_id = 'payment-proofs'); 
+-- Create new policies
+CREATE POLICY "Allow authenticated uploads"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (
+    bucket_id = 'payment-proofs'
+    AND (storage.foldername(name))[1] = 'payment-proofs'
+);
+
+CREATE POLICY "Allow public reads"
+ON storage.objects FOR SELECT
+TO public
+USING (bucket_id = 'payment-proofs');
+
+-- Grant necessary permissions
+GRANT ALL ON storage.objects TO authenticated;
+GRANT SELECT ON storage.objects TO public; 

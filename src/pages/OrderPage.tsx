@@ -99,6 +99,14 @@ function OrderPage() {
         throw new Error("Only JPG, PNG, and GIF files are allowed");
       }
 
+      // Check if bucket exists
+      const { data: buckets } = await supabase.storage.listBuckets();
+      if (!buckets?.some((bucket) => bucket.name === "payment-proofs")) {
+        throw new Error(
+          "Storage system is not properly configured. Please contact support."
+        );
+      }
+
       const fileName = `${orderId}-proof.${fileExt}`;
       const filePath = `payment-proofs/${fileName}`;
 
@@ -117,6 +125,11 @@ function OrderPage() {
 
       if (uploadError) {
         console.error("Upload error details:", uploadError);
+        if (uploadError.message.includes("bucket")) {
+          throw new Error(
+            "Storage system error. Please try again or contact support."
+          );
+        }
         throw new Error(uploadError.message);
       }
 
