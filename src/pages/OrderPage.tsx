@@ -124,7 +124,7 @@ function OrderPage() {
         const errorData = await response.json();
         throw new Error(
           `Failed to create Discord channel: ${
-            errorData.details || errorData.error
+            errorData.details || errorData.error || "Unknown error"
           }`
         );
       }
@@ -138,7 +138,11 @@ function OrderPage() {
       alert("Order submitted successfully! Redirecting to support chat...");
     } catch (error) {
       console.error("Error submitting order:", error);
-      alert("There was an error submitting your order. Please try again.");
+      alert(
+        `There was an error submitting your order. Please try again. Error: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     } finally {
       setIsSubmitting(false);
     }
