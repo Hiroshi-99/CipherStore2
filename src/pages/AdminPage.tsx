@@ -190,36 +190,44 @@ function AdminPage() {
       }
 
       try {
-        const { data: channel } = await supabase
+        const { data: channel, error: channelError } = await supabase
           .from("discord_channels")
           .select("thread_id, webhook_url")
           .eq("order_id", orderId)
           .single();
 
+        if (channelError) {
+          console.error("Failed to fetch Discord channel:", channelError);
+          return;
+        }
+
         if (channel?.webhook_url) {
-          const response = await fetch(channel.webhook_url, {
+          const response = await fetch("/.netlify/functions/discord-webhook", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              content: `Order ${orderId} has been ${action}ed`,
-              embeds: [
-                {
-                  title: `Order ${
-                    action === "approve" ? "Approved" : "Rejected"
-                  }`,
-                  description: `Order ID: ${orderId}`,
-                  color: action === "approve" ? 0x00ff00 : 0xff0000,
-                  timestamp: new Date().toISOString(),
-                },
-              ],
+              webhookUrl: channel.webhook_url,
+              message: {
+                content: `Order ${orderId} has been ${action}ed`,
+                embeds: [
+                  {
+                    title: `Order ${
+                      action === "approve" ? "Approved" : "Rejected"
+                    }`,
+                    description: `Order ID: ${orderId}`,
+                    color: action === "approve" ? 0x00ff00 : 0xff0000,
+                    timestamp: new Date().toISOString(),
+                  },
+                ],
+              },
             }),
           });
 
           if (!response.ok) {
-            console.error("Discord webhook error:", await response.text());
-            throw new Error(`Discord webhook returned ${response.status}`);
+            const errorText = await response.text();
+            console.error("Discord webhook error:", errorText);
           }
         }
       } catch (webhookError) {
