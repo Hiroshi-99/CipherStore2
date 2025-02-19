@@ -99,7 +99,7 @@ function InboxPage() {
   }
 
   return (
-    <div className="min-h-screen relative">
+    <div className="min-h-screen relative bg-gray-900">
       <Header title="INBOX" showBack user={setUser} />
 
       <main className="flex items-center justify-center px-4 py-12">
