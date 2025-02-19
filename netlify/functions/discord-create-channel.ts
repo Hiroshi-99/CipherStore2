@@ -79,20 +79,35 @@ export const handler: Handler = async (event) => {
     // Create new client instance for each request using the config function
     discordClient = new Client(getClientConfig());
 
-    // Test Discord connection
+    // Test Discord connection and wait for ready
     console.log("Attempting to login to Discord...");
     await discordClient.login(process.env.DISCORD_BOT_TOKEN);
-    console.log("Discord login successful!");
 
-    // Wait for client to be ready
-    await new Promise((resolve) => {
-      if (discordClient!.isReady()) resolve(true);
-      else discordClient!.once("ready", resolve);
+    // Wait for client to be ready and ensure user is available
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Discord client ready timeout"));
+      }, 10000); // 10 second timeout
+
+      if (discordClient!.isReady() && discordClient!.user) {
+        clearTimeout(timeout);
+        resolve();
+      } else {
+        discordClient!.once("ready", () => {
+          if (discordClient!.user) {
+            clearTimeout(timeout);
+            resolve();
+          } else {
+            clearTimeout(timeout);
+            reject(new Error("Discord client user not available"));
+          }
+        });
+      }
     });
-    console.log("Discord client ready");
+
+    console.log("Discord client ready with user:", discordClient.user?.tag);
 
     // Test guild access
-    console.log("Fetching guild...");
     const guild = await discordClient.guilds.fetch(
       process.env.DISCORD_GUILD_ID!
     );
@@ -101,8 +116,11 @@ export const handler: Handler = async (event) => {
     }
     console.log("Guild found:", guild.name);
 
+    // Store bot user ID for permission setup
+    const botId = discordClient.user!.id;
+    console.log("Bot ID:", botId);
+
     // Test category access
-    console.log("Fetching category...");
     const category = await guild.channels.fetch(
       process.env.DISCORD_SUPPORT_CATEGORY_ID!
     );
@@ -125,7 +143,7 @@ export const handler: Handler = async (event) => {
           deny: [PermissionFlagsBits.ViewChannel],
         },
         {
-          id: discordClient.user!.id,
+          id: botId,
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
