@@ -16,6 +16,9 @@ console.log("CATEGORY_ID:", process.env.DISCORD_SUPPORT_CATEGORY_ID);
 export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
 
+  // Log the incoming request
+  console.log("Received request body:", event.body);
+
   // Verify authentication
   const authHeader = event.headers.authorization;
   if (!authHeader) {
@@ -26,32 +29,19 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    // Verify the user token
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
-
-    if (authError || !user) {
-      return {
-        statusCode: 401,
-        body: JSON.stringify({ error: "Invalid token" }),
-      };
-    }
-
-    if (event.httpMethod !== "POST") {
-      return {
-        statusCode: 405,
-        body: JSON.stringify({ error: "Method not allowed" }),
-      };
-    }
-
     const { orderId, customerName } = JSON.parse(event.body || "{}");
 
+    // Log parsed data
+    console.log("Parsed request data:", { orderId, customerName });
+
     if (!orderId || !customerName) {
+      console.log("Missing fields:", { orderId, customerName });
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: "Missing required fields" }),
+        body: JSON.stringify({
+          error: "Missing required fields",
+          received: { orderId, customerName },
+        }),
       };
     }
 

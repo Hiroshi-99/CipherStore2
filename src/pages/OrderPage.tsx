@@ -73,22 +73,57 @@ function OrderPage() {
 
     try {
       // Store order in Supabase
-      const { error } = await supabase.from("orders").insert([
-        {
-          user_id: user.id,
-          email: formData.email,
-          full_name: formData.name,
-          status: "pending",
+      const { data: order, error: orderError } = await supabase
+        .from("orders")
+        .insert([
+          {
+            user_id: user.id,
+            email: formData.email,
+            full_name: formData.name,
+            status: "pending",
+          },
+        ])
+        .select()
+        .single();
+
+      if (orderError || !order) {
+        throw new Error(orderError?.message || "Failed to create order");
+      }
+
+      // Get auth headers for Discord API call
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      // Create Discord channel
+      const response = await fetch("/api/discord-create-channel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
         },
-      ]);
+        body: JSON.stringify({
+          orderId: order.id,
+          customerName: formData.name,
+        }),
+      });
 
-      if (error) throw error;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          `Failed to create Discord channel: ${
+            errorData.details || errorData.error
+          }`
+        );
+      }
 
-      alert("Order submitted! Redirecting to support chat...");
-      navigate("/chat");
+      const channelData = await response.json();
+
+      // Navigate to chat page
+      navigate(`/chat?orderId=${order.id}`);
     } catch (error) {
       console.error("Error submitting order:", error);
-      alert("There was an error submitting your order. Please try again.");
+      // Handle error (show error message to user)
     }
   };
 
