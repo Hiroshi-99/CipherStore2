@@ -44,6 +44,10 @@ function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [order, setOrder] = useState<any>(null);
   const [discordChannel, setDiscordChannel] = useState<string | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(
+    null
+  );
 
   useEffect(() => {
     // Check authentication and get order
@@ -99,6 +103,7 @@ function ChatPage() {
           event: "INSERT",
           schema: "public",
           table: "messages",
+          filter: `order_id=eq.${order?.id}`,
         },
         (payload) => {
           console.log("Received new message:", payload.new);
@@ -112,7 +117,7 @@ function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [navigate]);
+  }, [navigate, order?.id]);
 
   useEffect(() => {
     // Load existing messages when order is set
@@ -281,6 +286,22 @@ function ChatPage() {
     }
   };
 
+  const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewMessage(e.target.value);
+
+    if (e.target.value.trim() !== "") {
+      setIsTyping(true);
+      if (typingTimeout) clearTimeout(typingTimeout);
+      setTypingTimeout(
+        setTimeout(() => {
+          setIsTyping(false);
+        }, 3000)
+      );
+    } else {
+      setIsTyping(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -366,7 +387,7 @@ function ChatPage() {
             <input
               type="text"
               value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
+              onChange={handleTyping}
               placeholder="Type your message..."
               className="flex-1 bg-white/10 border border-white/20 rounded-md px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-emerald-400"
             />
