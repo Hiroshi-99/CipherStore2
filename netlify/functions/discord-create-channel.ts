@@ -135,18 +135,17 @@ export const handler: Handler = async (event) => {
     }
 
     // Check if the channel and thread already exist in the database
-    const { data: existingChannel, error: existingChannelError } =
+    const { data: existingChannels, error: existingChannelsError } =
       await supabase
         .from("discord_channels")
         .select("*")
-        .eq("order_id", orderId)
-        .single();
+        .eq("order_id", orderId);
 
-    if (existingChannelError) {
-      throw new Error(`Database error: ${existingChannelError.message}`);
+    if (existingChannelsError) {
+      throw new Error(`Database error: ${existingChannelsError.message}`);
     }
 
-    if (existingChannel) {
+    if (existingChannels && existingChannels.length > 0) {
       // Update existing record
       const { error: updateError } = await supabase
         .from("discord_channels")
@@ -159,7 +158,7 @@ export const handler: Handler = async (event) => {
       if (updateError) {
         throw new Error(`Database error: ${updateError.message}`);
       }
-      console.log("Updated existing channel record:", existingChannel.id);
+      console.log("Updated existing channel record:", existingChannels[0].id);
     } else {
       // Insert new record
       const { error: dbError } = await supabase
