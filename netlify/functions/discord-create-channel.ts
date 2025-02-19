@@ -63,7 +63,25 @@ export const handler: Handler = async (event) => {
       ],
     });
 
-    await discordClient.login(process.env.DISCORD_TOKEN);
+    try {
+      await discordClient.login(process.env.DISCORD_TOKEN);
+    } catch (loginError) {
+      console.error("Error logging in to Discord:", loginError);
+      if (
+        loginError instanceof Error &&
+        loginError.message.includes("TokenInvalid")
+      ) {
+        return {
+          statusCode: 401,
+          body: JSON.stringify({
+            error:
+              "Invalid Discord token. Please check your DISCORD_TOKEN environment variable.",
+            details: loginError.message,
+          }),
+        };
+      }
+      throw loginError;
+    }
 
     const guild = await discordClient.guilds.fetch(
       process.env.DISCORD_GUILD_ID!
