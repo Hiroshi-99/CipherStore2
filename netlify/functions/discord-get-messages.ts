@@ -18,7 +18,7 @@ const client = new Client({
 const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
 if (!DISCORD_TOKEN) {
-  throw new Error("Missing DISCORD_BOT_TOKEN");
+  throw new Error("Missing DISCORD_TOKEN");
 }
 
 export const handler: Handler = async (event) => {

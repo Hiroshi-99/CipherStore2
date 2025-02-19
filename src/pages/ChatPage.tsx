@@ -271,7 +271,11 @@ function ChatPage() {
       scrollToBottom();
     } catch (error) {
       console.error("Error fetching Discord messages:", error);
-      alert("Failed to load messages. Please refresh the page.");
+      alert(
+        `Failed to load messages. Please refresh the page. Error: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     } finally {
       setIsLoadingMessages(false);
     }
