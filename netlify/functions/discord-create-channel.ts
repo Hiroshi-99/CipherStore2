@@ -1,5 +1,10 @@
 import { Handler } from "@netlify/functions";
-import { Client, GatewayIntentBits, PermissionFlagsBits } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  PermissionFlagsBits,
+  ChannelType,
+} from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -13,15 +18,16 @@ console.log("DISCORD_TOKEN length:", process.env.DISCORD_BOT_TOKEN?.length);
 console.log("GUILD_ID:", process.env.DISCORD_GUILD_ID);
 console.log("CATEGORY_ID:", process.env.DISCORD_SUPPORT_CATEGORY_ID);
 
-const client = new Client({
+// Create a function to get client config to avoid duplication
+const getClientConfig = () => ({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
   rest: {
-    timeout: 60000, // Increase timeout to 60 seconds
-    retries: 3, // Add retries
+    timeout: 60000,
+    retries: 3,
   },
 });
 
@@ -38,18 +44,8 @@ export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
 
   try {
-    // Create new client instance for each request
-    discordClient = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-      ],
-      rest: {
-        timeout: 60000,
-        retries: 3,
-      },
-    });
+    // Create new client instance for each request using the config function
+    discordClient = new Client(getClientConfig());
 
     // Test Discord connection
     console.log("Attempting to login to Discord...");
@@ -89,10 +85,10 @@ export const handler: Handler = async (event) => {
     }
     console.log("Creating channel for order:", orderId);
 
-    // Create the channel
+    // Create the channel with correct type specification
     const channel = await guild.channels.create({
       name: `order-${orderId.substring(0, 8)}`,
-      type: 0,
+      type: ChannelType.GuildText,
       parent: process.env.DISCORD_SUPPORT_CATEGORY_ID,
       topic: `Support channel for ${username}'s order`,
       permissionOverwrites: [
@@ -113,12 +109,10 @@ export const handler: Handler = async (event) => {
 
     console.log("Channel created:", channel.name);
 
-    // Create webhook
+    // Create webhook with default Discord avatar
     console.log("Creating webhook...");
     const webhook = await channel.createWebhook({
       name: "Order Bot",
-      avatar:
-        "https://discord.com/api/webhooks/1341696416212451389/-GNkm-LtbfNuniDQoj78vU7sBLaqQFHYQZepAqAncbHvShIWYQKS1k0swTTQ6PI75jCv",
     });
     console.log("Webhook created");
 
@@ -128,7 +122,6 @@ export const handler: Handler = async (event) => {
         channelId: channel.id,
         webhookUrl: webhook.url,
       }),
-      s,
     };
   } catch (error) {
     console.error("Function error:", error);
