@@ -109,7 +109,12 @@ function ChatPage() {
         (payload) => {
           console.log("Received new message:", payload.new);
           const newMessage = payload.new as Message;
-          setMessages((current) => [...current, newMessage]);
+          setMessages((current) => {
+            if (!current.some((msg) => msg.id === newMessage.id)) {
+              return [...current, newMessage];
+            }
+            return current;
+          });
           scrollToBottom();
         }
       )
@@ -362,6 +367,11 @@ function ChatPage() {
         {/* Chat Container */}
         <div className="flex-1 overflow-hidden flex flex-col p-4">
           <div className="flex-1 overflow-y-auto space-y-4 pb-4">
+            {isLoadingMessages && (
+              <div className="text-white text-sm mb-2 text-center">
+                Loading messages...
+              </div>
+            )}
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -420,10 +430,6 @@ function ChatPage() {
               <Send size={20} />
             </button>
           </form>
-
-          {isLoadingMessages && (
-            <div className="text-white text-sm mb-2">Loading messages...</div>
-          )}
         </div>
       </div>
     </div>
