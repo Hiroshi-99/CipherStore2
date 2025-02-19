@@ -202,13 +202,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Admin users policies
-CREATE POLICY "Only owner can manage admins"
-ON admin_users
-FOR ALL
+-- Update the admin users policy
+DROP POLICY IF EXISTS "Only owner can manage admins" ON admin_users;
+
+CREATE POLICY "Allow owner to manage admins"
+ON admin_users FOR ALL 
 TO authenticated
 USING (is_owner())
 WITH CHECK (is_owner());
+
+CREATE POLICY "Allow admins to view admin list"
+ON admin_users FOR SELECT
+TO authenticated
+USING (is_admin());
 
 -- Orders policies
 CREATE POLICY "Users can create their own orders"
@@ -255,15 +261,29 @@ TO authenticated
 USING (is_admin());
 
 -- Discord channels policies
-CREATE POLICY "Allow admins to manage discord channels"
-ON discord_channels FOR ALL
-TO authenticated
-USING (is_admin());
+DROP POLICY IF EXISTS "Users can view their own discord channels" ON discord_channels;
+DROP POLICY IF EXISTS "Allow admins to manage discord channels" ON discord_channels;
 
 CREATE POLICY "Users can view their own discord channels"
 ON discord_channels FOR SELECT
 TO authenticated
 USING (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND (orders.user_id = auth.uid() OR is_admin())
+    )
+);
+
+CREATE POLICY "Allow admins to manage discord channels"
+ON discord_channels FOR ALL
+TO authenticated
+USING (is_admin());
+
+CREATE POLICY "Allow users to create discord channels for their orders"
+ON discord_channels FOR INSERT
+TO authenticated
+WITH CHECK (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
@@ -296,20 +316,37 @@ WITH CHECK (
 );
 
 -- Inbox messages policies
+DROP POLICY IF EXISTS "Users can view their own inbox messages" ON inbox_messages;
+DROP POLICY IF EXISTS "Users can update their own inbox messages" ON inbox_messages;
+DROP POLICY IF EXISTS "Allow admins to create inbox messages" ON inbox_messages;
+
 CREATE POLICY "Users can view their own inbox messages"
 ON inbox_messages FOR SELECT
 TO authenticated
-USING (auth.uid() = user_id OR is_admin());
+USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can update their own inbox messages"
 ON inbox_messages FOR UPDATE
 TO authenticated
-USING (auth.uid() = user_id OR is_admin());
+USING (auth.uid() = user_id);
 
-CREATE POLICY "Allow admins to create inbox messages"
+CREATE POLICY "Allow admins to manage inbox messages"
+ON inbox_messages FOR ALL
+TO authenticated
+USING (is_admin());
+
+CREATE POLICY "Allow system to create inbox messages"
 ON inbox_messages FOR INSERT
 TO authenticated
-WITH CHECK (is_admin());
+WITH CHECK (
+    auth.uid() = user_id
+    OR is_admin()
+    OR EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.user_id = user_id
+        AND orders.user_id = auth.uid()
+    )
+);
 
 -- Add this to the Admin Access Control section
 CREATE POLICY "Allow users to view their own auth data"
@@ -330,4 +367,16 @@ GRANT SELECT ON storage.buckets TO public;
 
 -- Add this to the Permissions section
 GRANT USAGE ON SCHEMA auth TO authenticated;
-GRANT SELECT ON auth.users TO authenticated; 
+GRANT SELECT ON auth.users TO authenticated;
+
+-- Add a function to check if user has permission for an order
+CREATE OR REPLACE FUNCTION has_order_permission(order_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = order_id
+    AND (orders.user_id = auth.uid() OR is_admin())
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER; 
