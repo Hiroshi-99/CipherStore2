@@ -34,11 +34,10 @@ export const handler: Handler = async (event) => {
       return { statusCode: 405, body: "Method Not Allowed" };
     }
 
-    const { channelId, content, username, avatar_url, orderId } = JSON.parse(
-      event.body || "{}"
-    );
+    const { channelId, threadId, content, username, avatar_url, orderId } =
+      JSON.parse(event.body || "{}");
 
-    if (!channelId || !content) {
+    if (!channelId || !threadId || !content) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: "Missing required fields" }),
@@ -50,12 +49,13 @@ export const handler: Handler = async (event) => {
       .from("discord_channels")
       .select("webhook_url")
       .eq("channel_id", channelId)
+      .eq("thread_id", threadId)
       .single();
 
     if (dbError || !channelData?.webhook_url) {
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: "Channel not found" }),
+        body: JSON.stringify({ error: "Thread not found" }),
       };
     }
 
@@ -64,6 +64,7 @@ export const handler: Handler = async (event) => {
       content,
       username,
       avatarURL: avatar_url,
+      threadId: threadId,
     });
 
     // Update Supabase with the new message

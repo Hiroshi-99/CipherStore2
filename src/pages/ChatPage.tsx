@@ -49,6 +49,7 @@ function ChatPage() {
     null
   );
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [threadId, setThreadId] = useState<string | null>(null);
 
   useEffect(() => {
     // Check authentication and get order
@@ -67,6 +68,7 @@ function ChatPage() {
           *,
           discord_channels (
             channel_id,
+            thread_id,
             webhook_url
           )
         `
@@ -85,8 +87,12 @@ function ChatPage() {
           setOrder(orderData);
           if (orderData.discord_channels?.channel_id) {
             setDiscordChannel(orderData.discord_channels.channel_id);
-            // Fetch initial messages from Discord channel
-            fetchDiscordMessages(orderData.discord_channels.channel_id);
+            setThreadId(orderData.discord_channels.thread_id);
+            // Fetch initial messages from Discord thread
+            fetchDiscordMessages(
+              orderData.discord_channels.channel_id,
+              orderData.discord_channels.thread_id
+            );
           } else {
             // Create new Discord channel for this order
             createDiscordChannel(orderData.id, session.user);
@@ -131,7 +137,10 @@ function ChatPage() {
     // Load existing messages when order is set
     if (order) {
       console.log("Fetching messages for order:", order.id);
-      fetchDiscordMessages(order.discord_channels?.channel_id || "");
+      fetchDiscordMessages(
+        order.discord_channels?.channel_id || "",
+        order.discord_channels?.thread_id || ""
+      );
     }
   }, [order]);
 
@@ -202,15 +211,18 @@ function ChatPage() {
 
   const fetchDiscordMessages = async (
     channelId: string,
+    threadId: string,
     limit = 50,
     before?: string
   ) => {
     try {
       setIsLoadingMessages(true);
       const headers = await getAuthHeaders();
-      console.log("Fetching Discord messages for channel:", channelId);
+      console.log("Fetching Discord messages for thread:", threadId);
       const response = await fetch(
-        `${API_ENDPOINTS.getMessages}/${channelId}?limit=${limit}${
+        `${
+          API_ENDPOINTS.getMessages
+        }/${channelId}/threads/${threadId}?limit=${limit}${
           before ? `&before=${before}` : ""
         }`,
         {
@@ -231,7 +243,7 @@ function ChatPage() {
       console.log("Fetched Discord messages:", messages);
 
       if (messages.length === 0) {
-        console.log("No messages found for this channel.");
+        console.log("No messages found for this thread.");
         setMessages([]);
         return;
       }
@@ -250,7 +262,12 @@ function ChatPage() {
       }));
 
       console.log("Formatted messages:", formattedMessages);
-      setMessages((current) => [...formattedMessages, ...current]);
+      setMessages((current) => {
+        const newMessages = formattedMessages.filter(
+          (msg) => !current.some((existingMsg) => existingMsg.id === msg.id)
+        );
+        return [...newMessages, ...current];
+      });
       scrollToBottom();
     } catch (error) {
       console.error("Error fetching Discord messages:", error);
@@ -262,7 +279,8 @@ function ChatPage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !user || !order || !discordChannel) return;
+    if (!newMessage.trim() || !user || !order || !discordChannel || !threadId)
+      return;
 
     try {
       const headers = await getAuthHeaders();
@@ -272,6 +290,7 @@ function ChatPage() {
         headers,
         body: JSON.stringify({
           channelId: discordChannel,
+          threadId: threadId,
           content: newMessage.trim(),
           username: user.user_metadata.full_name,
           avatar_url: user.user_metadata.avatar_url,

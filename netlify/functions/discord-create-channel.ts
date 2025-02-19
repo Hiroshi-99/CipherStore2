@@ -1,5 +1,10 @@
 import { Handler } from "@netlify/functions";
-import { Client, GatewayIntentBits, ChannelType } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  ChannelType,
+  ThreadAutoArchiveDuration,
+} from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -54,6 +59,7 @@ export const handler: Handler = async (event) => {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions,
       ],
     });
 
@@ -72,19 +78,27 @@ export const handler: Handler = async (event) => {
         topic: `Support channel for ${customerName} - Order ID: ${orderId}`,
       });
 
+      // Create a thread for the order
+      const thread = await channel.threads.create({
+        name: `Order-${orderId.slice(0, 8)}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: `Thread for order ${orderId}`,
+      });
+
       // Create webhook for the channel
       const webhook = await channel.createWebhook({
         name: "Chat Relay",
         reason: "Relay messages between web app and Discord",
       });
 
-      // Store channel info in database
+      // Store channel and thread info in database
       const { error: dbError } = await supabase
         .from("discord_channels")
         .insert([
           {
             order_id: orderId,
             channel_id: channel.id,
+            thread_id: thread.id,
             webhook_url: webhook.url,
           },
         ]);
@@ -94,14 +108,15 @@ export const handler: Handler = async (event) => {
       }
 
       // Send initial message
-      await channel.send(
-        `New support channel created for ${customerName}\nOrder ID: ${orderId}`
+      await thread.send(
+        `New support thread created for ${customerName}\nOrder ID: ${orderId}`
       );
 
       return {
         statusCode: 200,
         body: JSON.stringify({
           channelId: channel.id,
+          threadId: thread.id,
           webhookUrl: webhook.url,
         }),
       };
