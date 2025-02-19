@@ -29,10 +29,13 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const { orderId, customerName } = JSON.parse(event.body || "{}");
+    console.log("Raw event body:", event.body);
+    const parsedBody = JSON.parse(event.body || "{}");
+    console.log("Parsed event body:", parsedBody);
 
-    // Log parsed data
-    console.log("Parsed request data:", { orderId, customerName });
+    const { orderId, customerName } = parsedBody;
+
+    console.log("Extracted fields:", { orderId, customerName });
 
     if (!orderId || !customerName) {
       console.log("Missing fields:", { orderId, customerName });
