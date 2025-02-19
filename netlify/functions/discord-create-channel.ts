@@ -116,6 +116,24 @@ export const handler: Handler = async (event) => {
     });
     console.log("Webhook created");
 
+    // After creating the Discord channel and webhook, store in Supabase
+    const { error: dbError } = await supabase
+      .from("discord_channels")
+      .insert([
+        {
+          order_id: orderId,
+          channel_id: channel.id,
+          webhook_url: webhook.url,
+          user_id: JSON.parse(event.body || "{}").userId, // Make sure userId is passed from frontend
+        },
+      ])
+      .single();
+
+    if (dbError) {
+      console.error("Database error:", dbError);
+      throw new Error(`Database error: ${dbError.message}`);
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
