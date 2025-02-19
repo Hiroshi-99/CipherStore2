@@ -96,31 +96,87 @@ export const handler: Handler = async (event) => {
       );
     }
 
-    // Create a thread for the order
-    const thread = await channel.threads.create({
-      name: `Order-${orderId.slice(0, 8)}`,
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-      reason: `Thread for order ${orderId}`,
-    });
+    // Check if a thread for this order already exists
+    const existingThread = channel.threads.cache.find(
+      (thread) => thread.name === `Order-${orderId.slice(0, 8)}`
+    );
 
-    // Create webhook for the channel
-    const webhook = await channel.createWebhook({
-      name: "Chat Relay",
-      reason: "Relay messages between web app and Discord",
-    });
+    let thread;
+    if (existingThread) {
+      thread = existingThread;
+      console.log("Using existing thread:", thread.id);
+    } else {
+      // Create a new thread for the order
+      thread = await channel.threads.create({
+        name: `Order-${orderId.slice(0, 8)}`,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: `Thread for order ${orderId}`,
+      });
+      console.log("Created new thread:", thread.id);
+    }
 
-    // Store channel and thread info in database
-    const { error: dbError } = await supabase.from("discord_channels").insert([
-      {
-        order_id: orderId,
-        channel_id: channel.id,
-        thread_id: thread.id,
-        webhook_url: webhook.url,
-      },
-    ]);
+    // Check if a webhook for the channel already exists
+    let webhook;
+    const existingWebhooks = await channel.fetchWebhooks();
+    const existingWebhook = existingWebhooks.find(
+      (hook) => hook.name === "Chat Relay"
+    );
 
-    if (dbError) {
-      throw new Error(`Database error: ${dbError.message}`);
+    if (existingWebhook) {
+      webhook = existingWebhook;
+      console.log("Using existing webhook:", webhook.url);
+    } else {
+      // Create webhook for the channel
+      webhook = await channel.createWebhook({
+        name: "Chat Relay",
+        reason: "Relay messages between web app and Discord",
+      });
+      console.log("Created new webhook:", webhook.url);
+    }
+
+    // Check if the channel and thread already exist in the database
+    const { data: existingChannel, error: existingChannelError } =
+      await supabase
+        .from("discord_channels")
+        .select("*")
+        .eq("order_id", orderId)
+        .single();
+
+    if (existingChannelError) {
+      throw new Error(`Database error: ${existingChannelError.message}`);
+    }
+
+    if (existingChannel) {
+      // Update existing record
+      const { error: updateError } = await supabase
+        .from("discord_channels")
+        .update({
+          thread_id: thread.id,
+          webhook_url: webhook.url,
+        })
+        .eq("order_id", orderId);
+
+      if (updateError) {
+        throw new Error(`Database error: ${updateError.message}`);
+      }
+      console.log("Updated existing channel record:", existingChannel.id);
+    } else {
+      // Insert new record
+      const { error: dbError } = await supabase
+        .from("discord_channels")
+        .insert([
+          {
+            order_id: orderId,
+            channel_id: channel.id,
+            thread_id: thread.id,
+            webhook_url: webhook.url,
+          },
+        ]);
+
+      if (dbError) {
+        throw new Error(`Database error: ${dbError.message}`);
+      }
+      console.log("Inserted new channel record");
     }
 
     // Send initial message
