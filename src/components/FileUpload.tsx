@@ -30,13 +30,13 @@ function FileUpload({ orderId, onUploadSuccess }: FileUploadProps) {
     try {
       const fileName = `${orderId}-account-file.${file.name.split(".").pop()}`;
       const bucketName = import.meta.env.VITE_SUPABASE_ACCOUNT_FILES_BUCKET;
-      const filePath = `${bucketName}/${orderId}/${fileName}`;
+      const filePath = `${orderId}/${fileName}`;
 
       const { data, error: uploadError } = await supabase.storage
         .from(bucketName)
         .upload(filePath, file, {
           cacheControl: "3600",
-          upsert: false,
+          upsert: true,
         });
 
       if (uploadError) {

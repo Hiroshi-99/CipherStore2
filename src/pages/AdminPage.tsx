@@ -262,7 +262,7 @@ function AdminPage() {
     if (selectedOrderId) {
       try {
         const headers = await getAuthHeaders();
-        const response = await fetch("/api/admin-upload-file", {
+        const response = await fetch("/.netlify/functions/admin-upload-file", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
