@@ -71,6 +71,8 @@ function ChatPage() {
         .limit(1)
         .single()
         .then(({ data: orderData, error }) => {
+          console.log("Order data:", orderData);
+          console.log("Order error:", error);
           if (error || !orderData) {
             navigate("/");
             return;
@@ -115,12 +117,15 @@ function ChatPage() {
   useEffect(() => {
     // Load existing messages when order is set
     if (order) {
+      console.log("Fetching messages for order:", order.id);
       supabase
         .from("messages")
         .select("*")
         .eq("order_id", order.id)
         .order("created_at", { ascending: true })
-        .then(({ data }) => {
+        .then(({ data, error }) => {
+          console.log("Fetched messages:", data);
+          console.log("Fetch error:", error);
           if (data) {
             setMessages(data);
             scrollToBottom();
@@ -245,6 +250,7 @@ function ChatPage() {
           content: newMessage.trim(),
           username: user.user_metadata.full_name,
           avatar_url: user.user_metadata.avatar_url,
+          orderId: order.id,
         }),
       });
 
