@@ -3,7 +3,6 @@ import { ArrowLeft, Bell, User, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
-import Button from "./Button";
 
 interface HeaderProps {
   title: string;
@@ -38,9 +37,13 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
     <header className="p-6 flex justify-between items-center bg-black/30">
       <div className="flex items-center gap-4">
         {showBack && (
-          <Button to="/" className="text-white hover:text-emerald-400">
-            ← Back
-          </Button>
+          <button
+            onClick={() => navigate("/")}
+            className="text-white flex items-center gap-2 hover:text-emerald-400 transition-colors"
+          >
+            <ArrowLeft size={24} />
+            Back to Store
+          </button>
         )}
         <h1 className="text-4xl font-bold text-emerald-400">{title}</h1>
       </div>
