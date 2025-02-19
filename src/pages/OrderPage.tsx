@@ -416,7 +416,7 @@ function OrderPage() {
                   <p className="font-medium mb-2">Payment Steps:</p>
                   <ol className="list-decimal ml-4 space-y-1">
                     <li>Scan the QR code above or click to view full size</li>
-                    <li>Send exactly $15.00 to the displayed address</li>
+                    <li>Send exactly $10.00 to the displayed address</li>
                     <li>Take a screenshot of your payment confirmation</li>
                     <li>Upload the screenshot below as proof of payment</li>
                   </ol>
