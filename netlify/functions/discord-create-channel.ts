@@ -117,33 +117,20 @@ export const handler: Handler = async (event) => {
       embed.setImage(paymentProofUrl);
     }
 
-    // Create thread for the order
+    // Create the thread
     const thread = await channel.threads.create({
-      name: `Order-${orderId.slice(0, 8)}`,
+      name: `Order #${orderId} - ${customerName}`,
       autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-      reason: `Thread for order ${orderId}`,
+      reason: `Order thread for ${customerName}`,
     });
 
-    // Send initial message with embed
-    await thread.send({ embeds: [embed] });
+    // Create webhook for the thread
+    const webhook = await thread.createWebhook({
+      name: "Order Bot",
+      avatar: "https://i.imgur.com/AfFp7pu.png", // Add your bot's avatar URL
+    });
 
-    // Create webhook for the channel if it doesn't exist
-    let webhook;
-    const existingWebhooks = await channel.fetchWebhooks();
-    const existingWebhook = existingWebhooks.find(
-      (hook) => hook.name === "Chat Relay"
-    );
-
-    if (existingWebhook) {
-      webhook = existingWebhook;
-    } else {
-      webhook = await channel.createWebhook({
-        name: "Chat Relay",
-        reason: "Relay messages between web app and Discord",
-      });
-    }
-
-    // Store channel and thread info in database
+    // Store channel and webhook info in database
     const { error: dbError } = await supabase.from("discord_channels").insert([
       {
         order_id: orderId,
@@ -154,6 +141,7 @@ export const handler: Handler = async (event) => {
     ]);
 
     if (dbError) {
+      console.error("Error storing Discord channel info:", dbError);
       throw new Error(`Database error: ${dbError.message}`);
     }
 

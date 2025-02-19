@@ -1,5 +1,9 @@
--- Enable UUID extension
+-- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+------------------------------------------
+-- Core Tables
+------------------------------------------
 
 -- Orders table
 CREATE TABLE orders (
@@ -12,18 +16,30 @@ CREATE TABLE orders (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Discord channels table
+-- Payment proofs table
+CREATE TABLE payment_proofs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id),
+    image_url TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, approved, rejected
+    admin_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Discord integration tables
 CREATE TABLE discord_channels (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id),
     channel_id VARCHAR(255) NOT NULL,
+    thread_id VARCHAR(255),
     webhook_url TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(order_id),
-    UNIQUE(channel_id)
+    UNIQUE(channel_id),
+    UNIQUE(thread_id)
 );
 
--- Messages table
 CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id),
@@ -36,45 +52,7 @@ CREATE TABLE messages (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Add indexes for better query performance
-CREATE INDEX idx_orders_user_id ON orders(user_id);
-CREATE INDEX idx_messages_order_id ON messages(order_id);
-CREATE INDEX idx_messages_created_at ON messages(created_at);
-CREATE INDEX idx_discord_channels_order_id ON discord_channels(order_id);
-CREATE INDEX idx_discord_channels_channel_id ON discord_channels(channel_id);
-
--- Add trigger to update updated_at
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-CREATE TRIGGER update_orders_updated_at
-    BEFORE UPDATE ON orders
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
--- Remove the unique constraint from channel_id
-ALTER TABLE discord_channels DROP CONSTRAINT IF EXISTS discord_channels_channel_id_key;
-
--- Add a composite index for better query performance
-CREATE INDEX IF NOT EXISTS idx_discord_channels_order_channel ON discord_channels(order_id, channel_id);
-
--- Add payment_proofs table
-CREATE TABLE payment_proofs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    order_id UUID NOT NULL REFERENCES orders(id),
-    image_url TEXT NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, approved, rejected
-    admin_notes TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Add inbox_messages table
+-- Inbox messages table
 CREATE TABLE inbox_messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL,
@@ -85,24 +63,72 @@ CREATE TABLE inbox_messages (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Add indexes
+-- Admin users table
+CREATE TABLE admin_users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+------------------------------------------
+-- Indexes
+------------------------------------------
+
+-- Orders indexes
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+
+-- Payment proofs indexes
 CREATE INDEX idx_payment_proofs_order_id ON payment_proofs(order_id);
 CREATE INDEX idx_payment_proofs_status ON payment_proofs(status);
+
+-- Discord channels indexes
+CREATE INDEX idx_discord_channels_order_channel 
+ON discord_channels(order_id, channel_id, thread_id);
+
+-- Messages indexes
+CREATE INDEX idx_messages_order_id ON messages(order_id);
+CREATE INDEX idx_messages_created_at ON messages(created_at);
+
+-- Inbox messages indexes
 CREATE INDEX idx_inbox_messages_user_id ON inbox_messages(user_id);
 CREATE INDEX idx_inbox_messages_is_read ON inbox_messages(is_read);
 
--- Add trigger for payment_proofs updated_at
+-- Admin users indexes
+CREATE INDEX idx_admin_users_user_id ON admin_users(user_id);
+
+------------------------------------------
+-- Triggers
+------------------------------------------
+
+-- Updated at trigger function
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Add triggers to tables
+CREATE TRIGGER update_orders_updated_at
+    BEFORE UPDATE ON orders
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
 CREATE TRIGGER update_payment_proofs_updated_at
     BEFORE UPDATE ON payment_proofs
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Create storage bucket for payment proofs if it doesn't exist
+------------------------------------------
+-- Storage Configuration
+------------------------------------------
+
+-- Create storage bucket for payment proofs
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1
-        FROM storage.buckets
+        SELECT 1 FROM storage.buckets
         WHERE id = 'payment-proofs'
     ) THEN
         INSERT INTO storage.buckets (id, name, public)
@@ -110,12 +136,11 @@ BEGIN
     END IF;
 END $$;
 
--- Drop existing policies if they exist
+-- Storage policies
 DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
 DROP POLICY IF EXISTS "Allow public reads" ON storage.objects;
 DROP POLICY IF EXISTS "Give users access to own folder" ON storage.objects;
 
--- Create new policies
 CREATE POLICY "Allow authenticated uploads"
 ON storage.objects FOR INSERT
 TO authenticated
@@ -144,7 +169,84 @@ WITH CHECK (
 -- Enable RLS on storage.objects
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 
--- Grant necessary permissions
+------------------------------------------
+-- Admin Access Control
+------------------------------------------
+
+-- Enable RLS on tables that need policies
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_proofs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
+
+-- Owner check function
+CREATE OR REPLACE FUNCTION is_owner()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN (
+    auth.jwt() ->> 'sub' = current_setting('app.owner_id', TRUE)
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Admin access policies
+CREATE POLICY "Allow owner and admins to view all orders"
+ON orders FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+CREATE POLICY "Allow owner and admins to update orders"
+ON orders FOR UPDATE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+-- Payment proofs policies
+CREATE POLICY "Allow owner and admins to view all payment proofs"
+ON payment_proofs FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+CREATE POLICY "Allow owner and admins to update payment proofs"
+ON payment_proofs FOR UPDATE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+-- Admin management policies
+CREATE POLICY "Only owner can manage admins"
+ON admin_users
+FOR ALL
+TO authenticated
+USING (is_owner())
+WITH CHECK (is_owner());
+
+------------------------------------------
+-- Permissions
+------------------------------------------
+
+-- Storage permissions
 GRANT ALL ON storage.objects TO authenticated;
 GRANT SELECT ON storage.objects TO public;
 GRANT ALL ON storage.buckets TO authenticated;
