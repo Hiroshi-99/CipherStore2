@@ -4,6 +4,7 @@ import { ArrowLeft, Send, Upload } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import { getAuthHeaders } from "../lib/auth";
+import Header from "../components/Header";
 
 interface DiscordProfile {
   username?: string;
@@ -179,11 +180,17 @@ function OrderPage() {
         // Continue with navigation even if Discord channel creation fails
       }
 
-      // Navigate to inbox page
-      navigate("/inbox");
+      // Show success message with a modal or toast
+      const confirmed = window.confirm(
+        "Order submitted successfully! Check your inbox for updates. Click OK to return to the store."
+      );
 
-      // Show success message
-      alert("Order submitted successfully! Check your inbox for updates.");
+      // Navigate back to store
+      if (confirmed) {
+        navigate("/");
+      } else {
+        navigate("/inbox");
+      }
     } catch (error) {
       console.error("Error submitting order:", error);
       alert(
@@ -226,17 +233,7 @@ function OrderPage() {
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        {/* Header */}
-        <header className="p-6 flex justify-between items-center">
-          <button
-            onClick={handleBackToStore}
-            className="text-white flex items-center gap-2 hover:text-emerald-400 transition-colors"
-          >
-            <ArrowLeft size={24} />
-            Back to Store
-          </button>
-          <h1 className="text-4xl font-bold text-emerald-400">CHECKOUT</h1>
-        </header>
+        <Header title="CHECKOUT" showBack user={user} />
 
         {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Bell, CheckCircle, XCircle } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
+import Header from "../components/Header";
 
 interface InboxMessage {
   id: string;
@@ -98,16 +99,7 @@ function InboxPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <header className="p-6 flex justify-between items-center bg-black/30">
-        <button
-          onClick={() => navigate("/")}
-          className="text-white flex items-center gap-2 hover:text-emerald-400 transition-colors"
-        >
-          <ArrowLeft size={24} />
-          Back to Store
-        </button>
-        <h1 className="text-4xl font-bold text-emerald-400">INBOX</h1>
-      </header>
+      <Header title="INBOX" showBack user={setUser} />
 
       <main className="max-w-3xl mx-auto px-4 py-8">
         {messages.length === 0 ? (

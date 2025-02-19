@@ -3,6 +3,7 @@ import { ShoppingCart, Check, LogOut, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
+import Header from "../components/Header";
 
 interface DiscordProfile {
   username?: string;
@@ -98,48 +99,7 @@ function StorePage() {
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        {/* Header with Profile */}
-        <header className="p-6 flex justify-between items-center">
-          <h1 className="text-4xl font-bold text-emerald-400">STORE</h1>
-          <div className="flex items-center gap-4">
-            {user ? (
-              <>
-                <div className="flex items-center gap-3">
-                  {getDiscordProfile().avatar_url ? (
-                    <img
-                      src={getDiscordProfile().avatar_url}
-                      alt="Profile"
-                      className="w-8 h-8 rounded-full border-2 border-emerald-400"
-                    />
-                  ) : (
-                    <User className="w-8 h-8 text-emerald-400" />
-                  )}
-                  <span className="text-white">
-                    {getDiscordProfile().username || "User"}
-                  </span>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="text-white hover:text-emerald-400 transition-colors"
-                >
-                  <LogOut size={24} />
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={handleDiscordLogin}
-                className="flex items-center gap-2 bg-[#5865F2] text-white px-4 py-2 rounded-md hover:bg-[#4752C4] transition-colors"
-              >
-                <img
-                  src="https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0a6a49cf127bf92de1e2_icon_clyde_white_RGB.png"
-                  alt="Discord"
-                  className="w-6 h-6"
-                />
-                Login with Discord
-              </button>
-            )}
-          </div>
-        </header>
+        <Header title="STORE" user={user} onLogout={handleLogout} />
 
         {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">
