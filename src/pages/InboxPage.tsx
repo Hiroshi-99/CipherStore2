@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Bell, FileText, RefreshCw } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Header from "../components/Header";
@@ -19,7 +19,9 @@ function InboxPage() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -58,6 +60,7 @@ function InboxPage() {
 
   const fetchMessages = async (userId: string) => {
     try {
+      setError(null);
       const { data, error } = await supabase
         .from("inbox_messages")
         .select("*")
@@ -68,9 +71,17 @@ function InboxPage() {
       setMessages(data || []);
     } catch (error) {
       console.error("Error fetching messages:", error);
+      setError("Failed to load messages. Please try again.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
+  };
+
+  const handleRefresh = async () => {
+    if (!user || refreshing) return;
+    setRefreshing(true);
+    await fetchMessages(user.id);
   };
 
   const markAsRead = async (messageId: string) => {
@@ -89,6 +100,17 @@ function InboxPage() {
       );
     } catch (error) {
       console.error("Error marking message as read:", error);
+    }
+  };
+
+  const getMessageIcon = (type: string) => {
+    switch (type) {
+      case "payment_status":
+        return <Bell className="w-5 h-5 text-blue-400" />;
+      case "account_file":
+        return <FileText className="w-5 h-5 text-purple-400" />;
+      default:
+        return null;
     }
   };
 
@@ -112,6 +134,8 @@ function InboxPage() {
     );
   }
 
+  const unreadCount = messages.filter((msg) => !msg.is_read).length;
+
   return (
     <div className="min-h-screen bg-gray-900">
       <Header title="INBOX" showBack user={user} />
@@ -119,11 +143,31 @@ function InboxPage() {
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl">
           <div className="flex justify-between items-center mb-8">
-            <h2 className="text-2xl font-bold text-white">Messages</h2>
-            <span className="text-white/50 text-sm">
-              {messages.length} message{messages.length !== 1 ? "s" : ""}
-            </span>
+            <div>
+              <h2 className="text-2xl font-bold text-white">Messages</h2>
+              <p className="text-white/50 text-sm mt-1">
+                {messages.length} total, {unreadCount} unread
+              </p>
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+              title="Refresh messages"
+            >
+              <RefreshCw
+                className={`w-5 h-5 text-white ${
+                  refreshing ? "animate-spin" : ""
+                }`}
+              />
+            </button>
           </div>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded-lg mb-6">
+              {error}
+            </div>
+          )}
 
           {messages.length === 0 ? (
             <div className="text-center py-12">
@@ -145,9 +189,12 @@ function InboxPage() {
                 >
                   <div className="flex justify-between items-start gap-4">
                     <div className="flex-1">
-                      <h3 className="text-lg font-medium text-white mb-2">
-                        {message.title}
-                      </h3>
+                      <div className="flex items-center gap-2 mb-2">
+                        {getMessageIcon(message.type)}
+                        <h3 className="text-lg font-medium text-white">
+                          {message.title}
+                        </h3>
+                      </div>
                       <p className="text-white/80 mb-3">{message.content}</p>
                       {message.file_url && (
                         <div className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition-colors">

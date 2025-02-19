@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowLeft, Bell, User, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
@@ -18,7 +18,47 @@ interface DiscordProfile {
 
 function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
   const navigate = useNavigate();
-  const unreadCount = 0; // TODO: Implement unread count
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (user) {
+      fetchUnreadCount();
+      // Subscribe to changes in inbox_messages
+      const subscription = supabase
+        .channel("inbox_changes")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "inbox_messages",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchUnreadCount();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+  }, [user]);
+
+  const fetchUnreadCount = async () => {
+    if (!user) return;
+
+    const { count, error } = await supabase
+      .from("inbox_messages")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("is_read", false);
+
+    if (!error && count !== null) {
+      setUnreadCount(count);
+    }
+  };
 
   const getDiscordProfile = (): DiscordProfile => {
     return user?.user_metadata || {};

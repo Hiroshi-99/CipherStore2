@@ -54,8 +54,31 @@ function OrderPage() {
       setUser(session.user);
     });
 
-    return () => subscription.unsubscribe();
-  }, [navigate]);
+    if (user) {
+      // Subscribe to order status changes
+      const subscription = supabase
+        .channel("order_updates")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "orders",
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            if (payload.new.status === "active") {
+              navigate("/inbox");
+            }
+          }
+        )
+        .subscribe();
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+  }, [navigate, user]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Prevent changes if the data came from Discord
