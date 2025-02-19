@@ -25,9 +25,8 @@ function InboxPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-
     setPageTitle("Inbox");
+    let mounted = true;
 
     // Check authentication
     supabase.auth.getSession().then(({ data: { session } }) => {

@@ -5,6 +5,7 @@ import { CheckCircle, XCircle, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
 import { getAuthHeaders } from "../lib/auth";
+import { setPageTitle } from "../utils/title";
 
 interface Order {
   id: string;
@@ -38,6 +39,7 @@ function AdminPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    setPageTitle("Admin");
     fetchOrders();
     checkAdminStatus();
   }, []);

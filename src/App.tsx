@@ -1,12 +1,17 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import StorePage from "./pages/StorePage";
 import OrderPage from "./pages/OrderPage";
 import InboxPage from "./pages/InboxPage";
 import AdminPage from "./pages/AdminPage";
 import AdminGuard from "./components/AdminGuard";
+import { setPageTitle } from "./utils/title";
 
 function App() {
+  useEffect(() => {
+    setPageTitle(""); // This will just show "Cipher"
+  }, []);
+
   return (
     <Routes>
       <Route path="/" element={<StorePage />} />

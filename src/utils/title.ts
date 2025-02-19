@@ -1,3 +1,5 @@
 export const setPageTitle = (pageTitle: string) => {
-  document.title = `Cipher - ${pageTitle}`;
+  if (typeof document !== "undefined") {
+    document.title = pageTitle ? `Cipher - ${pageTitle}` : "Cipher";
+  }
 };

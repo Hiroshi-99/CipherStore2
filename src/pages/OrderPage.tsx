@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import { getAuthHeaders } from "../lib/auth";
 import Header from "../components/Header";
+import { setPageTitle } from "../utils/title";
 
 interface DiscordProfile {
   username?: string;
@@ -26,6 +27,7 @@ function OrderPage() {
   const [showQRModal, setShowQRModal] = useState(false);
 
   useEffect(() => {
+    setPageTitle("Order");
     // Check active session and get user data
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session?.user) {
