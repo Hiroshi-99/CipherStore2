@@ -117,10 +117,22 @@ export const handler: Handler = async (event) => {
     // Create webhook
     let webhook;
     try {
-      webhook = await thread.createWebhook({
-        name: "Order Bot",
-        avatar: "https://i.imgur.com/AfFp7pu.png",
-      });
+      // First try to create webhook in the thread
+      try {
+        webhook = await thread.createWebhook({
+          name: "Order Bot",
+          avatar: "https://i.imgur.com/AfFp7pu.png",
+        });
+      } catch (threadWebhookError) {
+        // If thread webhook fails, create in the parent channel
+        console.log(
+          "Failed to create webhook in thread, trying parent channel..."
+        );
+        webhook = await channel.createWebhook({
+          name: "Order Bot",
+          avatar: "https://i.imgur.com/AfFp7pu.png",
+        });
+      }
     } catch (webhookError) {
       console.error("Webhook creation error:", webhookError);
       throw new Error("Failed to create webhook");

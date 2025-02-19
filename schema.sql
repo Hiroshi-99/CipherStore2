@@ -236,12 +236,23 @@ USING (
 );
 
 -- Admin management policies
-CREATE POLICY "Only owner can manage admins"
-ON admin_users
-FOR ALL
+CREATE POLICY "Allow owner to manage admins"
+ON admin_users FOR ALL
 TO authenticated
 USING (is_owner())
 WITH CHECK (is_owner());
+
+-- Allow admins to view admin list
+CREATE POLICY "Allow admins to view admin list"
+ON admin_users FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
 
 -- Discord channels policies
 CREATE POLICY "Allow owner and admins to manage discord channels"
@@ -364,6 +375,33 @@ WITH CHECK (
         WHERE orders.id = order_id
         AND orders.user_id = auth.uid()
     )
+);
+
+-- Enable RLS on inbox_messages
+ALTER TABLE inbox_messages ENABLE ROW LEVEL SECURITY;
+
+-- Allow creation of inbox messages
+CREATE POLICY "Allow creation of inbox messages"
+ON inbox_messages FOR INSERT
+TO authenticated
+WITH CHECK (true);
+
+-- Allow users to view their own messages
+CREATE POLICY "Allow users to view their own messages"
+ON inbox_messages FOR SELECT
+TO authenticated
+USING (user_id = auth.uid());
+
+-- Allow admins to manage all messages
+CREATE POLICY "Allow admins to manage all messages"
+ON inbox_messages FOR ALL
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
 );
 
 ------------------------------------------

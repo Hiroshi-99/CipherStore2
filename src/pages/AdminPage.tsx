@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import { CheckCircle, XCircle, Eye } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
 
 interface Order {
   id: string;
@@ -28,6 +29,7 @@ function AdminPage() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [isOwner, setIsOwner] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     fetchOrders();
@@ -35,6 +37,9 @@ function AdminPage() {
     if (isOwner) {
       fetchAdmins();
     }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user || null);
+    });
   }, [isOwner]);
 
   const fetchOrders = async () => {
@@ -103,48 +108,68 @@ function AdminPage() {
     action: "approve" | "reject"
   ) => {
     try {
+      setLoading(true);
+
       // Update order status
       const { error: orderError } = await supabase
         .from("orders")
-        .update({ status: action === "approve" ? "approved" : "rejected" })
+        .update({
+          status: action === "approve" ? "approved" : "rejected",
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", orderId);
 
       if (orderError) throw orderError;
 
-      // Update payment proof status
-      const { error: proofError } = await supabase
-        .from("payment_proofs")
-        .update({ status: action === "approve" ? "approved" : "rejected" })
-        .eq("order_id", orderId);
-
-      if (proofError) throw proofError;
-
-      // Create inbox message for user
-      const { data: order } = await supabase
+      // Get order details for notifications
+      const { data: order, error: orderFetchError } = await supabase
         .from("orders")
-        .select("user_id")
+        .select("user_id, payment_proofs (id)")
         .eq("id", orderId)
         .single();
 
-      if (order) {
-        await supabase.from("inbox_messages").insert([
-          {
-            user_id: order.user_id,
-            title: action === "approve" ? "Order Approved" : "Order Rejected",
-            content:
-              action === "approve"
-                ? "Your payment has been verified and your order has been approved. Your account will be activated shortly."
-                : "Your payment proof has been rejected. Please submit a new payment proof or contact support for assistance.",
-            type: "payment_status",
-          },
-        ]);
+      if (orderFetchError) throw orderFetchError;
+
+      // Update payment proof status
+      if (order?.payment_proofs?.[0]?.id) {
+        const { error: proofError } = await supabase
+          .from("payment_proofs")
+          .update({
+            status: action === "approve" ? "approved" : "rejected",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", order.payment_proofs[0].id);
+
+        if (proofError) throw proofError;
+      }
+
+      // Create inbox message for user
+      if (order?.user_id) {
+        const { error: inboxError } = await supabase
+          .from("inbox_messages")
+          .insert([
+            {
+              user_id: order.user_id,
+              title: action === "approve" ? "Order Approved" : "Order Rejected",
+              content:
+                action === "approve"
+                  ? "Your payment has been verified and your order has been approved."
+                  : "Your payment proof has been rejected. Please submit a new payment proof.",
+              type: "payment_status",
+            },
+          ]);
+
+        if (inboxError) throw inboxError;
       }
 
       // Refresh orders list
-      fetchOrders();
+      await fetchOrders();
+      alert(`Order ${action}ed successfully`);
     } catch (error) {
-      console.error("Error updating order:", error);
-      alert("Error updating order. Please try again.");
+      console.error(`Error ${action}ing order:`, error);
+      alert(`Error ${action}ing order. Please try again.`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -158,7 +183,7 @@ function AdminPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Header title="ADMIN" showBack user={null} />
+      <Header title="ADMIN" showBack user={user} />
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         <div className="space-y-6">

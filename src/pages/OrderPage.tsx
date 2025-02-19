@@ -277,24 +277,11 @@ function OrderPage() {
   }
 
   return (
-    <div className="min-h-screen relative">
-      {/* Background Image */}
-      <div
-        className="absolute inset-0 z-0"
-        style={{
-          backgroundImage:
-            'url("https://images.unsplash.com/photo-1623984109622-f9c970ba32fc?q=80&w=2940")',
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          filter: "brightness(0.7)",
-        }}
-      />
+    <div className="min-h-screen bg-gray-900">
+      <Header title="ORDER" showBack user={user} />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        <Header title="CHECKOUT" showBack user={user} />
-
-        {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">
           <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-md">
             <div className="text-white mb-8">

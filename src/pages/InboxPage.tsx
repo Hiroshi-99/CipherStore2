@@ -16,7 +16,7 @@ interface InboxMessage {
 
 function InboxPage() {
   const navigate = useNavigate();
-  const [, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
 
@@ -99,7 +99,7 @@ function InboxPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Header title="INBOX" showBack user={setUser} />
+      <Header title="INBOX" showBack user={user} />
 
       <main className="max-w-3xl mx-auto px-4 py-8">
         {messages.length === 0 ? (

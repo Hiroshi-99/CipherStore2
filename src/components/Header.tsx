@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowLeft, Bell, User, LogOut } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
+import { isAdmin } from "../lib/auth";
 
 interface HeaderProps {
   title: string;
@@ -18,6 +19,19 @@ interface DiscordProfile {
 
 function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
   const navigate = useNavigate();
+  const [isAdminUser, setIsAdminUser] = useState(false);
+
+  useEffect(() => {
+    checkAdminStatus();
+  }, [user]);
+
+  const checkAdminStatus = async () => {
+    if (user) {
+      const adminStatus = await isAdmin(user.id);
+      setIsAdminUser(adminStatus);
+    }
+  };
+
   const unreadCount = 0; // TODO: Implement unread count
 
   const getDiscordProfile = (): DiscordProfile => {
@@ -37,13 +51,12 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
     <header className="p-6 flex justify-between items-center bg-black/30">
       <div className="flex items-center gap-4">
         {showBack && (
-          <button
-            onClick={() => navigate("/")}
-            className="text-white flex items-center gap-2 hover:text-emerald-400 transition-colors"
+          <Link
+            to="/"
+            className="text-white/70 hover:text-white transition-colors"
           >
             <ArrowLeft size={24} />
-            Back to Store
-          </button>
+          </Link>
         )}
         <h1 className="text-4xl font-bold text-emerald-400">{title}</h1>
       </div>
@@ -51,8 +64,8 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
       <div className="flex items-center gap-4">
         {user && (
           <>
-            <button
-              onClick={() => navigate("/inbox")}
+            <Link
+              to="/inbox"
               className="relative text-white hover:text-emerald-400 transition-colors"
             >
               <Bell size={24} />
@@ -61,7 +74,7 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
                   {unreadCount}
                 </span>
               )}
-            </button>
+            </Link>
             <div className="flex items-center gap-3">
               {getDiscordProfile().avatar_url ? (
                 <img
@@ -85,6 +98,17 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
           </>
         )}
       </div>
+
+      <nav className="flex items-center gap-4">
+        {isAdminUser && (
+          <Link
+            to="/admin"
+            className="text-white/70 hover:text-white transition-colors"
+          >
+            Admin
+          </Link>
+        )}
+      </nav>
     </header>
   );
 }

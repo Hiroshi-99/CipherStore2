@@ -84,7 +84,8 @@ function StorePage() {
   }
 
   return (
-    <div className="min-h-screen relative">
+    <div className="min-h-screen bg-gray-900">
+      <Header title="STORE" user={user} />
       {/* Background Image */}
       <div
         className="absolute inset-0 z-0"
