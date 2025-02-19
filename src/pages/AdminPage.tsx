@@ -197,9 +197,11 @@ function AdminPage() {
           .single();
 
         if (channel?.webhook_url) {
-          await fetch(channel.webhook_url, {
+          const response = await fetch(channel.webhook_url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({
               content: `Order ${orderId} has been ${action}ed`,
               embeds: [
@@ -214,6 +216,11 @@ function AdminPage() {
               ],
             }),
           });
+
+          if (!response.ok) {
+            console.error("Discord webhook error:", await response.text());
+            throw new Error(`Discord webhook returned ${response.status}`);
+          }
         }
       } catch (webhookError) {
         console.error("Failed to send Discord notification:", webhookError);

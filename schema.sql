@@ -348,7 +348,9 @@ WITH CHECK (
     )
 );
 
--- Add this to the Admin Access Control section
+-- Remove the duplicate policy section
+DROP POLICY IF EXISTS "Allow users to view their own auth data" ON auth.users;
+
 CREATE POLICY "Allow users to view their own auth data"
 ON auth.users
 FOR SELECT
@@ -365,7 +367,7 @@ GRANT SELECT ON storage.objects TO public;
 GRANT ALL ON storage.buckets TO authenticated;
 GRANT SELECT ON storage.buckets TO public;
 
--- Add this to the Permissions section
+-- Auth permissions
 GRANT USAGE ON SCHEMA auth TO authenticated;
 GRANT SELECT ON auth.users TO authenticated;
 
