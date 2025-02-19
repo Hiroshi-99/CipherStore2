@@ -109,7 +109,7 @@ function StorePage() {
             </h2>
 
             <div className="text-5xl font-bold text-emerald-400 text-center mb-8">
-              $15.00
+              $10.00
             </div>
 
             {/* Features List */}

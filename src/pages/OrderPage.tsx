@@ -341,7 +341,7 @@ function OrderPage() {
               <h2 className="text-2xl font-bold mb-2">Order Summary</h2>
               <div className="flex justify-between items-center py-4 border-t border-white/20">
                 <span>Elite Account</span>
-                <span className="text-emerald-400 font-bold">$15.00</span>
+                <span className="text-emerald-400 font-bold">$10.00</span>
               </div>
             </div>
 
