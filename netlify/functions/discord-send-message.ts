@@ -34,7 +34,7 @@ export const handler: Handler = async (event) => {
       return { statusCode: 405, body: "Method Not Allowed" };
     }
 
-    const { channelId, content, username, avatar_url } = JSON.parse(
+    const { channelId, content, username, avatar_url, orderId } = JSON.parse(
       event.body || "{}"
     );
 
@@ -66,6 +66,22 @@ export const handler: Handler = async (event) => {
       avatarURL: avatar_url,
     });
 
+    // Update Supabase with the new message
+    const { error: dbErrorInsert } = await supabase.from("messages").insert([
+      {
+        order_id: orderId,
+        user_id: user.id,
+        content: content,
+        user_name: username,
+        user_avatar: avatar_url,
+        discord_message_id: message.id,
+      },
+    ]);
+
+    if (dbErrorInsert) {
+      throw new Error(`Database error: ${dbErrorInsert.message}`);
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -74,11 +90,11 @@ export const handler: Handler = async (event) => {
       }),
     };
   } catch (error) {
-    console.error("Error sending Discord message:", error);
+    console.error("Error sending message:", error);
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error: "Failed to send Discord message",
+        error: "Failed to send message",
         details: error instanceof Error ? error.message : "Unknown error",
       }),
     };

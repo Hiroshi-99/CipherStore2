@@ -99,6 +99,7 @@ function ChatPage() {
           table: "messages",
         },
         (payload) => {
+          console.log("Received new message:", payload.new);
           const newMessage = payload.new as Message;
           setMessages((current) => [...current, newMessage]);
           scrollToBottom();
