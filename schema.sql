@@ -61,4 +61,38 @@ CREATE TRIGGER update_orders_updated_at
 ALTER TABLE discord_channels DROP CONSTRAINT IF EXISTS discord_channels_channel_id_key;
 
 -- Add a composite index for better query performance
-CREATE INDEX IF NOT EXISTS idx_discord_channels_order_channel ON discord_channels(order_id, channel_id); 
+CREATE INDEX IF NOT EXISTS idx_discord_channels_order_channel ON discord_channels(order_id, channel_id);
+
+-- Add payment_proofs table
+CREATE TABLE payment_proofs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id),
+    image_url TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, approved, rejected
+    admin_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add inbox_messages table
+CREATE TABLE inbox_messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    type VARCHAR(50) NOT NULL, -- payment_status, system, etc.
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add indexes
+CREATE INDEX idx_payment_proofs_order_id ON payment_proofs(order_id);
+CREATE INDEX idx_payment_proofs_status ON payment_proofs(status);
+CREATE INDEX idx_inbox_messages_user_id ON inbox_messages(user_id);
+CREATE INDEX idx_inbox_messages_is_read ON inbox_messages(is_read);
+
+-- Add trigger for payment_proofs updated_at
+CREATE TRIGGER update_payment_proofs_updated_at
+    BEFORE UPDATE ON payment_proofs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column(); 

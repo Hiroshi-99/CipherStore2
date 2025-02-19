@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Send } from "lucide-react";
+import { ArrowLeft, Send, Upload } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 
@@ -19,6 +19,8 @@ function OrderPage() {
     email: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [paymentProof, setPaymentProof] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     // Check active session and get user data
@@ -68,6 +70,34 @@ function OrderPage() {
     }));
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setPaymentProof(e.target.files[0]);
+    }
+  };
+
+  const uploadPaymentProof = async (orderId: string) => {
+    if (!paymentProof) return null;
+
+    const fileExt = paymentProof.name.split(".").pop();
+    const fileName = `${orderId}-proof.${fileExt}`;
+    const filePath = `payment-proofs/${fileName}`;
+
+    // Upload to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from("payment-proofs")
+      .upload(filePath, paymentProof);
+
+    if (uploadError) throw uploadError;
+
+    // Get public URL
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("payment-proofs").getPublicUrl(filePath);
+
+    return publicUrl;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || isSubmitting) return;
@@ -99,43 +129,30 @@ function OrderPage() {
         throw new Error(orderError?.message || "Failed to create order");
       }
 
-      // Ensure customerName is set
-      const customerName = formData.name.trim() || "Anonymous Customer";
+      // Upload payment proof if exists
+      let proofUrl = null;
+      if (paymentProof) {
+        setIsUploading(true);
+        proofUrl = await uploadPaymentProof(order.id);
 
-      // Get auth headers for Discord API call
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+        // Store payment proof record
+        const { error: proofError } = await supabase
+          .from("payment_proofs")
+          .insert([
+            {
+              order_id: order.id,
+              image_url: proofUrl,
+            },
+          ]);
 
-      // Create Discord channel
-      const response = await fetch("/api/discord-create-channel", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({
-          orderId: order.id,
-          customerName: customerName,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          `Failed to create Discord channel: ${
-            errorData.details || errorData.error || "Unknown error"
-          }`
-        );
+        if (proofError) throw proofError;
       }
 
-      const channelData = await response.json();
-
-      // Navigate to chat page
-      navigate(`/chat?orderId=${order.id}`);
+      // Navigate to inbox page instead of chat
+      navigate("/inbox");
 
       // Show success message
-      alert("Order submitted successfully! Redirecting to support chat...");
+      alert("Order submitted successfully! Check your inbox for updates.");
     } catch (error) {
       console.error("Error submitting order:", error);
       alert(
@@ -145,6 +162,7 @@ function OrderPage() {
       );
     } finally {
       setIsSubmitting(false);
+      setIsUploading(false);
     }
   };
 
@@ -247,6 +265,37 @@ function OrderPage() {
                 />
               </div>
 
+              <div>
+                <label
+                  htmlFor="payment-proof"
+                  className="block text-sm font-medium text-white mb-2"
+                >
+                  Payment Proof
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    id="payment-proof"
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="payment-proof"
+                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-md border border-white/20 cursor-pointer hover:bg-white/10 transition-colors ${
+                      paymentProof ? "bg-emerald-500/20" : "bg-white/10"
+                    }`}
+                  >
+                    <Upload size={20} className="text-white" />
+                    <span className="text-white">
+                      {paymentProof
+                        ? paymentProof.name
+                        : "Upload Payment Proof"}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
               <div className="text-white/70 text-sm">
                 <p>After submitting your order:</p>
                 <ul className="list-disc ml-5 mt-2 space-y-1">
@@ -260,15 +309,19 @@ function OrderPage() {
 
               <button
                 type="submit"
-                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-md flex items-center justify-center gap-2 transition-colors"
-                disabled={isSubmitting}
+                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-md flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={isSubmitting || isUploading}
               >
-                {isSubmitting ? (
+                {isSubmitting || isUploading ? (
                   <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
                 ) : (
                   <Send size={20} />
                 )}
-                {isSubmitting ? "Submitting..." : "Submit Order"}
+                {isSubmitting || isUploading
+                  ? isUploading
+                    ? "Uploading..."
+                    : "Submitting..."
+                  : "Submit Order"}
               </button>
             </form>
           </div>

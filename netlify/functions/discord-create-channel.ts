@@ -4,6 +4,7 @@ import {
   GatewayIntentBits,
   ChannelType,
   ThreadAutoArchiveDuration,
+  EmbedBuilder,
 } from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
@@ -38,9 +39,13 @@ export const handler: Handler = async (event) => {
     const parsedBody = JSON.parse(event.body || "{}");
     console.log("Parsed event body:", parsedBody);
 
-    const { orderId, customerName } = parsedBody;
+    const { orderId, customerName, paymentProofUrl } = parsedBody;
 
-    console.log("Extracted fields:", { orderId, customerName });
+    console.log("Extracted fields:", {
+      orderId,
+      customerName,
+      paymentProofUrl,
+    });
 
     if (!orderId || !customerName) {
       console.log("Missing fields:", { orderId, customerName });
@@ -96,26 +101,32 @@ export const handler: Handler = async (event) => {
       );
     }
 
-    // Check if a thread for this order already exists
-    const existingThread = channel.threads.cache.find(
-      (thread) => thread.name === `Order-${orderId.slice(0, 8)}`
-    );
+    // Create initial message with order details and payment proof
+    const embed = new EmbedBuilder()
+      .setColor(0x00ff00)
+      .setTitle(`New Order - ${customerName}`)
+      .setDescription(`Order ID: ${orderId}`)
+      .addFields(
+        { name: "Customer", value: customerName, inline: true },
+        { name: "Status", value: "Pending Review", inline: true }
+      )
+      .setTimestamp();
 
-    let thread;
-    if (existingThread) {
-      thread = existingThread;
-      console.log("Using existing thread:", thread.id);
-    } else {
-      // Create a new thread for the order
-      thread = await channel.threads.create({
-        name: `Order-${orderId.slice(0, 8)}`,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-        reason: `Thread for order ${orderId}`,
-      });
-      console.log("Created new thread:", thread.id);
+    if (paymentProofUrl) {
+      embed.setImage(paymentProofUrl);
     }
 
-    // Check if a webhook for the channel already exists
+    // Create thread for the order
+    const thread = await channel.threads.create({
+      name: `Order-${orderId.slice(0, 8)}`,
+      autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+      reason: `Thread for order ${orderId}`,
+    });
+
+    // Send initial message with embed
+    await thread.send({ embeds: [embed] });
+
+    // Create webhook for the channel if it doesn't exist
     let webhook;
     const existingWebhooks = await channel.fetchWebhooks();
     const existingWebhook = existingWebhooks.find(
@@ -124,64 +135,40 @@ export const handler: Handler = async (event) => {
 
     if (existingWebhook) {
       webhook = existingWebhook;
-      console.log("Using existing webhook:", webhook.url);
     } else {
-      // Create webhook for the channel
       webhook = await channel.createWebhook({
         name: "Chat Relay",
         reason: "Relay messages between web app and Discord",
       });
-      console.log("Created new webhook:", webhook.url);
     }
 
-    // Check if the channel and thread already exist in the database
-    const { data: existingChannels, error: existingChannelsError } =
-      await supabase
-        .from("discord_channels")
-        .select("*")
-        .eq("order_id", orderId);
+    // Store channel and thread info in database
+    const { error: dbError } = await supabase.from("discord_channels").insert([
+      {
+        order_id: orderId,
+        channel_id: channel.id,
+        thread_id: thread.id,
+        webhook_url: webhook.url,
+      },
+    ]);
 
-    if (existingChannelsError) {
-      throw new Error(`Database error: ${existingChannelsError.message}`);
+    if (dbError) {
+      throw new Error(`Database error: ${dbError.message}`);
     }
 
-    if (existingChannels && existingChannels.length > 0) {
-      // Update existing record
-      const { error: updateError } = await supabase
-        .from("discord_channels")
-        .update({
-          thread_id: thread.id,
-          webhook_url: webhook.url,
-        })
-        .eq("order_id", orderId);
+    // Create initial inbox message for customer
+    const { error: inboxError } = await supabase.from("inbox_messages").insert([
+      {
+        user_id: user.id,
+        title: "Order Received",
+        content: `Your order (ID: ${orderId}) has been received and is pending review. We'll notify you once your payment has been verified.`,
+        type: "order_status",
+      },
+    ]);
 
-      if (updateError) {
-        throw new Error(`Database error: ${updateError.message}`);
-      }
-      console.log("Updated existing channel record:", existingChannels[0].id);
-    } else {
-      // Insert new record
-      const { error: dbError } = await supabase
-        .from("discord_channels")
-        .insert([
-          {
-            order_id: orderId,
-            channel_id: channel.id,
-            thread_id: thread.id,
-            webhook_url: webhook.url,
-          },
-        ]);
-
-      if (dbError) {
-        throw new Error(`Database error: ${dbError.message}`);
-      }
-      console.log("Inserted new channel record");
+    if (inboxError) {
+      console.error("Error creating inbox message:", inboxError);
     }
-
-    // Send initial message
-    await thread.send(
-      `New support thread created for ${customerName}\nOrder ID: ${orderId}`
-    );
 
     return {
       statusCode: 200,
