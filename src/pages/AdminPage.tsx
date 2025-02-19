@@ -4,7 +4,7 @@ import Header from "../components/Header";
 import { CheckCircle, XCircle, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
-import { createClient } from "@supabase/supabase-js";
+import { getAuthHeaders } from "../lib/auth";
 
 interface Order {
   id: string;
@@ -24,12 +24,6 @@ interface Admin {
   user_id: string;
   created_at: string;
 }
-
-// Create a Supabase client with the service role key (this has admin privileges)
-const supabaseAdmin = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 function AdminPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -267,42 +261,23 @@ function AdminPage() {
     setUploadedFileUrl(fileUrl);
     if (selectedOrderId) {
       try {
-        // First, get the order details to get the user_id
-        const { data: order, error: orderFetchError } = await supabaseAdmin
-          .from("orders")
-          .select("user_id")
-          .eq("id", selectedOrderId)
-          .single();
+        const headers = await getAuthHeaders();
+        const response = await fetch("/api/admin-upload-file", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: headers.Authorization,
+          },
+          body: JSON.stringify({
+            orderId: selectedOrderId,
+            fileUrl: fileUrl,
+          }),
+        });
 
-        if (orderFetchError || !order) {
-          throw new Error("Failed to fetch order details");
-        }
+        const data = await response.json();
 
-        // Update the order with the file URL using admin client
-        const { error: orderError } = await supabaseAdmin
-          .from("orders")
-          .update({ account_file_url: fileUrl })
-          .eq("id", selectedOrderId);
-
-        if (orderError) {
-          throw new Error(orderError.message);
-        }
-
-        // Send file to user's inbox using admin client
-        const { error: inboxError } = await supabaseAdmin
-          .from("inbox_messages")
-          .insert([
-            {
-              user_id: order.user_id,
-              title: "Account File Uploaded",
-              content: `Your account file has been uploaded. You can view it in your inbox.`,
-              type: "account_file",
-              file_url: fileUrl,
-            },
-          ]);
-
-        if (inboxError) {
-          throw new Error(inboxError.message);
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to process file upload");
         }
 
         alert("File uploaded and sent to user's inbox successfully!");
