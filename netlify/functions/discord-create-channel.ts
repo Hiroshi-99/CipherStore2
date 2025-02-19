@@ -44,6 +44,38 @@ export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
 
   try {
+    const { orderId, username, userId } = JSON.parse(event.body || "{}");
+
+    // Validate all required fields
+    if (!orderId || !username || !userId) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          error: "Missing required fields",
+          details: "orderId, username, and userId are required",
+        }),
+      };
+    }
+
+    // Verify the order exists and belongs to the user
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("id", orderId)
+      .eq("user_id", userId)
+      .single();
+
+    if (orderError || !order) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          error: "Order not found",
+          details:
+            "The specified order does not exist or does not belong to this user",
+        }),
+      };
+    }
+
     // Create new client instance for each request using the config function
     discordClient = new Client(getClientConfig());
 
@@ -79,10 +111,6 @@ export const handler: Handler = async (event) => {
     }
     console.log("Category found:", category.name);
 
-    const { orderId, username } = JSON.parse(event.body || "{}");
-    if (!orderId || !username) {
-      throw new Error("Missing orderId or username");
-    }
     console.log("Creating channel for order:", orderId);
 
     // Create the channel with correct type specification
@@ -124,7 +152,7 @@ export const handler: Handler = async (event) => {
           order_id: orderId,
           channel_id: channel.id,
           webhook_url: webhook.url,
-          user_id: JSON.parse(event.body || "{}").userId, // Make sure userId is passed from frontend
+          user_id: userId,
         },
       ])
       .single();
