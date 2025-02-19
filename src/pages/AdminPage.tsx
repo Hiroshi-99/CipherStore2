@@ -267,6 +267,18 @@ function AdminPage() {
           throw new Error("User not authenticated");
         }
 
+        // First, get the order details to get the user_id
+        const { data: order, error: orderFetchError } = await supabase
+          .from("orders")
+          .select("user_id")
+          .eq("id", selectedOrderId)
+          .single();
+
+        if (orderFetchError || !order) {
+          throw new Error("Failed to fetch order details");
+        }
+
+        // Update the order with the file URL
         const { error: orderError } = await supabase
           .from("orders")
           .update({ account_file_url: fileUrl })
@@ -276,22 +288,12 @@ function AdminPage() {
           throw new Error(orderError.message);
         }
 
-        // Send file to user's inbox
-        const { data: order } = await supabase
-          .from("orders")
-          .select("user_id")
-          .eq("id", selectedOrderId)
-          .single();
-
-        if (!order) {
-          throw new Error("Order not found");
-        }
-
+        // Send file to user's inbox - use the order's user_id
         const { error: inboxError } = await supabase
           .from("inbox_messages")
           .insert([
             {
-              user_id: user.id,
+              user_id: order.user_id, // Use the order owner's user_id
               title: "Account File Uploaded",
               content: `Your account file has been uploaded. You can view it in your inbox.`,
               type: "account_file",
