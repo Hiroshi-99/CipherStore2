@@ -200,6 +200,11 @@ ON admin_users FOR SELECT
 TO authenticated
 USING (true);
 
+CREATE POLICY "Allow authenticated users to insert into admin_users"
+ON admin_users FOR INSERT
+TO authenticated
+WITH CHECK (true);
+
 -- Orders policies
 CREATE POLICY "Users can create their own orders"
 ON orders FOR INSERT
@@ -364,4 +369,4 @@ BEGIN
     AND (orders.user_id = auth.uid() OR is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users))
   );
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER; 
+$$ LANGUAGE plpgsql SECURITY DEFINER;

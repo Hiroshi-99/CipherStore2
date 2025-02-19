@@ -145,6 +145,30 @@ function OrderPage() {
     }
   };
 
+  const fetchDiscordChannel = async (orderId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("discord_channels")
+        .select("thread_id, webhook_url")
+        .eq("order_id", orderId)
+        .single(); // Use .single() to expect a single result
+
+      if (error) {
+        if (error.code === "PGRST116") {
+          console.warn("No Discord channel found for order:", orderId);
+          return null; // or return an empty object, depending on your needs
+        } else {
+          throw error;
+        }
+      }
+
+      return data;
+    } catch (error) {
+      console.error("Error fetching Discord channel:", error);
+      throw error;
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || isSubmitting) return;
