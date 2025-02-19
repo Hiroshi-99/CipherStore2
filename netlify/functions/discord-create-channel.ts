@@ -39,21 +39,22 @@ export const handler: Handler = async (event) => {
     const parsedBody = JSON.parse(event.body || "{}");
     console.log("Parsed event body:", parsedBody);
 
-    const { orderId, customerName, paymentProofUrl } = parsedBody;
+    const { orderId, customerName, paymentProofUrl, userId } = parsedBody;
 
     console.log("Extracted fields:", {
       orderId,
       customerName,
       paymentProofUrl,
+      userId,
     });
 
-    if (!orderId || !customerName) {
-      console.log("Missing fields:", { orderId, customerName });
+    if (!orderId || !customerName || !userId) {
+      console.log("Missing fields:", { orderId, customerName, userId });
       return {
         statusCode: 400,
         body: JSON.stringify({
           error: "Missing required fields",
-          received: { orderId, customerName },
+          received: { orderId, customerName, userId },
         }),
       };
     }
@@ -159,7 +160,7 @@ export const handler: Handler = async (event) => {
     // Create initial inbox message for customer
     const { error: inboxError } = await supabase.from("inbox_messages").insert([
       {
-        user_id: user.id,
+        user_id: userId,
         title: "Order Received",
         content: `Your order (ID: ${orderId}) has been received and is pending review. We'll notify you once your payment has been verified.`,
         type: "order_status",

@@ -15,19 +15,23 @@ interface InboxMessage {
 
 function InboxPage() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<User | null>(null);
+  const [_user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
 
   useEffect(() => {
+    let mounted = true;
+
     // Check authentication
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session?.user) {
         navigate("/");
         return;
       }
-      setUser(session.user);
-      fetchMessages(session.user.id);
+      if (mounted) {
+        setUser(session.user);
+        fetchMessages(session.user.id);
+      }
     });
 
     // Listen for auth changes
@@ -38,10 +42,16 @@ function InboxPage() {
         navigate("/");
         return;
       }
-      setUser(session.user);
+      if (mounted) {
+        setUser(session.user);
+        fetchMessages(session.user.id);
+      }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, [navigate]);
 
   const fetchMessages = async (userId: string) => {

@@ -148,7 +148,32 @@ function OrderPage() {
         if (proofError) throw proofError;
       }
 
-      // Navigate to inbox page instead of chat
+      // Create Discord channel/thread
+      const headers = await getAuthHeaders();
+      const response = await fetch("/api/discord-create-channel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: headers.Authorization,
+        },
+        body: JSON.stringify({
+          orderId: order.id,
+          customerName: formData.name,
+          paymentProofUrl: proofUrl,
+          userId: user.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          `Failed to create Discord channel: ${
+            errorData.details || errorData.error || "Unknown error"
+          }`
+        );
+      }
+
+      // Navigate to inbox page
       navigate("/inbox");
 
       // Show success message
