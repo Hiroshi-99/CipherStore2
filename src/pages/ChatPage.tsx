@@ -207,6 +207,7 @@ function ChatPage() {
   const fetchDiscordMessages = async (channelId: string) => {
     try {
       const headers = await getAuthHeaders();
+      console.log("Fetching Discord messages for channel:", channelId);
       const response = await fetch(
         `${API_ENDPOINTS.getMessages}/${channelId}`,
         {
@@ -215,10 +216,22 @@ function ChatPage() {
       );
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(
+          `HTTP error! status: ${response.status}, details: ${
+            errorData.details || errorData.error || "Unknown error"
+          }`
+        );
       }
 
       const messages: DiscordWebhookMessage[] = await response.json();
+      console.log("Fetched Discord messages:", messages);
+
+      if (messages.length === 0) {
+        console.log("No messages found for this channel.");
+        setMessages([]);
+        return;
+      }
 
       // Convert Discord messages to our format
       const formattedMessages: Message[] = messages.map((msg) => ({
@@ -233,6 +246,7 @@ function ChatPage() {
         discord_message_id: msg.id,
       }));
 
+      console.log("Formatted messages:", formattedMessages);
       setMessages(formattedMessages);
       scrollToBottom();
     } catch (error) {
