@@ -311,6 +311,13 @@ ON inbox_messages FOR INSERT
 TO authenticated
 WITH CHECK (is_admin());
 
+-- Add this to the Admin Access Control section
+CREATE POLICY "Allow users to view their own auth data"
+ON auth.users
+FOR SELECT
+TO authenticated
+USING (auth.uid() = id);
+
 ------------------------------------------
 -- Permissions
 ------------------------------------------
@@ -319,4 +326,8 @@ WITH CHECK (is_admin());
 GRANT ALL ON storage.objects TO authenticated;
 GRANT SELECT ON storage.objects TO public;
 GRANT ALL ON storage.buckets TO authenticated;
-GRANT SELECT ON storage.buckets TO public; 
+GRANT SELECT ON storage.buckets TO public;
+
+-- Add this to the Permissions section
+GRANT USAGE ON SCHEMA auth TO authenticated;
+GRANT SELECT ON auth.users TO authenticated; 

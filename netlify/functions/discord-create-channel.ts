@@ -8,10 +8,25 @@ import {
 } from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
+// Initialize Supabase client with service role key for admin access
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+// Validate environment variables
+const requiredEnvVars = {
+  DISCORD_TOKEN: process.env.DISCORD_TOKEN,
+  DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID,
+  DISCORD_CHANNEL_ID: process.env.DISCORD_CHANNEL_ID,
+};
+
+// Check all required environment variables
+Object.entries(requiredEnvVars).forEach(([key, value]) => {
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+});
 
 // Add more detailed debug logging
 console.log("Function loaded, checking environment...");
@@ -28,22 +43,35 @@ export const handler: Handler = async (event) => {
     if (!authHeader) {
       return {
         statusCode: 401,
-        body: JSON.stringify({ error: "No authorization header" }),
+        body: JSON.stringify({
+          error: "Unauthorized",
+          details: "No authorization header provided",
+        }),
       };
     }
 
-    console.log("Raw event body:", event.body);
-    const parsedBody = JSON.parse(event.body || "{}");
-    console.log("Parsed event body:", parsedBody);
+    // Parse and validate request body
+    if (!event.body) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          error: "Bad Request",
+          details: "Request body is empty",
+        }),
+      };
+    }
+
+    const parsedBody = JSON.parse(event.body);
+    console.log("Parsed request body:", parsedBody);
 
     const { orderId, customerName, paymentProofUrl, userId } = parsedBody;
 
     if (!orderId || !customerName || !userId) {
-      console.log("Missing fields:", { orderId, customerName, userId });
       return {
         statusCode: 400,
         body: JSON.stringify({
-          error: "Missing required fields",
+          error: "Bad Request",
+          details: "Missing required fields",
           received: { orderId, customerName, userId },
         }),
       };
@@ -55,20 +83,23 @@ export const handler: Handler = async (event) => {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMessageReactions,
       ],
     });
 
+    // Login to Discord
     try {
       await discordClient.login(process.env.DISCORD_TOKEN);
+      console.log("Successfully logged into Discord");
     } catch (loginError) {
       console.error("Discord login error:", loginError);
       return {
         statusCode: 500,
         body: JSON.stringify({
-          error: "Failed to login to Discord",
+          error: "Discord Authentication Failed",
           details:
-            loginError instanceof Error ? loginError.message : "Unknown error",
+            loginError instanceof Error
+              ? loginError.message
+              : "Unknown login error",
         }),
       };
     }
@@ -77,13 +108,18 @@ export const handler: Handler = async (event) => {
     const guild = await discordClient.guilds.fetch(
       process.env.DISCORD_GUILD_ID!
     );
-    const channel = await guild.channels.fetch(process.env.DISCORD_CHANNEL_ID!);
-
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      throw new Error("Channel not found or is not a text channel");
+    if (!guild) {
+      throw new Error("Could not find Discord guild");
     }
 
-    // Create initial message with order details and payment proof
+    const channel = await guild.channels.fetch(process.env.DISCORD_CHANNEL_ID!);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      throw new Error(
+        "Could not find Discord channel or channel is not a text channel"
+      );
+    }
+
+    // Create embed for order details
     const embed = new EmbedBuilder()
       .setColor(0x00ff00)
       .setTitle(`New Order - ${customerName}`)
@@ -106,9 +142,10 @@ export const handler: Handler = async (event) => {
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Order thread for ${customerName}`,
       });
+      console.log("Successfully created thread:", thread.id);
     } catch (threadError) {
       console.error("Thread creation error:", threadError);
-      throw new Error("Failed to create thread");
+      throw new Error("Failed to create Discord thread");
     }
 
     // Send initial message
@@ -121,9 +158,10 @@ export const handler: Handler = async (event) => {
         name: "Order Bot",
         avatar: "https://i.imgur.com/AfFp7pu.png",
       });
+      console.log("Successfully created webhook");
     } catch (webhookError) {
       console.error("Webhook creation error:", webhookError);
-      throw new Error("Failed to create webhook");
+      throw new Error("Failed to create Discord webhook");
     }
 
     // Store channel info in database
@@ -138,11 +176,13 @@ export const handler: Handler = async (event) => {
 
     if (dbError) {
       console.error("Database error:", dbError);
-      throw new Error(`Database error: ${dbError.message}`);
+      throw new Error(
+        `Failed to store Discord channel info: ${dbError.message}`
+      );
     }
 
     // Create initial inbox message
-    await supabase.from("inbox_messages").insert([
+    const { error: inboxError } = await supabase.from("inbox_messages").insert([
       {
         user_id: userId,
         title: "Order Received",
@@ -151,9 +191,15 @@ export const handler: Handler = async (event) => {
       },
     ]);
 
+    if (inboxError) {
+      console.error("Failed to create inbox message:", inboxError);
+      // Don't throw here as it's not critical
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
+        success: true,
         channelId: channel.id,
         threadId: thread.id,
         webhookUrl: webhook.url,
@@ -164,13 +210,15 @@ export const handler: Handler = async (event) => {
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error: "Failed to create Discord channel",
-        details: error instanceof Error ? error.message : "Unknown error",
+        error: "Discord Channel Creation Failed",
+        details:
+          error instanceof Error ? error.message : "Unknown error occurred",
       }),
     };
   } finally {
-    if (discordClient) {
-      discordClient.destroy();
+    if (discordClient?.isReady()) {
+      await discordClient.destroy();
+      console.log("Discord client destroyed");
     }
   }
 };

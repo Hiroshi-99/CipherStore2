@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import { CheckCircle, XCircle, Eye } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 interface Order {
   id: string;
@@ -29,14 +30,31 @@ function AdminPage() {
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [isOwner, setIsOwner] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    fetchOrders();
-    checkOwner();
-    if (isOwner) {
-      fetchAdmins();
-    }
-  }, [isOwner]);
+    const checkAuthAndFetch = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.user) {
+          navigate("/");
+          return;
+        }
+
+        await fetchOrders();
+        await checkOwner();
+        if (isOwner) {
+          await fetchAdmins();
+        }
+      } catch (error) {
+        console.error("Error initializing admin page:", error);
+      }
+    };
+
+    checkAuthAndFetch();
+  }, [navigate]);
 
   const fetchOrders = async () => {
     try {
