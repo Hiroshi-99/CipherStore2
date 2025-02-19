@@ -81,31 +81,34 @@ export const handler: Handler = async (event) => {
 
     // Test Discord connection and wait for ready
     console.log("Attempting to login to Discord...");
-    await discordClient.login(process.env.DISCORD_BOT_TOKEN);
 
-    // Wait for client to be ready and ensure user is available
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Discord client ready timeout"));
-      }, 10000); // 10 second timeout
+    // Login and wait for ready state
+    await Promise.all([
+      discordClient.login(process.env.DISCORD_BOT_TOKEN),
+      new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Discord client ready timeout"));
+        }, 15000); // 15 second timeout
 
-      if (discordClient!.isReady() && discordClient!.user) {
-        clearTimeout(timeout);
-        resolve();
-      } else {
-        discordClient!.once("ready", () => {
-          if (discordClient!.user) {
+        const readyHandler = () => {
+          if (!discordClient?.user) {
             clearTimeout(timeout);
-            resolve();
-          } else {
-            clearTimeout(timeout);
-            reject(new Error("Discord client user not available"));
+            reject(new Error("Discord client user not available after ready"));
+            return;
           }
-        });
-      }
-    });
+          clearTimeout(timeout);
+          resolve();
+        };
 
-    console.log("Discord client ready with user:", discordClient.user?.tag);
+        discordClient.once("ready", readyHandler);
+      }),
+    ]);
+
+    if (!discordClient.user) {
+      throw new Error("Discord client user not available after initialization");
+    }
+
+    console.log("Discord client ready with user:", discordClient.user.tag);
 
     // Test guild access
     const guild = await discordClient.guilds.fetch(
@@ -117,7 +120,7 @@ export const handler: Handler = async (event) => {
     console.log("Guild found:", guild.name);
 
     // Store bot user ID for permission setup
-    const botId = discordClient.user!.id;
+    const botId = discordClient.user.id;
     console.log("Bot ID:", botId);
 
     // Test category access
