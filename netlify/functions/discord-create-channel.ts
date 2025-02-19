@@ -7,6 +7,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+// Add more detailed debug logging
+console.log("Function loaded, checking environment...");
+console.log("DISCORD_TOKEN length:", process.env.DISCORD_BOT_TOKEN?.length);
+console.log("GUILD_ID:", process.env.DISCORD_GUILD_ID);
+console.log("CATEGORY_ID:", process.env.DISCORD_SUPPORT_CATEGORY_ID);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -15,28 +21,9 @@ const client = new Client({
   ],
 });
 
-// Add debug logging for environment variables
-console.log("Checking environment variables...");
-console.log("DISCORD_TOKEN exists:", !!process.env.DISCORD_BOT_TOKEN);
-console.log("GUILD_ID exists:", !!process.env.DISCORD_GUILD_ID);
-console.log(
-  "SUPPORT_CATEGORY_ID exists:",
-  !!process.env.DISCORD_SUPPORT_CATEGORY_ID
-);
-
-const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN?.trim();
-const GUILD_ID = process.env.DISCORD_GUILD_ID?.trim();
-const SUPPORT_CATEGORY_ID = process.env.DISCORD_SUPPORT_CATEGORY_ID?.trim();
-
-// Validate required environment variables
-if (!DISCORD_TOKEN || !GUILD_ID || !SUPPORT_CATEGORY_ID) {
-  throw new Error(`Missing required environment variables. 
-    Token: ${!!DISCORD_TOKEN}, 
-    Guild: ${!!GUILD_ID}, 
-    Category: ${!!SUPPORT_CATEGORY_ID}`);
-}
-
 export const handler: Handler = async (event) => {
+  console.log("Handler called with method:", event.httpMethod);
+
   // Verify authentication
   const authHeader = event.headers.authorization;
   if (!authHeader) {
@@ -47,65 +34,43 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    console.log("Verifying user authentication...");
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
-
-    if (authError || !user) {
-      console.error("Authentication error:", authError);
-      return {
-        statusCode: 401,
-        body: JSON.stringify({
-          error: "Invalid token",
-          details: authError?.message,
-        }),
-      };
-    }
-
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: "Method Not Allowed" };
-    }
-
-    const { orderId, username } = JSON.parse(event.body || "{}");
-
-    if (!orderId || !username) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: "Missing orderId or username" }),
-      };
-    }
-
-    console.log("Logging in to Discord...");
+    // Test Discord connection
+    console.log("Attempting to login to Discord...");
     try {
-      await client.login(DISCORD_TOKEN);
+      await client.login(process.env.DISCORD_BOT_TOKEN);
+      console.log("Discord login successful!");
     } catch (loginError) {
-      console.error("Discord login error:", loginError);
+      console.error("Discord login failed:", loginError);
       return {
         statusCode: 500,
         body: JSON.stringify({
-          error: "Failed to login to Discord",
+          error: "Discord login failed",
           details:
-            loginError instanceof Error
-              ? loginError.message
-              : "Unknown login error",
+            loginError instanceof Error ? loginError.message : "Unknown error",
         }),
       };
     }
 
+    // Test guild access
     console.log("Fetching guild...");
-    const guild = await client.guilds.fetch(GUILD_ID);
+    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID!);
+    console.log("Guild found:", guild.name);
 
-    if (!guild) {
-      throw new Error("Could not find Discord server");
-    }
+    // Test category access
+    console.log("Fetching category...");
+    const category = await guild.channels.fetch(
+      process.env.DISCORD_SUPPORT_CATEGORY_ID!
+    );
+    console.log("Category found:", category?.name);
 
-    console.log("Creating channel...");
+    const { orderId, username } = JSON.parse(event.body || "{}");
+    console.log("Creating channel for order:", orderId);
+
+    // Create the channel
     const channel = await guild.channels.create({
       name: `order-${orderId.substring(0, 8)}`,
-      type: 0, // Text channel
-      parent: SUPPORT_CATEGORY_ID,
+      type: 0,
+      parent: process.env.DISCORD_SUPPORT_CATEGORY_ID,
       topic: `Support channel for ${username}'s order`,
       permissionOverwrites: [
         {
@@ -123,25 +88,15 @@ export const handler: Handler = async (event) => {
       ],
     });
 
+    console.log("Channel created:", channel.name);
+
+    // Create webhook
     console.log("Creating webhook...");
     const webhook = await channel.createWebhook({
       name: "Order Bot",
       avatar: "https://your-bot-avatar.png",
     });
-
-    console.log("Storing channel info in database...");
-    const { error: dbError } = await supabase.from("discord_channels").insert([
-      {
-        order_id: orderId,
-        channel_id: channel.id,
-        webhook_url: webhook.url,
-      },
-    ]);
-
-    if (dbError) {
-      console.error("Database error:", dbError);
-      throw dbError;
-    }
+    console.log("Webhook created");
 
     return {
       statusCode: 200,
@@ -151,7 +106,7 @@ export const handler: Handler = async (event) => {
       }),
     };
   } catch (error) {
-    console.error("Error creating Discord channel:", error);
+    console.error("Function error:", error);
     return {
       statusCode: 500,
       body: JSON.stringify({
@@ -161,7 +116,7 @@ export const handler: Handler = async (event) => {
       }),
     };
   } finally {
-    if (client) {
+    if (client.isReady()) {
       console.log("Destroying Discord client...");
       await client.destroy();
     }
