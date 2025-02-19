@@ -315,6 +315,57 @@ ON inbox_messages FOR UPDATE
 TO authenticated
 USING (auth.uid() = user_id);
 
+-- Enable RLS on remaining tables
+ALTER TABLE inbox_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+-- Admin policies for inbox messages
+CREATE POLICY "Allow owner and admins to manage inbox messages"
+ON inbox_messages FOR ALL
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+-- Admin policies for messages
+CREATE POLICY "Allow owner and admins to manage messages"
+ON messages FOR ALL
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM admin_users
+        WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+);
+
+-- Messages policies for users
+CREATE POLICY "Users can view messages for their orders"
+ON messages FOR SELECT
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+
+CREATE POLICY "Users can create messages for their orders"
+ON messages FOR INSERT
+TO authenticated
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM orders
+        WHERE orders.id = order_id
+        AND orders.user_id = auth.uid()
+    )
+);
+
 ------------------------------------------
 -- Permissions
 ------------------------------------------

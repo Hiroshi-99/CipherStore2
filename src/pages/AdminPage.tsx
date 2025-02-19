@@ -197,15 +197,25 @@ function AdminPage() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleOrderAction(order.id, "approve")}
-                      className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 p-2 rounded-lg transition-colors"
+                      className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 p-2 rounded-lg transition-colors disabled:opacity-50"
+                      disabled={loading}
                     >
-                      <CheckCircle size={20} />
+                      {loading ? (
+                        <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-emerald-400" />
+                      ) : (
+                        <CheckCircle size={20} />
+                      )}
                     </button>
                     <button
                       onClick={() => handleOrderAction(order.id, "reject")}
-                      className="bg-red-500/20 hover:bg-red-500/30 text-red-400 p-2 rounded-lg transition-colors"
+                      className="bg-red-500/20 hover:bg-red-500/30 text-red-400 p-2 rounded-lg transition-colors disabled:opacity-50"
+                      disabled={loading}
                     >
-                      <XCircle size={20} />
+                      {loading ? (
+                        <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-red-400" />
+                      ) : (
+                        <XCircle size={20} />
+                      )}
                     </button>
                   </div>
                 )}
