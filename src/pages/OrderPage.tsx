@@ -21,73 +21,26 @@ function OrderPage() {
 
   useEffect(() => {
     // Check active session and get user data
-    const checkSession = async () => {
-      try {
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession();
-
-        if (error || !session?.user) {
-          console.error("Session error:", error);
-          navigate("/");
-          return;
-        }
-
-        setUser(session.user);
-
-        // Create a new order for the user if they don't have one
-        const { data: existingOrder, error: orderError } = await supabase
-          .from("orders")
-          .select("*")
-          .eq("user_id", session.user.id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
-
-        if (orderError && orderError.code !== "PGRST116") {
-          // PGRST116 is "no rows returned"
-          console.error("Error checking existing order:", orderError);
-          return;
-        }
-
-        if (!existingOrder) {
-          // Create new order
-          const orderId = crypto.randomUUID();
-          const { error: createError } = await supabase.from("orders").insert([
-            {
-              id: orderId,
-              user_id: session.user.id,
-              status: "pending",
-            },
-          ]);
-
-          if (createError) {
-            console.error("Error creating order:", createError);
-            return;
-          }
-        }
-
-        // Get Discord profile data from user metadata
-        const discordProfile = session.user.user_metadata as DiscordProfile;
-        setFormData({
-          name: discordProfile.full_name || "",
-          email: session.user.email || "",
-        });
-
-        setLoading(false);
-      } catch (error) {
-        console.error("Error in session check:", error);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user) {
         navigate("/");
+        return;
       }
-    };
+      setUser(session.user);
 
-    checkSession();
+      // Get Discord profile data from user metadata
+      const discordProfile = session.user.user_metadata as DiscordProfile;
+      setFormData({
+        name: discordProfile.full_name || "",
+        email: session.user.email || "",
+      });
+      setLoading(false);
+    });
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session?.user) {
         navigate("/");
         return;
@@ -97,33 +50,6 @@ function OrderPage() {
 
     return () => subscription.unsubscribe();
   }, [navigate]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user) return;
-
-    try {
-      // Get the user's latest order
-      const { data: order, error: orderError } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
-
-      if (orderError) {
-        console.error("Error getting order:", orderError);
-        return;
-      }
-
-      // Navigate to chat page
-      navigate("/chat");
-    } catch (error) {
-      console.error("Error submitting order:", error);
-      alert("Failed to submit order. Please try again.");
-    }
-  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Prevent changes if the data came from Discord
@@ -139,6 +65,31 @@ function OrderPage() {
       ...prev,
       [name]: value,
     }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+
+    try {
+      // Store order in Supabase
+      const { error } = await supabase.from("orders").insert([
+        {
+          user_id: user.id,
+          email: formData.email,
+          full_name: formData.name,
+          status: "pending",
+        },
+      ]);
+
+      if (error) throw error;
+
+      alert("Order submitted! Redirecting to support chat...");
+      navigate("/chat");
+    } catch (error) {
+      console.error("Error submitting order:", error);
+      alert("There was an error submitting your order. Please try again.");
+    }
   };
 
   const handleBackToStore = () => {
