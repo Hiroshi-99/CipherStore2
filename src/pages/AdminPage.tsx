@@ -177,7 +177,7 @@ function AdminPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Header title="ADMIN" showBack user={null} />
+      <Header title="CIPHER - ADMIN" showBack user={null} />
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         {error && (

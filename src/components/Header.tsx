@@ -1,9 +1,8 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React from "react";
 import { ArrowLeft, Bell, User, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
-import { debounce } from "lodash";
 
 interface HeaderProps {
   title: string;
@@ -19,61 +18,7 @@ interface DiscordProfile {
 
 function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
   const navigate = useNavigate();
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [lastFetchTime, setLastFetchTime] = useState(0);
-
-  const fetchUnreadCount = async () => {
-    if (!user) return;
-
-    const now = Date.now();
-    if (now - lastFetchTime < 5000) return;
-    setLastFetchTime(now);
-
-    try {
-      const { count, error } = await supabase
-        .from("inbox_messages")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .eq("is_read", false);
-
-      if (!error && count !== null) {
-        setUnreadCount(count);
-      }
-    } catch (error) {
-      console.error("Error fetching unread count:", error);
-    }
-  };
-
-  const debouncedFetchUnreadCount = useCallback(
-    debounce(() => {
-      fetchUnreadCount();
-    }, 1000),
-    [fetchUnreadCount]
-  );
-
-  useEffect(() => {
-    if (user) {
-      fetchUnreadCount();
-      // Subscribe to changes in inbox_messages
-      const subscription = supabase
-        .channel("inbox_changes")
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "inbox_messages",
-            filter: `user_id=eq.${user.id}`,
-          },
-          debouncedFetchUnreadCount
-        )
-        .subscribe();
-
-      return () => {
-        subscription.unsubscribe();
-      };
-    }
-  }, [user, debouncedFetchUnreadCount]);
+  const unreadCount = 0; // TODO: Implement unread count
 
   const getDiscordProfile = (): DiscordProfile => {
     return user?.user_metadata || {};

@@ -99,7 +99,12 @@ function StorePage() {
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        <Header title="STORE" user={user} onLogout={handleLogout} />
+        <Header
+          title="CIPHER - STORE"
+          showBack={false}
+          user={user}
+          onLogout={handleLogout}
+        />
 
         {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">

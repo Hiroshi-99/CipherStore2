@@ -138,7 +138,7 @@ function InboxPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Header title="INBOX" showBack user={user} />
+      <Header title="CIPHER - INBOX" showBack user={user} />
 
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl">
