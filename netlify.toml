@@ -9,6 +9,12 @@
 
 # API redirects for Discord functions
 [[redirects]]
+  from = "/api/discord-create-channel"
+  to = "/.netlify/functions/discord-create-channel"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/discord/*"
   to = "/.netlify/functions/discord-:splat"
   status = 200
