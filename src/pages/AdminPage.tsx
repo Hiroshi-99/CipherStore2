@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import { CheckCircle, XCircle, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import FileUpload from "../components/FileUpload";
 
 interface Order {
   id: string;
@@ -31,6 +32,8 @@ function AdminPage() {
   const [isOwner, setIsOwner] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const navigate = useNavigate();
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [uploadedFileUrl, setUploadedFileUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const checkAuthAndFetch = async () => {
@@ -248,6 +251,63 @@ function AdminPage() {
     }
   };
 
+  const handleOrderSelect = (orderId: string) => {
+    setSelectedOrderId(orderId);
+    setUploadedFileUrl(null);
+  };
+
+  const handleFileUploadSuccess = async (fileUrl: string) => {
+    setUploadedFileUrl(fileUrl);
+    if (selectedOrderId) {
+      try {
+        const { error } = await supabase
+          .from("orders")
+          .update({ account_file_url: fileUrl })
+          .eq("id", selectedOrderId);
+
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        // Send file to user's inbox
+        const { data: order } = await supabase
+          .from("orders")
+          .select("user_id")
+          .eq("id", selectedOrderId)
+          .single();
+
+        if (!order) {
+          throw new Error("Order not found");
+        }
+
+        const { error: inboxError } = await supabase
+          .from("inbox_messages")
+          .insert([
+            {
+              user_id: order.user_id,
+              title: "Account File Uploaded",
+              content: `Your account file has been uploaded. You can view it in your inbox.`,
+              type: "account_file",
+              file_url: fileUrl,
+            },
+          ]);
+
+        if (inboxError) {
+          throw new Error(inboxError.message);
+        }
+
+        alert("File uploaded and sent to user's inbox successfully!");
+      } catch (error) {
+        console.error("Error updating order and sending to inbox:", error);
+        alert(
+          `There was an error uploading the file and sending it to the inbox: ${
+            error instanceof Error ? error.message : "Unknown error occurred"
+          }`
+        );
+      }
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -376,6 +436,70 @@ function AdminPage() {
             </div>
           </div>
         )}
+
+        <div className="mt-12">
+          <h2 className="text-2xl font-bold text-white mb-6">
+            Admin Dashboard
+          </h2>
+          <div className="space-y-6">
+            <div className="overflow-x-auto">
+              <table className="w-full text-white">
+                <thead>
+                  <tr>
+                    <th className="text-left py-2">Order ID</th>
+                    <th className="text-left py-2">Customer Name</th>
+                    <th className="text-left py-2">Email</th>
+                    <th className="text-left py-2">Status</th>
+                    <th className="text-left py-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map((order) => (
+                    <tr key={order.id} className="border-t border-white/20">
+                      <td className="py-2">{order.id}</td>
+                      <td className="py-2">{order.full_name}</td>
+                      <td className="py-2">{order.email}</td>
+                      <td className="py-2">{order.status}</td>
+                      <td className="py-2">
+                        <button
+                          onClick={() => handleOrderSelect(order.id)}
+                          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-md transition-colors"
+                        >
+                          Select
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {selectedOrderId && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium text-white">
+                  Selected Order: {selectedOrderId}
+                </h3>
+                <FileUpload
+                  orderId={selectedOrderId}
+                  onUploadSuccess={handleFileUploadSuccess}
+                />
+                {uploadedFileUrl && (
+                  <div className="text-white">
+                    <p>File uploaded successfully:</p>
+                    <a
+                      href={uploadedFileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-400 hover:underline"
+                    >
+                      {uploadedFileUrl}
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </main>
 
       {/* Image Modal */}

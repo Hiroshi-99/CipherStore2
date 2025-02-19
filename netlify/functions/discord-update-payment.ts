@@ -16,7 +16,9 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const { orderId, status, notes } = JSON.parse(event.body || "{}");
+    const { orderId, status, notes, accountFileUrl } = JSON.parse(
+      event.body || "{}"
+    );
 
     if (!orderId || !status) {
       return {
@@ -38,7 +40,10 @@ export const handler: Handler = async (event) => {
     // Update order status
     const { error: orderError } = await supabase
       .from("orders")
-      .update({ status: status === "approved" ? "active" : "rejected" })
+      .update({
+        status: status === "approved" ? "active" : "rejected",
+        account_file_url: accountFileUrl || null,
+      })
       .eq("id", orderId);
 
     if (orderError) {
@@ -69,7 +74,20 @@ export const handler: Handler = async (event) => {
       type: "payment_status",
     };
 
-    await supabase.from("inbox_messages").insert([message]);
+    if (accountFileUrl) {
+      message.content +=
+        "\n\nYour account file has been uploaded. You can view it in your inbox.";
+      message.type = "account_file";
+      message.file_url = accountFileUrl;
+    }
+
+    const { error: inboxError } = await supabase
+      .from("inbox_messages")
+      .insert([message]);
+
+    if (inboxError) {
+      throw inboxError;
+    }
 
     // Update Discord thread
     const client = new Client({
@@ -93,7 +111,7 @@ export const handler: Handler = async (event) => {
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ message: "Payment status updated successfully" }),
+      body: JSON.stringify({ success: true }),
     };
   } catch (error) {
     console.error("Error updating payment status:", error);

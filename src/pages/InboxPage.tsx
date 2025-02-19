@@ -12,6 +12,7 @@ interface InboxMessage {
   is_read: boolean;
   type: string;
   created_at: string;
+  file_url?: string;
 }
 
 function InboxPage() {
@@ -98,48 +99,50 @@ function InboxPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900">
+    <div className="min-h-screen relative">
       <Header title="INBOX" showBack user={setUser} />
 
-      <main className="max-w-3xl mx-auto px-4 py-8">
-        {messages.length === 0 ? (
-          <div className="text-white text-center py-8">No messages yet</div>
-        ) : (
-          <div className="space-y-4">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`bg-black/30 backdrop-blur-md rounded-lg p-6 ${
-                  !message.is_read ? "border-l-4 border-emerald-400" : ""
-                }`}
-                onClick={() => !message.is_read && markAsRead(message.id)}
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="text-lg font-semibold text-white mb-2">
-                      {message.title}
-                    </h3>
-                    <p className="text-white/70">{message.content}</p>
-                  </div>
-                  {message.type === "payment_status" && (
-                    <div className="ml-4">
-                      {message.title.toLowerCase().includes("approved") ? (
-                        <CheckCircle className="text-emerald-400" size={24} />
-                      ) : message.title.toLowerCase().includes("rejected") ? (
-                        <XCircle className="text-red-400" size={24} />
-                      ) : (
-                        <Bell className="text-yellow-400" size={24} />
-                      )}
+      <main className="flex items-center justify-center px-4 py-12">
+        <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-4xl">
+          <div className="text-white mb-8">
+            <h2 className="text-2xl font-bold mb-2">Inbox</h2>
+          </div>
+
+          {messages.length === 0 ? (
+            <div className="text-white text-xl">No messages yet</div>
+          ) : (
+            <div className="space-y-6">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className="bg-white/10 p-4 rounded-lg"
+                  onClick={() => markAsRead(message.id)}
+                >
+                  <h3 className="text-lg font-medium text-white mb-2">
+                    {message.title}
+                  </h3>
+                  <p className="text-white/80 mb-2">{message.content}</p>
+                  {message.file_url && (
+                    <div className="text-white">
+                      <p>Attached File:</p>
+                      <a
+                        href={message.file_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-emerald-400 hover:underline"
+                      >
+                        {message.file_url}
+                      </a>
                     </div>
                   )}
+                  <p className="text-sm text-white/50">
+                    {new Date(message.created_at).toLocaleString()}
+                  </p>
                 </div>
-                <div className="mt-4 text-sm text-white/50">
-                  {new Date(message.created_at).toLocaleString()}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );
