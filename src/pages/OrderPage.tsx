@@ -149,31 +149,14 @@ function OrderPage() {
     e.preventDefault();
     if (!user || isSubmitting) return;
 
-    setIsSubmitting(true);
-    setIsUploading(true);
-
     try {
-      // Validate form data
-      if (!formData.name.trim() || !formData.email.trim()) {
-        throw new Error("Please fill in all required fields");
-      }
+      setIsSubmitting(true);
+      setIsUploading(true);
 
+      // Validate payment proof
       if (!paymentProof) {
-        throw new Error("Please upload your payment proof");
+        throw new Error("Please upload a payment proof");
       }
-
-      // Generate a unique ID for the order
-      const tempOrderId = crypto.randomUUID();
-
-      // Upload payment proof first
-      console.log("Uploading payment proof...");
-      const proofUrl = await uploadPaymentProof(tempOrderId);
-
-      if (!proofUrl) {
-        throw new Error("Failed to get URL for uploaded payment proof");
-      }
-
-      console.log("Payment proof uploaded successfully:", proofUrl);
 
       // Create order
       const { data: order, error: orderError } = await supabase
@@ -181,81 +164,59 @@ function OrderPage() {
         .insert([
           {
             user_id: user.id,
-            email: formData.email,
             full_name: formData.name,
-            status: "pending",
+            email: formData.email,
           },
         ])
         .select()
         .single();
 
-      if (orderError || !order) {
-        throw new Error(orderError?.message || "Failed to create order");
-      }
+      if (orderError) throw orderError;
 
-      // Store payment proof record
+      // Upload payment proof
+      const paymentProofUrl = await uploadPaymentProof(order.id);
+
+      // Create payment proof record
       const { error: proofError } = await supabase
         .from("payment_proofs")
         .insert([
           {
             order_id: order.id,
-            image_url: proofUrl,
-            status: "pending",
+            image_url: paymentProofUrl,
           },
         ]);
 
-      if (proofError) {
-        throw new Error(`Failed to store payment proof: ${proofError.message}`);
+      if (proofError) throw proofError;
+
+      // Create Discord channel
+      const response = await fetch("/api/discord-create-channel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(await getAuthHeaders()),
+        },
+        body: JSON.stringify({
+          orderId: order.id,
+          customerName: formData.name,
+          paymentProofUrl,
+          userId: user.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to create Discord channel");
       }
 
-      // Create Discord channel/thread
-      try {
-        const headers = await getAuthHeaders();
-        const response = await fetch("/api/discord-create-channel", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: headers.Authorization,
-          },
-          body: JSON.stringify({
-            orderId: order.id,
-            customerName: formData.name,
-            paymentProofUrl: proofUrl,
-            userId: user.id,
-          }),
-        });
-
-        const responseData = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            responseData.details ||
-              responseData.error ||
-              "Failed to create Discord channel"
-          );
-        }
-      } catch (discordError) {
-        console.error("Discord channel creation failed:", discordError);
-        // Continue with navigation even if Discord channel creation fails
-      }
-
-      // Show success message with a modal or toast
-      const confirmed = window.confirm(
-        "Order submitted successfully! Check your inbox for updates. Click OK to return to the store."
-      );
-
-      // Navigate based on user choice
-      if (confirmed) {
-        navigate("/");
-      } else {
-        navigate("/inbox");
-      }
+      // Show success message and redirect
+      alert("Order submitted successfully! Check your inbox for updates.");
+      navigate("/inbox");
     } catch (error) {
       console.error("Error submitting order:", error);
       alert(
-        `There was an error submitting your order: ${
-          error instanceof Error ? error.message : "Unknown error occurred"
-        }`
+        error instanceof Error
+          ? error.message
+          : "Failed to submit order. Please try again."
       );
     } finally {
       setIsSubmitting(false);
