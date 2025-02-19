@@ -16,7 +16,7 @@ interface InboxMessage {
 
 function InboxPage() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<User | null>(null);
+  const [, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
 
@@ -89,60 +89,49 @@ function InboxPage() {
     }
   };
 
-  const getMessageIcon = (message: InboxMessage) => {
-    if (message.type === "payment_status") {
-      if (message.title.toLowerCase().includes("approved")) {
-        return <CheckCircle className="text-emerald-400" size={24} />;
-      }
-      if (message.title.toLowerCase().includes("rejected")) {
-        return <XCircle className="text-red-400" size={24} />;
-      }
-      return <Bell className="text-yellow-400" size={24} />;
-    }
-    return null;
-  };
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="animate-pulse text-white text-xl">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-white text-xl">Loading...</div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Header title="INBOX" showBack user={user} />
+      <Header title="INBOX" showBack user={setUser} />
 
       <main className="max-w-3xl mx-auto px-4 py-8">
         {messages.length === 0 ? (
-          <div className="text-center py-12">
-            <Bell className="mx-auto text-white/20 mb-4" size={48} />
-            <p className="text-white text-lg">No messages yet</p>
-          </div>
+          <div className="text-white text-center py-8">No messages yet</div>
         ) : (
           <div className="space-y-4">
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`bg-black/30 backdrop-blur-md rounded-lg p-6 transition-all hover:bg-black/40 cursor-pointer ${
+                className={`bg-black/30 backdrop-blur-md rounded-lg p-6 ${
                   !message.is_read ? "border-l-4 border-emerald-400" : ""
                 }`}
                 onClick={() => !message.is_read && markAsRead(message.id)}
               >
                 <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white mb-2">
                       {message.title}
-                      {!message.is_read && (
-                        <span className="bg-emerald-400 text-black text-xs px-2 py-1 rounded-full">
-                          New
-                        </span>
-                      )}
                     </h3>
                     <p className="text-white/70">{message.content}</p>
                   </div>
-                  <div className="ml-4 shrink-0">{getMessageIcon(message)}</div>
+                  {message.type === "payment_status" && (
+                    <div className="ml-4">
+                      {message.title.toLowerCase().includes("approved") ? (
+                        <CheckCircle className="text-emerald-400" size={24} />
+                      ) : message.title.toLowerCase().includes("rejected") ? (
+                        <XCircle className="text-red-400" size={24} />
+                      ) : (
+                        <Bell className="text-yellow-400" size={24} />
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="mt-4 text-sm text-white/50">
                   {new Date(message.created_at).toLocaleString()}

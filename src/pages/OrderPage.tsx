@@ -149,14 +149,31 @@ function OrderPage() {
     e.preventDefault();
     if (!user || isSubmitting) return;
 
-    try {
-      setIsSubmitting(true);
-      setIsUploading(true);
+    setIsSubmitting(true);
+    setIsUploading(true);
 
-      // Validate payment proof
-      if (!paymentProof) {
-        throw new Error("Please upload a payment proof");
+    try {
+      // Validate form data
+      if (!formData.name.trim() || !formData.email.trim()) {
+        throw new Error("Please fill in all required fields");
       }
+
+      if (!paymentProof) {
+        throw new Error("Please upload your payment proof");
+      }
+
+      // Generate a unique ID for the order
+      const tempOrderId = crypto.randomUUID();
+
+      // Upload payment proof first
+      console.log("Uploading payment proof...");
+      const proofUrl = await uploadPaymentProof(tempOrderId);
+
+      if (!proofUrl) {
+        throw new Error("Failed to get URL for uploaded payment proof");
+      }
+
+      console.log("Payment proof uploaded successfully:", proofUrl);
 
       // Create order
       const { data: order, error: orderError } = await supabase
@@ -164,59 +181,81 @@ function OrderPage() {
         .insert([
           {
             user_id: user.id,
-            full_name: formData.name,
             email: formData.email,
+            full_name: formData.name,
+            status: "pending",
           },
         ])
         .select()
         .single();
 
-      if (orderError) throw orderError;
+      if (orderError || !order) {
+        throw new Error(orderError?.message || "Failed to create order");
+      }
 
-      // Upload payment proof
-      const paymentProofUrl = await uploadPaymentProof(order.id);
-
-      // Create payment proof record
+      // Store payment proof record
       const { error: proofError } = await supabase
         .from("payment_proofs")
         .insert([
           {
             order_id: order.id,
-            image_url: paymentProofUrl,
+            image_url: proofUrl,
+            status: "pending",
           },
         ]);
 
-      if (proofError) throw proofError;
-
-      // Create Discord channel
-      const response = await fetch("/api/discord-create-channel", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await getAuthHeaders()),
-        },
-        body: JSON.stringify({
-          orderId: order.id,
-          customerName: formData.name,
-          paymentProofUrl,
-          userId: user.id,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to create Discord channel");
+      if (proofError) {
+        throw new Error(`Failed to store payment proof: ${proofError.message}`);
       }
 
-      // Show success message and redirect
-      alert("Order submitted successfully! Check your inbox for updates.");
-      navigate("/inbox");
+      // Create Discord channel/thread
+      try {
+        const headers = await getAuthHeaders();
+        const response = await fetch("/api/discord-create-channel", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: headers.Authorization,
+          },
+          body: JSON.stringify({
+            orderId: order.id,
+            customerName: formData.name,
+            paymentProofUrl: proofUrl,
+            userId: user.id,
+          }),
+        });
+
+        const responseData = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            responseData.details ||
+              responseData.error ||
+              "Failed to create Discord channel"
+          );
+        }
+      } catch (discordError) {
+        console.error("Discord channel creation failed:", discordError);
+        // Continue with navigation even if Discord channel creation fails
+      }
+
+      // Show success message with a modal or toast
+      const confirmed = window.confirm(
+        "Order submitted successfully! Check your inbox for updates. Click OK to return to the store."
+      );
+
+      // Navigate based on user choice
+      if (confirmed) {
+        navigate("/");
+      } else {
+        navigate("/inbox");
+      }
     } catch (error) {
       console.error("Error submitting order:", error);
       alert(
-        error instanceof Error
-          ? error.message
-          : "Failed to submit order. Please try again."
+        `There was an error submitting your order: ${
+          error instanceof Error ? error.message : "Unknown error occurred"
+        }`
       );
     } finally {
       setIsSubmitting(false);
@@ -238,11 +277,24 @@ function OrderPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900">
-      <Header title="ORDER" showBack user={user} />
+    <div className="min-h-screen relative">
+      {/* Background Image */}
+      <div
+        className="absolute inset-0 z-0"
+        style={{
+          backgroundImage:
+            'url("https://images.unsplash.com/photo-1623984109622-f9c970ba32fc?q=80&w=2940")',
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "brightness(0.7)",
+        }}
+      />
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
+        <Header title="CHECKOUT" showBack user={user} />
+
+        {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">
           <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-md">
             <div className="text-white mb-8">

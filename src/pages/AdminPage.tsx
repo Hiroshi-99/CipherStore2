@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import { CheckCircle, XCircle, Eye } from "lucide-react";
-import type { User } from "@supabase/supabase-js";
 
 interface Order {
   id: string;
@@ -29,7 +28,7 @@ function AdminPage() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [isOwner, setIsOwner] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOrders();
@@ -37,9 +36,6 @@ function AdminPage() {
     if (isOwner) {
       fetchAdmins();
     }
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user || null);
-    });
   }, [isOwner]);
 
   const fetchOrders = async () => {
@@ -108,9 +104,8 @@ function AdminPage() {
     action: "approve" | "reject"
   ) => {
     try {
-      setLoading(true);
+      setActionInProgress(orderId);
 
-      // Update order status
       const { error: orderError } = await supabase
         .from("orders")
         .update({
@@ -119,19 +114,29 @@ function AdminPage() {
         })
         .eq("id", orderId);
 
-      if (orderError) throw orderError;
+      if (orderError) {
+        console.error("Failed to update order status:", orderError);
+        throw new Error(`Failed to update order status: ${orderError.message}`);
+      }
 
-      // Get order details for notifications
       const { data: order, error: orderFetchError } = await supabase
         .from("orders")
         .select("user_id, payment_proofs (id)")
         .eq("id", orderId)
         .single();
 
-      if (orderFetchError) throw orderFetchError;
+      if (orderFetchError) {
+        console.error("Failed to fetch order details:", orderFetchError);
+        throw new Error(
+          `Failed to fetch order details: ${orderFetchError.message}`
+        );
+      }
 
-      // Update payment proof status
-      if (order?.payment_proofs?.[0]?.id) {
+      if (!order) {
+        throw new Error("Order not found after status update");
+      }
+
+      if (order.payment_proofs?.[0]?.id) {
         const { error: proofError } = await supabase
           .from("payment_proofs")
           .update({
@@ -140,36 +145,73 @@ function AdminPage() {
           })
           .eq("id", order.payment_proofs[0].id);
 
-        if (proofError) throw proofError;
+        if (proofError) {
+          console.error("Failed to update payment proof:", proofError);
+          throw new Error(
+            `Failed to update payment proof: ${proofError.message}`
+          );
+        }
       }
 
-      // Create inbox message for user
-      if (order?.user_id) {
-        const { error: inboxError } = await supabase
-          .from("inbox_messages")
-          .insert([
-            {
-              user_id: order.user_id,
-              title: action === "approve" ? "Order Approved" : "Order Rejected",
-              content:
-                action === "approve"
-                  ? "Your payment has been verified and your order has been approved."
-                  : "Your payment proof has been rejected. Please submit a new payment proof.",
-              type: "payment_status",
-            },
-          ]);
+      const { error: notificationError } = await supabase
+        .from("inbox_messages")
+        .insert([
+          {
+            user_id: order.user_id,
+            title: action === "approve" ? "Order Approved" : "Order Rejected",
+            content:
+              action === "approve"
+                ? "Your payment has been verified and your order has been approved. Your account will be activated shortly."
+                : "Your payment proof has been rejected. Please submit a new payment proof or contact support for assistance.",
+            type: "payment_status",
+          },
+        ]);
 
-        if (inboxError) throw inboxError;
+      if (notificationError) {
+        console.error("Failed to send notification:", notificationError);
       }
 
-      // Refresh orders list
+      try {
+        const { data: channel } = await supabase
+          .from("discord_channels")
+          .select("thread_id, webhook_url")
+          .eq("order_id", orderId)
+          .single();
+
+        if (channel?.webhook_url) {
+          await fetch(channel.webhook_url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              content: `Order ${orderId} has been ${action}ed`,
+              embeds: [
+                {
+                  title: `Order ${
+                    action === "approve" ? "Approved" : "Rejected"
+                  }`,
+                  description: `Order ID: ${orderId}`,
+                  color: action === "approve" ? 0x00ff00 : 0xff0000,
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            }),
+          });
+        }
+      } catch (webhookError) {
+        console.error("Failed to send Discord notification:", webhookError);
+      }
+
       await fetchOrders();
-      alert(`Order ${action}ed successfully`);
+      alert(`Order successfully ${action}ed!`);
     } catch (error) {
       console.error(`Error ${action}ing order:`, error);
-      alert(`Error ${action}ing order. Please try again.`);
+      alert(
+        error instanceof Error
+          ? error.message
+          : `Failed to ${action} order. Please try again.`
+      );
     } finally {
-      setLoading(false);
+      setActionInProgress(null);
     }
   };
 
@@ -183,7 +225,7 @@ function AdminPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Header title="ADMIN" showBack user={user} />
+      <Header title="ADMIN" showBack user={null} />
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         <div className="space-y-6">
@@ -223,9 +265,9 @@ function AdminPage() {
                     <button
                       onClick={() => handleOrderAction(order.id, "approve")}
                       className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 p-2 rounded-lg transition-colors disabled:opacity-50"
-                      disabled={loading}
+                      disabled={actionInProgress === order.id}
                     >
-                      {loading ? (
+                      {actionInProgress === order.id ? (
                         <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-emerald-400" />
                       ) : (
                         <CheckCircle size={20} />
@@ -234,9 +276,9 @@ function AdminPage() {
                     <button
                       onClick={() => handleOrderAction(order.id, "reject")}
                       className="bg-red-500/20 hover:bg-red-500/30 text-red-400 p-2 rounded-lg transition-colors disabled:opacity-50"
-                      disabled={loading}
+                      disabled={actionInProgress === order.id}
                     >
-                      {loading ? (
+                      {actionInProgress === order.id ? (
                         <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-red-400" />
                       ) : (
                         <XCircle size={20} />
