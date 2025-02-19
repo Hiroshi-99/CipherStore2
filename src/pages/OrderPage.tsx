@@ -239,6 +239,7 @@ function OrderPage() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Accept: "application/json",
             Authorization: headers.Authorization,
           },
           body: JSON.stringify({
@@ -257,6 +258,18 @@ function OrderPage() {
               responseData.error ||
               "Failed to create Discord channel"
           );
+        }
+
+        // Fetch the newly created Discord channel
+        const discordChannel = await fetchDiscordChannel(order.id);
+        if (!discordChannel) {
+          console.warn(
+            "No Discord channel found after creation. Continuing..."
+          );
+          // You might want to handle this case differently, e.g., show a warning to the user
+        } else {
+          console.log("Discord channel fetched successfully:", discordChannel);
+          // Use the discordChannel data as needed
         }
       } catch (discordError) {
         console.error("Discord channel creation failed:", discordError);
