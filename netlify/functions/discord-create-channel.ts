@@ -19,41 +19,58 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
+  rest: {
+    timeout: 60000, // Increase timeout to 60 seconds
+    retries: 3, // Add retries
+  },
 });
 
 export const handler: Handler = async (event) => {
   console.log("Handler called with method:", event.httpMethod);
 
-  // Verify authentication
-  const authHeader = event.headers.authorization;
-  if (!authHeader) {
+  if (event.httpMethod !== "POST") {
     return {
-      statusCode: 401,
-      body: JSON.stringify({ error: "No authorization header" }),
+      statusCode: 405,
+      body: JSON.stringify({ error: "Method not allowed" }),
     };
   }
 
+  let discordClient: Client | null = null;
+
   try {
+    // Create new client instance for each request
+    discordClient = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+      ],
+      rest: {
+        timeout: 60000,
+        retries: 3,
+      },
+    });
+
     // Test Discord connection
     console.log("Attempting to login to Discord...");
-    try {
-      await client.login(process.env.DISCORD_BOT_TOKEN);
-      console.log("Discord login successful!");
-    } catch (loginError) {
-      console.error("Discord login failed:", loginError);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({
-          error: "Discord login failed",
-          details:
-            loginError instanceof Error ? loginError.message : "Unknown error",
-        }),
-      };
-    }
+    await discordClient.login(process.env.DISCORD_BOT_TOKEN);
+    console.log("Discord login successful!");
+
+    // Wait for client to be ready
+    await new Promise((resolve) => {
+      if (discordClient!.isReady()) resolve(true);
+      else discordClient!.once("ready", resolve);
+    });
+    console.log("Discord client ready");
 
     // Test guild access
     console.log("Fetching guild...");
-    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID!);
+    const guild = await discordClient.guilds.fetch(
+      process.env.DISCORD_GUILD_ID!
+    );
+    if (!guild) {
+      throw new Error("Could not find Discord server");
+    }
     console.log("Guild found:", guild.name);
 
     // Test category access
@@ -61,9 +78,15 @@ export const handler: Handler = async (event) => {
     const category = await guild.channels.fetch(
       process.env.DISCORD_SUPPORT_CATEGORY_ID!
     );
-    console.log("Category found:", category?.name);
+    if (!category) {
+      throw new Error("Could not find category");
+    }
+    console.log("Category found:", category.name);
 
     const { orderId, username } = JSON.parse(event.body || "{}");
+    if (!orderId || !username) {
+      throw new Error("Missing orderId or username");
+    }
     console.log("Creating channel for order:", orderId);
 
     // Create the channel
@@ -78,7 +101,7 @@ export const handler: Handler = async (event) => {
           deny: [PermissionFlagsBits.ViewChannel],
         },
         {
-          id: client.user!.id,
+          id: discordClient.user!.id,
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
@@ -94,7 +117,8 @@ export const handler: Handler = async (event) => {
     console.log("Creating webhook...");
     const webhook = await channel.createWebhook({
       name: "Order Bot",
-      avatar: "https://your-bot-avatar.png",
+      avatar:
+        "https://cdn.discordapp.com/attachments/1326517715279810674/1335257183373230241/proof_679e312803ecb.png?ex=67b694e8&is=67b54368&hm=7b010d0d43c7d8261118db44f1ea6eb6ad03bb12ee55a401dc9bd0d7951d8933&",
     });
     console.log("Webhook created");
 
@@ -104,6 +128,7 @@ export const handler: Handler = async (event) => {
         channelId: channel.id,
         webhookUrl: webhook.url,
       }),
+      s,
     };
   } catch (error) {
     console.error("Function error:", error);
@@ -116,9 +141,13 @@ export const handler: Handler = async (event) => {
       }),
     };
   } finally {
-    if (client.isReady()) {
+    if (discordClient?.isReady()) {
       console.log("Destroying Discord client...");
-      await client.destroy();
+      try {
+        await discordClient.destroy();
+      } catch (error) {
+        console.error("Error destroying client:", error);
+      }
     }
   }
 };
