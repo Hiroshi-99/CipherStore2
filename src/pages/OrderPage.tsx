@@ -18,6 +18,7 @@ function OrderPage() {
     name: "",
     email: "",
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     // Check active session and get user data
@@ -69,7 +70,9 @@ function OrderPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || isSubmitting) return;
+
+    setIsSubmitting(true);
 
     try {
       // Validate form data
@@ -136,6 +139,8 @@ function OrderPage() {
     } catch (error) {
       console.error("Error submitting order:", error);
       alert("There was an error submitting your order. Please try again.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -252,9 +257,14 @@ function OrderPage() {
               <button
                 type="submit"
                 className="w-full bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-md flex items-center justify-center gap-2 transition-colors"
+                disabled={isSubmitting}
               >
-                <Send size={20} />
-                Submit Order
+                {isSubmitting ? (
+                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                ) : (
+                  <Send size={20} />
+                )}
+                {isSubmitting ? "Submitting..." : "Submit Order"}
               </button>
             </form>
           </div>
