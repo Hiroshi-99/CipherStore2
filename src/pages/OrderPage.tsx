@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Send, Upload, Eye } from "lucide-react";
+import { Send, Upload, Eye } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import { getAuthHeaders } from "../lib/auth";
 import Header from "../components/Header";
+import Button from "../components/Button";
 
 interface DiscordProfile {
   username?: string;
@@ -303,11 +304,6 @@ function OrderPage() {
     }
   };
 
-  const handleBackToStore = () => {
-    // Simply navigate back to the store page
-    navigate("/");
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -332,7 +328,7 @@ function OrderPage() {
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        <Header title="CHECKOUT" showBack user={user} />
+        <Header title="ORDER" showBack user={null} />
 
         {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">

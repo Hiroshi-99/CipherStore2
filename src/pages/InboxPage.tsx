@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Bell, CheckCircle, XCircle } from "lucide-react";
+import Button from "../components/Button";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Header from "../components/Header";
@@ -100,7 +100,7 @@ function InboxPage() {
 
   return (
     <div className="min-h-screen relative bg-gray-900">
-      <Header title="INBOX" showBack user={setUser} />
+      <Header title="INBOX" showBack user={null} />
 
       <main className="flex items-center justify-center px-4 py-12">
         <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-4xl">
