@@ -40,6 +40,8 @@ CREATE TABLE messages (
 CREATE INDEX idx_orders_user_id ON orders(user_id);
 CREATE INDEX idx_messages_order_id ON messages(order_id);
 CREATE INDEX idx_messages_created_at ON messages(created_at);
+CREATE INDEX idx_discord_channels_order_id ON discord_channels(order_id);
+CREATE INDEX idx_discord_channels_channel_id ON discord_channels(channel_id);
 
 -- Add trigger to update updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()

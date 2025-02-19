@@ -48,6 +48,7 @@ function ChatPage() {
   const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(
     null
   );
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
   useEffect(() => {
     // Check authentication and get order
@@ -125,19 +126,7 @@ function ChatPage() {
     // Load existing messages when order is set
     if (order) {
       console.log("Fetching messages for order:", order.id);
-      supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", order.id)
-        .order("created_at", { ascending: true })
-        .then(({ data, error }) => {
-          console.log("Fetched messages:", data);
-          console.log("Fetch error:", error);
-          if (data) {
-            setMessages(data);
-            scrollToBottom();
-          }
-        });
+      fetchDiscordMessages(order.discord_channels?.channel_id || "");
     }
   }, [order]);
 
@@ -206,12 +195,19 @@ function ChatPage() {
     }
   };
 
-  const fetchDiscordMessages = async (channelId: string) => {
+  const fetchDiscordMessages = async (
+    channelId: string,
+    limit = 50,
+    before?: string
+  ) => {
     try {
+      setIsLoadingMessages(true);
       const headers = await getAuthHeaders();
       console.log("Fetching Discord messages for channel:", channelId);
       const response = await fetch(
-        `${API_ENDPOINTS.getMessages}/${channelId}`,
+        `${API_ENDPOINTS.getMessages}/${channelId}?limit=${limit}${
+          before ? `&before=${before}` : ""
+        }`,
         {
           headers,
         }
@@ -249,11 +245,13 @@ function ChatPage() {
       }));
 
       console.log("Formatted messages:", formattedMessages);
-      setMessages(formattedMessages);
+      setMessages((current) => [...formattedMessages, ...current]);
       scrollToBottom();
     } catch (error) {
       console.error("Error fetching Discord messages:", error);
       alert("Failed to load messages. Please refresh the page.");
+    } finally {
+      setIsLoadingMessages(false);
     }
   };
 
@@ -263,6 +261,7 @@ function ChatPage() {
 
     try {
       const headers = await getAuthHeaders();
+      console.log("Sending message:", newMessage);
       const response = await fetch(API_ENDPOINTS.sendMessage, {
         method: "POST",
         headers,
@@ -276,10 +275,16 @@ function ChatPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(
+          `HTTP error! status: ${response.status}, details: ${
+            errorData.details || errorData.error || "Unknown error"
+          }`
+        );
       }
 
       const discordMessage = await response.json();
+      console.log("Discord message sent:", discordMessage);
 
       // Store message in Supabase
       const { error } = await supabase.from("messages").insert([
@@ -415,6 +420,10 @@ function ChatPage() {
               <Send size={20} />
             </button>
           </form>
+
+          {isLoadingMessages && (
+            <div className="text-white text-sm mb-2">Loading messages...</div>
+          )}
         </div>
       </div>
     </div>
