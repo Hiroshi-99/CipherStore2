@@ -80,8 +80,10 @@ function OrderPage() {
   };
 
   const uploadPaymentProof = async (orderId: string) => {
-    if (!paymentProof) {
-      throw new Error("No payment proof file selected");
+    if (!paymentProof || !user) {
+      throw new Error(
+        "No payment proof file selected or user not authenticated"
+      );
     }
 
     try {
@@ -99,16 +101,8 @@ function OrderPage() {
         throw new Error("Only JPG, PNG, and GIF files are allowed");
       }
 
-      // Check if bucket exists
-      const { data: buckets } = await supabase.storage.listBuckets();
-      if (!buckets?.some((bucket) => bucket.name === "payment-proofs")) {
-        throw new Error(
-          "Storage system is not properly configured. Please contact support."
-        );
-      }
-
       const fileName = `${orderId}-proof.${fileExt}`;
-      const filePath = `payment-proofs/${fileName}`;
+      const filePath = `payment-proofs/${user.id}/${fileName}`; // Include user ID in path
 
       // Create a copy of the file with proper name
       const renamedFile = new File([paymentProof], fileName, {
@@ -125,11 +119,6 @@ function OrderPage() {
 
       if (uploadError) {
         console.error("Upload error details:", uploadError);
-        if (uploadError.message.includes("bucket")) {
-          throw new Error(
-            "Storage system error. Please try again or contact support."
-          );
-        }
         throw new Error(uploadError.message);
       }
 

@@ -113,6 +113,7 @@ END $$;
 -- Drop existing policies if they exist
 DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
 DROP POLICY IF EXISTS "Allow public reads" ON storage.objects;
+DROP POLICY IF EXISTS "Give users access to own folder" ON storage.objects;
 
 -- Create new policies
 CREATE POLICY "Allow authenticated uploads"
@@ -128,6 +129,23 @@ ON storage.objects FOR SELECT
 TO public
 USING (bucket_id = 'payment-proofs');
 
+CREATE POLICY "Give users access to own folder"
+ON storage.objects FOR ALL
+TO authenticated
+USING (
+    bucket_id = 'payment-proofs'
+    AND auth.uid()::text = (storage.foldername(name))[2]
+)
+WITH CHECK (
+    bucket_id = 'payment-proofs'
+    AND auth.uid()::text = (storage.foldername(name))[2]
+);
+
+-- Enable RLS on storage.objects
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
 -- Grant necessary permissions
 GRANT ALL ON storage.objects TO authenticated;
-GRANT SELECT ON storage.objects TO public; 
+GRANT SELECT ON storage.objects TO public;
+GRANT ALL ON storage.buckets TO authenticated;
+GRANT SELECT ON storage.buckets TO public; 
