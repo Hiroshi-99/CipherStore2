@@ -29,10 +29,10 @@ Object.entries(requiredEnvVars).forEach(([key, value]) => {
 });
 
 // Add more detailed debug logging
-console.log("Function loaded, checking environment...");
-console.log("DISCORD_TOKEN length:", process.env.DISCORD_TOKEN?.length);
-console.log("GUILD_ID:", process.env.DISCORD_GUILD_ID);
-console.log("DISCORD_CHANNEL_ID:", process.env.DISCORD_CHANNEL_ID);
+// console.log("Function loaded, checking environment...");
+// console.log("DISCORD_TOKEN length:", process.env.DISCORD_TOKEN?.length);
+// console.log("GUILD_ID:", process.env.DISCORD_GUILD_ID);
+// console.log("DISCORD_CHANNEL_ID:", process.env.DISCORD_CHANNEL_ID);
 
 export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
@@ -71,7 +71,8 @@ export const handler: Handler = async (event) => {
     }
 
     const parsedBody = JSON.parse(event.body);
-    console.log("Parsed request body:", parsedBody);
+    // Remove this line in production
+    // console.log("Parsed request body:", parsedBody);
 
     const { orderId, customerName, paymentProofUrl, userId } = parsedBody;
 
@@ -98,7 +99,8 @@ export const handler: Handler = async (event) => {
     // Login to Discord
     try {
       await discordClient.login(process.env.DISCORD_TOKEN);
-      console.log("Successfully logged into Discord");
+      // Remove this line in production
+      // console.log("Successfully logged into Discord");
     } catch (loginError) {
       console.error("Discord login error:", loginError);
       return {
@@ -151,7 +153,8 @@ export const handler: Handler = async (event) => {
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Order thread for ${customerName}`,
       });
-      console.log("Successfully created thread:", thread.id);
+      // Remove this line in production
+      // console.log("Successfully created thread:", thread.id);
     } catch (threadError) {
       console.error("Thread creation error:", threadError);
       throw new Error("Failed to create Discord thread");
@@ -160,7 +163,8 @@ export const handler: Handler = async (event) => {
     // Send initial message
     try {
       await thread.send({ embeds: [embed] });
-      console.log("Successfully sent initial message to thread");
+      // Remove this line in production
+      // console.log("Successfully sent initial message to thread");
     } catch (messageError) {
       console.error("Failed to send initial message:", messageError);
       throw new Error("Failed to send initial message to thread");
@@ -173,7 +177,8 @@ export const handler: Handler = async (event) => {
         name: "Order Bot",
         avatar: "https://i.imgur.com/AfFp7pu.png",
       });
-      console.log("Successfully created webhook");
+      // Remove this line in production
+      // console.log("Successfully created webhook");
     } catch (webhookError) {
       console.error("Webhook creation error:", webhookError);
       throw new Error("Failed to create Discord webhook");
@@ -244,7 +249,8 @@ export const handler: Handler = async (event) => {
   } finally {
     if (discordClient) {
       await discordClient.destroy();
-      console.log("Discord client destroyed");
+      // Remove this line in production
+      // console.log("Discord client destroyed");
     }
   }
 };
