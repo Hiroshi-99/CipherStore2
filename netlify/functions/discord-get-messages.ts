@@ -15,7 +15,7 @@ const client = new Client({
   ],
 });
 
-const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 
 if (!DISCORD_TOKEN) {
   throw new Error("Missing DISCORD_TOKEN");
