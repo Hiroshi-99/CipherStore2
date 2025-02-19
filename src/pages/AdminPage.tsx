@@ -260,13 +260,20 @@ function AdminPage() {
     setUploadedFileUrl(fileUrl);
     if (selectedOrderId) {
       try {
-        const { error } = await supabase
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          throw new Error("User not authenticated");
+        }
+
+        const { error: orderError } = await supabase
           .from("orders")
           .update({ account_file_url: fileUrl })
           .eq("id", selectedOrderId);
 
-        if (error) {
-          throw new Error(error.message);
+        if (orderError) {
+          throw new Error(orderError.message);
         }
 
         // Send file to user's inbox
@@ -284,7 +291,7 @@ function AdminPage() {
           .from("inbox_messages")
           .insert([
             {
-              user_id: order.user_id,
+              user_id: user.id,
               title: "Account File Uploaded",
               content: `Your account file has been uploaded. You can view it in your inbox.`,
               type: "account_file",

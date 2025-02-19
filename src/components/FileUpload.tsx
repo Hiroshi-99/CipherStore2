@@ -29,10 +29,11 @@ function FileUpload({ orderId, onUploadSuccess }: FileUploadProps) {
 
     try {
       const fileName = `${orderId}-account-file.${file.name.split(".").pop()}`;
-      const filePath = `account-files/${orderId}/${fileName}`;
+      const bucketName = import.meta.env.VITE_SUPABASE_ACCOUNT_FILES_BUCKET;
+      const filePath = `${bucketName}/${orderId}/${fileName}`;
 
       const { data, error: uploadError } = await supabase.storage
-        .from("account-files")
+        .from(bucketName)
         .upload(filePath, file, {
           cacheControl: "3600",
           upsert: false,
@@ -48,7 +49,7 @@ function FileUpload({ orderId, onUploadSuccess }: FileUploadProps) {
 
       const {
         data: { publicUrl },
-      } = supabase.storage.from("account-files").getPublicUrl(data.path);
+      } = supabase.storage.from(bucketName).getPublicUrl(data.path);
 
       if (!publicUrl) {
         throw new Error("Failed to get public URL for uploaded file");
