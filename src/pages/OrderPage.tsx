@@ -267,6 +267,9 @@ function OrderPage() {
             "No Discord channel found after creation. Continuing..."
           );
           // You might want to handle this case differently, e.g., show a warning to the user
+          alert(
+            "Warning: No Discord channel found after creation. Please check your order status in the inbox."
+          );
         } else {
           console.log("Discord channel fetched successfully:", discordChannel);
           // Use the discordChannel data as needed
