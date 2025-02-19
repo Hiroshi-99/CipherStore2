@@ -332,7 +332,7 @@ function OrderPage() {
 
       {/* Content */}
       <div className="relative z-10 min-h-screen">
-        <Header title="CIPHER - CHECKOUT" showBack user={user} />
+        <Header title="CHECKOUT" showBack user={user} />
 
         {/* Main Content */}
         <main className="flex items-center justify-center px-4 py-12">
