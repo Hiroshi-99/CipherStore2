@@ -6,6 +6,7 @@ import InboxPage from "./pages/InboxPage";
 import AdminPage from "./pages/AdminPage";
 import AdminGuard from "./components/AdminGuard";
 import { setPageTitle } from "./utils/title";
+import Fireflies from "./components/Fireflies";
 
 function App() {
   useEffect(() => {
@@ -13,20 +14,23 @@ function App() {
   }, []);
 
   return (
-    <Routes>
-      <Route path="/" element={<StorePage />} />
-      <Route path="/order" element={<OrderPage />} />
-      <Route path="/inbox" element={<InboxPage />} />
-      <Route
-        path="/admin"
-        element={
-          <AdminGuard>
-            <AdminPage />
-          </AdminGuard>
-        }
-      />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      <Fireflies />
+      <Routes>
+        <Route path="/" element={<StorePage />} />
+        <Route path="/order" element={<OrderPage />} />
+        <Route path="/inbox" element={<InboxPage />} />
+        <Route
+          path="/admin"
+          element={
+            <AdminGuard>
+              <AdminPage />
+            </AdminGuard>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   );
 }
 

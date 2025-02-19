@@ -139,95 +139,110 @@ function InboxPage() {
   const unreadCount = messages.filter((msg) => !msg.is_read).length;
 
   return (
-    <div className="min-h-screen bg-gray-900">
-      <Header title="INBOX" showBack user={user} />
+    <div className="min-h-screen relative">
+      {/* Background Image */}
+      <div
+        className="absolute inset-0 z-0"
+        style={{
+          backgroundImage:
+            'url("https://cdn.discordapp.com/attachments/1335202613913849857/1341847795807813815/wallpaperflare.com_wallpaper.jpg?ex=67b77ca4&is=67b62b24&hm=17f869720e0d7d178e5a1d6140243b37f248c32e837142aded205cd3c4453de1&")',
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "brightness(0.7)",
+        }}
+      />
 
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl">
-          <div className="flex justify-between items-center mb-8">
-            <div>
-              <h2 className="text-2xl font-bold text-white">Messages</h2>
-              <p className="text-white/50 text-sm mt-1">
-                {messages.length} total, {unreadCount} unread
-              </p>
-            </div>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-              title="Refresh messages"
-            >
-              <RefreshCw
-                className={`w-5 h-5 text-white ${
-                  refreshing ? "animate-spin" : ""
-                }`}
-              />
-            </button>
-          </div>
+      {/* Content */}
+      <div className="relative z-10 min-h-screen">
+        <Header title="INBOX" showBack user={user} />
 
-          {error && (
-            <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded-lg mb-6">
-              {error}
+        <main className="max-w-4xl mx-auto px-4 py-8 relative">
+          <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl">
+            <div className="flex justify-between items-center mb-8">
+              <div>
+                <h2 className="text-2xl font-bold text-white">Messages</h2>
+                <p className="text-white/50 text-sm mt-1">
+                  {messages.length} total, {unreadCount} unread
+                </p>
+              </div>
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+                title="Refresh messages"
+              >
+                <RefreshCw
+                  className={`w-5 h-5 text-white ${
+                    refreshing ? "animate-spin" : ""
+                  }`}
+                />
+              </button>
             </div>
-          )}
 
-          {messages.length === 0 ? (
-            <div className="text-center py-12">
-              <p className="text-white/70 text-lg">No messages yet</p>
-              <p className="text-white/50 text-sm mt-2">
-                New messages will appear here
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`bg-white/5 hover:bg-white/10 p-6 rounded-lg border-l-4 transition-all cursor-pointer ${getMessageStatusColor(
-                    message.type,
-                    message.is_read
-                  )}`}
-                  onClick={() => !message.is_read && markAsRead(message.id)}
-                >
-                  <div className="flex justify-between items-start gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        {getMessageIcon(message.type)}
-                        <h3 className="text-lg font-medium text-white">
-                          {message.title}
-                        </h3>
-                      </div>
-                      <p className="text-white/80 mb-3">{message.content}</p>
-                      {message.file_url && (
-                        <div className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition-colors">
-                          <ExternalLink size={16} />
-                          <a
-                            href={message.file_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            View Attached File
-                          </a>
+            {error && (
+              <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded-lg mb-6">
+                {error}
+              </div>
+            )}
+
+            {messages.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-white/70 text-lg">No messages yet</p>
+                <p className="text-white/50 text-sm mt-2">
+                  New messages will appear here
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`bg-white/5 hover:bg-white/10 p-6 rounded-lg border-l-4 transition-all cursor-pointer ${getMessageStatusColor(
+                      message.type,
+                      message.is_read
+                    )}`}
+                    onClick={() => !message.is_read && markAsRead(message.id)}
+                  >
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          {getMessageIcon(message.type)}
+                          <h3 className="text-lg font-medium text-white">
+                            {message.title}
+                          </h3>
                         </div>
+                        <p className="text-white/80 mb-3">{message.content}</p>
+                        {message.file_url && (
+                          <div className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition-colors">
+                            <ExternalLink size={16} />
+                            <a
+                              href={message.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              View Attached File
+                            </a>
+                          </div>
+                        )}
+                        <p className="text-sm text-white/40 mt-3">
+                          {new Date(message.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                      {!message.is_read && (
+                        <span className="bg-emerald-400/20 text-emerald-400 text-xs px-2 py-1 rounded-full">
+                          New
+                        </span>
                       )}
-                      <p className="text-sm text-white/40 mt-3">
-                        {new Date(message.created_at).toLocaleString()}
-                      </p>
                     </div>
-                    {!message.is_read && (
-                      <span className="bg-emerald-400/20 text-emerald-400 text-xs px-2 py-1 rounded-full">
-                        New
-                      </span>
-                    )}
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </main>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
