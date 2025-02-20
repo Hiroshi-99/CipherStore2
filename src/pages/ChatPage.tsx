@@ -109,10 +109,16 @@ function ChatPage() {
   }, [subscribeToMessages]);
 
   const checkUser = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (session?.user) {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) {
+        setInitialLoading(false);
+        return;
+      }
+
       setUser(session.user);
       // Check if user is admin
       const { data: adminData } = await supabase
@@ -124,10 +130,15 @@ function ChatPage() {
       setIsAdmin(!!adminData);
 
       if (adminData) {
-        fetchAdminOrders();
+        await fetchAdminOrders();
       } else {
-        fetchUserOrders(session.user.id);
+        await fetchUserOrders(session.user.id);
       }
+
+      setInitialLoading(false);
+    } catch (error) {
+      console.error("Error checking user:", error);
+      setInitialLoading(false);
     }
   };
 
@@ -146,6 +157,7 @@ function ChatPage() {
       }
     } catch (error) {
       console.error("Error fetching user orders:", error);
+      setError("Failed to load orders");
     }
   };
 
@@ -172,11 +184,13 @@ function ChatPage() {
       }
     } catch (error) {
       console.error("Error fetching admin orders:", error);
+      setError("Failed to load orders");
     }
   };
 
   const fetchMessages = async (orderId: string) => {
     try {
+      setLoading(true);
       const { data, error } = await supabase
         .from("messages")
         .select("*")
