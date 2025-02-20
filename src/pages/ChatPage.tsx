@@ -6,6 +6,7 @@ import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
+import { toast } from "sonner";
 
 interface Message {
   id: string;
@@ -39,6 +40,8 @@ function ChatPage() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
+  const [isTabFocused, setIsTabFocused] = useState(true);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -59,35 +62,58 @@ function ChatPage() {
         },
         async (payload) => {
           if (payload.eventType === "INSERT") {
-            const { data: orderData } = await supabase
-              .from("orders")
-              .select("user_id, full_name")
-              .eq("id", selectedOrderId)
-              .single();
+            const newMessage = payload.new as Message;
 
-            if (orderData) {
-              const newMessage = payload.new as Message;
-              // Only add message if it's not already in the list
-              setMessages((prev) => {
-                if (prev.some((msg) => msg.id === newMessage.id)) {
-                  return prev;
-                }
-                return [
-                  ...prev,
-                  {
-                    ...newMessage,
-                    is_admin: newMessage.user_id !== orderData.user_id,
-                  },
-                ];
-              });
-              scrollToBottom();
-
-              // Play notification sound for new messages from others
-              if (newMessage.user_id !== user?.id) {
-                const audio = new Audio("/notification.mp3");
-                audio.play().catch(() => {}); // Ignore autoplay errors
+            // Skip if message is already in the list
+            setMessages((prev) => {
+              if (prev.some((msg) => msg.id === newMessage.id)) {
+                return prev;
               }
-            }
+
+              // Get order data to determine admin status
+              const { data: orderData } = await supabase
+                .from("orders")
+                .select("user_id, full_name")
+                .eq("id", selectedOrderId)
+                .single();
+
+              if (!orderData) return prev;
+
+              const isFromOther = newMessage.user_id !== user?.id;
+              const messageWithAdmin = {
+                ...newMessage,
+                is_admin: newMessage.user_id !== orderData.user_id,
+              };
+
+              // Handle notifications for messages from others
+              if (isFromOther) {
+                // Play sound if tab is not focused
+                if (!isTabFocused) {
+                  const audio = new Audio("/notification.mp3");
+                  audio.volume = 0.5; // Reduce volume to 50%
+                  audio.play().catch(() => {});
+                }
+
+                // Show toast notification
+                toast.message("New message", {
+                  description: `${
+                    messageWithAdmin.user_name
+                  }: ${messageWithAdmin.content.slice(0, 60)}${
+                    messageWithAdmin.content.length > 60 ? "..." : ""
+                  }`,
+                  duration: 4000,
+                });
+
+                // Add to unread messages if tab not focused
+                if (!isTabFocused) {
+                  setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
+                }
+              }
+
+              return [...prev, messageWithAdmin];
+            });
+
+            scrollToBottom();
           }
         }
       )
@@ -96,7 +122,7 @@ function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, scrollToBottom]);
+  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
 
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
@@ -181,6 +207,23 @@ function ChatPage() {
       };
     }
   }, [selectedOrderId, subscribeToMessages]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsTabFocused(document.visibilityState === "visible");
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isTabFocused) {
+      setUnreadMessages(new Set());
+    }
+  }, [isTabFocused]);
 
   const checkUser = async () => {
     try {
@@ -425,6 +468,10 @@ function ChatPage() {
                             sending &&
                             message.id === messages[messages.length - 1].id
                               ? "opacity-50"
+                              : ""
+                          } ${
+                            unreadMessages.has(message.id)
+                              ? "animate-highlight-fade"
                               : ""
                           }`}
                         >
