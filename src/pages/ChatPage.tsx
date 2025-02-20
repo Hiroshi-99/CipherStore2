@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import { Send, RefreshCw, Loader2 } from "lucide-react";
+import { Send, RefreshCw, Search, MessageSquare } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 
@@ -18,42 +18,38 @@ interface Message {
 interface Order {
   id: string;
   full_name: string;
+  email: string;
   status: string;
 }
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     setPageTitle("Chat");
     checkUser();
+    fetchOrders();
   }, []);
 
   useEffect(() => {
-    if (user) {
-      fetchOrders();
-      const messagesSubscription = subscribeToMessages();
+    if (selectedOrderId) {
+      fetchMessages(selectedOrderId);
+      const subscription = subscribeToMessages(selectedOrderId);
       return () => {
-        messagesSubscription?.unsubscribe();
+        subscription?.unsubscribe();
       };
     }
-  }, [user]);
-
-  useEffect(() => {
-    if (selectedOrder) {
-      fetchMessages();
-    }
-  }, [selectedOrder]);
+  }, [selectedOrderId]);
 
   const checkUser = async () => {
     const {
@@ -72,45 +68,44 @@ function ChatPage() {
 
   const fetchOrders = async () => {
     try {
-      const { data, error } = await supabase
+      const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
-        .select("id, full_name, status")
+        .select("*")
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
-      setOrders(data || []);
-      if (data?.[0]) {
-        setSelectedOrder(data[0].id);
+      if (ordersError) throw ordersError;
+      setOrders(ordersData || []);
+
+      // Select first order by default
+      if (ordersData?.[0]) {
+        setSelectedOrderId(ordersData[0].id);
       }
     } catch (error) {
       console.error("Error fetching orders:", error);
       setError("Failed to load orders");
-    }
-  };
-
-  const fetchMessages = async () => {
-    if (!selectedOrder) return;
-
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", selectedOrder)
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-      setMessages(data || []);
-      scrollToBottom();
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      setError("Failed to load messages");
     } finally {
       setLoading(false);
     }
   };
 
-  const subscribeToMessages = () => {
+  const fetchMessages = async (orderId: string) => {
+    try {
+      const { data: messagesData, error: messagesError } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: true });
+
+      if (messagesError) throw messagesError;
+      setMessages(messagesData || []);
+      scrollToBottom();
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      setError("Failed to load messages");
+    }
+  };
+
+  const subscribeToMessages = (orderId: string) => {
     return supabase
       .channel("messages")
       .on(
@@ -119,7 +114,7 @@ function ChatPage() {
           event: "*",
           schema: "public",
           table: "messages",
-          filter: selectedOrder ? `order_id=eq.${selectedOrder}` : undefined,
+          filter: `order_id=eq.${orderId}`,
         },
         (payload) => {
           if (payload.eventType === "INSERT") {
@@ -132,14 +127,12 @@ function ChatPage() {
   };
 
   const scrollToBottom = () => {
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 100);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !newMessage.trim() || sending || !selectedOrder) return;
+    if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
 
     setSending(true);
     try {
@@ -147,7 +140,7 @@ function ChatPage() {
         {
           content: newMessage.trim(),
           user_id: user.id,
-          order_id: selectedOrder,
+          order_id: selectedOrderId,
           is_admin: isAdmin,
           user_name: user.user_metadata.full_name || user.email,
           user_avatar: user.user_metadata.avatar_url,
@@ -156,7 +149,6 @@ function ChatPage() {
 
       if (messageError) throw messageError;
       setNewMessage("");
-      inputRef.current?.focus();
     } catch (error) {
       console.error("Error sending message:", error);
       setError("Failed to send message");
@@ -164,6 +156,12 @@ function ChatPage() {
       setSending(false);
     }
   };
+
+  const filteredOrders = orders.filter(
+    (order) =>
+      order.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen relative">
@@ -186,109 +184,148 @@ function ChatPage() {
         <main className="max-w-6xl mx-auto px-4 py-8">
           <div className="grid grid-cols-4 gap-6">
             {/* Orders Sidebar */}
-            <div className="col-span-1 space-y-2">
-              {orders.map((order) => (
-                <button
-                  key={order.id}
-                  onClick={() => setSelectedOrder(order.id)}
-                  className={`w-full text-left p-4 rounded-lg transition-colors ${
-                    selectedOrder === order.id
-                      ? "bg-emerald-500/20 text-emerald-400"
-                      : "bg-white/5 hover:bg-white/10 text-white"
-                  }`}
-                >
-                  <p className="font-medium truncate">{order.full_name}</p>
-                  <p className="text-sm text-white/50 mt-1">
-                    Status: {order.status}
-                  </p>
-                </button>
-              ))}
+            <div className="col-span-1">
+              <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-white/10">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      placeholder="Search orders..."
+                      className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                    />
+                    <Search
+                      className="absolute left-3 top-2.5 text-white/50"
+                      size={20}
+                    />
+                  </div>
+                </div>
+                <div className="h-[600px] overflow-y-auto">
+                  {filteredOrders.map((order) => (
+                    <button
+                      key={order.id}
+                      onClick={() => setSelectedOrderId(order.id)}
+                      className={`w-full p-4 text-left hover:bg-white/5 transition-colors ${
+                        selectedOrderId === order.id ? "bg-white/10" : ""
+                      }`}
+                    >
+                      <h3 className="font-medium text-white">
+                        {order.full_name}
+                      </h3>
+                      <p className="text-sm text-white/70">{order.email}</p>
+                      <span
+                        className={`text-xs px-2 py-1 rounded mt-2 inline-block ${
+                          order.status === "active"
+                            ? "bg-emerald-400/20 text-emerald-400"
+                            : order.status === "rejected"
+                            ? "bg-red-400/20 text-red-400"
+                            : "bg-yellow-400/20 text-yellow-400"
+                        }`}
+                      >
+                        {order.status.toUpperCase()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Chat Area */}
-            <div className="col-span-3 backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
-              {loading ? (
-                <div className="h-[600px] flex items-center justify-center">
-                  <Loader2 className="w-8 h-8 text-white animate-spin" />
-                </div>
-              ) : (
-                <>
-                  {/* Messages Container */}
-                  <div className="h-[600px] overflow-y-auto p-6 space-y-4">
-                    {messages.map((message) => (
-                      <div
-                        key={message.id}
-                        className={`flex items-start gap-3 ${
-                          message.is_admin ? "justify-start" : "justify-end"
-                        }`}
-                      >
-                        {message.is_admin && (
-                          <img
-                            src={message.user_avatar || "/default-avatar.png"}
-                            alt="Avatar"
-                            className="w-8 h-8 rounded-full"
-                          />
-                        )}
-                        <div
-                          className={`max-w-[70%] ${
-                            message.is_admin
-                              ? "bg-white/10"
-                              : "bg-emerald-500/20"
-                          } rounded-lg p-3`}
-                        >
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-sm font-medium text-white/90">
-                              {message.user_name}
-                            </span>
-                            <span className="text-xs text-white/50">
-                              {new Date(message.created_at).toLocaleString()}
-                            </span>
-                          </div>
-                          <p className="text-white/90 whitespace-pre-wrap">
-                            {message.content}
-                          </p>
+            <div className="col-span-3">
+              <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+                {selectedOrderId ? (
+                  <>
+                    <div className="h-[600px] overflow-y-auto p-6 space-y-4">
+                      {messages.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-full text-white/50">
+                          <MessageSquare size={48} />
+                          <p className="mt-4">No messages yet</p>
                         </div>
-                        {!message.is_admin && (
-                          <img
-                            src={message.user_avatar || "/default-avatar.png"}
-                            alt="Avatar"
-                            className="w-8 h-8 rounded-full"
-                          />
-                        )}
-                      </div>
-                    ))}
-                    <div ref={messagesEndRef} />
-                  </div>
-
-                  {/* Message Input */}
-                  <form
-                    onSubmit={handleSendMessage}
-                    className="border-t border-white/10 p-4"
-                  >
-                    <div className="flex gap-2">
-                      <input
-                        ref={inputRef}
-                        type="text"
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        placeholder="Type your message..."
-                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!newMessage.trim() || sending}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {sending ? (
-                          <RefreshCw className="w-5 h-5 animate-spin" />
-                        ) : (
-                          <Send className="w-5 h-5" />
-                        )}
-                      </button>
+                      ) : (
+                        messages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={`flex items-start gap-3 ${
+                              message.is_admin ? "justify-start" : "justify-end"
+                            }`}
+                          >
+                            {message.is_admin && (
+                              <img
+                                src={
+                                  message.user_avatar || "/default-avatar.png"
+                                }
+                                alt="Avatar"
+                                className="w-8 h-8 rounded-full"
+                              />
+                            )}
+                            <div
+                              className={`max-w-[70%] ${
+                                message.is_admin
+                                  ? "bg-white/10"
+                                  : "bg-emerald-500/20"
+                              } rounded-lg p-3`}
+                            >
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-sm font-medium text-white/90">
+                                  {message.user_name}
+                                </span>
+                                <span className="text-xs text-white/50">
+                                  {new Date(
+                                    message.created_at
+                                  ).toLocaleTimeString()}
+                                </span>
+                              </div>
+                              <p className="text-white/90">{message.content}</p>
+                            </div>
+                            {!message.is_admin && (
+                              <img
+                                src={
+                                  message.user_avatar || "/default-avatar.png"
+                                }
+                                alt="Avatar"
+                                className="w-8 h-8 rounded-full"
+                              />
+                            )}
+                          </div>
+                        ))
+                      )}
+                      <div ref={messagesEndRef} />
                     </div>
-                  </form>
-                </>
-              )}
+
+                    <form
+                      onSubmit={handleSendMessage}
+                      className="border-t border-white/10 p-4"
+                    >
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newMessage}
+                          onChange={(e) => setNewMessage(e.target.value)}
+                          placeholder="Type your message..."
+                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newMessage.trim() || sending}
+                          className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {sending ? (
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                          ) : (
+                            <Send className="w-5 h-5" />
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-[600px] text-white/50">
+                    <MessageSquare size={48} />
+                    <p className="mt-4">Select an order to start chatting</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </main>
