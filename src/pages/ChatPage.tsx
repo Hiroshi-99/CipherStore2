@@ -45,7 +45,7 @@ function ChatPage() {
   }, []);
 
   const subscribeToMessages = useCallback(() => {
-    if (!selectedOrderId) return;
+    if (!selectedOrderId) return undefined;
 
     const channel = supabase
       .channel(`messages:${selectedOrderId}`)
@@ -82,9 +82,9 @@ function ChatPage() {
       .subscribe();
 
     return () => {
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
-  }, [selectedOrderId]);
+  }, [selectedOrderId, scrollToBottom]);
 
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
@@ -131,9 +131,11 @@ function ChatPage() {
   }, []);
 
   useEffect(() => {
-    const subscription = subscribeToMessages();
+    const cleanup = subscribeToMessages();
     return () => {
-      subscription.unsubscribe();
+      if (cleanup && typeof cleanup === "function") {
+        cleanup();
+      }
     };
   }, [subscribeToMessages]);
 
