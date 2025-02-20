@@ -131,6 +131,18 @@ export const handler: Handler = async (event) => {
       );
     }
 
+    // Create webhook first in the parent channel
+    let webhook;
+    try {
+      webhook = await channel.createWebhook({
+        name: "Order Bot",
+        avatar: "https://i.imgur.com/AfFp7pu.png",
+      });
+    } catch (webhookError) {
+      logError(webhookError, "Webhook creation");
+      throw new Error("Failed to create Discord webhook");
+    }
+
     // Create embed for order details
     const embed = new EmbedBuilder()
       .setColor(0x00ff00)
@@ -159,24 +171,15 @@ export const handler: Handler = async (event) => {
       throw new Error("Failed to create Discord thread");
     }
 
-    // Send initial message
+    // Send initial message using webhook
     try {
-      await thread.send({ embeds: [embed] });
+      await webhook.send({
+        threadId: thread.id,
+        embeds: [embed],
+      });
     } catch (messageError) {
       logError(messageError, "Sending initial message");
       throw new Error("Failed to send initial message to thread");
-    }
-
-    // Create webhook
-    let webhook;
-    try {
-      webhook = await thread.createWebhook({
-        name: "Order Bot",
-        avatar: "https://i.imgur.com/AfFp7pu.png",
-      });
-    } catch (webhookError) {
-      logError(webhookError, "Webhook creation");
-      throw new Error("Failed to create Discord webhook");
     }
 
     // Store channel info in database
