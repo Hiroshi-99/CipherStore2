@@ -7,18 +7,27 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+// Add error logging
+const logError = (error: any, context: string) => {
+  console.error(`Error in ${context}:`, {
+    message: error.message,
+    stack: error.stack,
+    details: error,
+  });
+};
+
 export const handler: Handler = async (event) => {
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      body: JSON.stringify({ error: "Method not allowed" }),
-    };
-  }
+  let discordClient: Client | null = null;
 
   try {
-    const { orderId, status, notes, accountFileUrl } = JSON.parse(
-      event.body || "{}"
-    );
+    if (event.httpMethod !== "POST") {
+      return {
+        statusCode: 405,
+        body: JSON.stringify({ error: "Method not allowed" }),
+      };
+    }
+
+    const { orderId, status, notes } = JSON.parse(event.body || "{}");
 
     if (!orderId || !status) {
       return {
@@ -30,10 +39,14 @@ export const handler: Handler = async (event) => {
     // Update payment proof status
     const { error: updateError } = await supabase
       .from("payment_proofs")
-      .update({ status, admin_notes: notes })
+      .update({
+        status,
+        admin_notes: notes || `Payment ${status} by admin`,
+      })
       .eq("order_id", orderId);
 
     if (updateError) {
+      logError(updateError, "Payment proof update");
       throw updateError;
     }
 
@@ -42,23 +55,24 @@ export const handler: Handler = async (event) => {
       .from("orders")
       .update({
         status: status === "approved" ? "active" : "rejected",
-        account_file_url: accountFileUrl || null,
       })
       .eq("id", orderId);
 
     if (orderError) {
+      logError(orderError, "Order update");
       throw orderError;
     }
 
     // Get order details
-    const { data: order } = await supabase
+    const { data: order, error: fetchError } = await supabase
       .from("orders")
       .select("*, discord_channels(*)")
       .eq("id", orderId)
       .single();
 
-    if (!order) {
-      throw new Error("Order not found");
+    if (fetchError || !order) {
+      logError(fetchError || new Error("Order not found"), "Order fetch");
+      throw fetchError || new Error("Order not found");
     }
 
     // Create inbox message
@@ -74,39 +88,36 @@ export const handler: Handler = async (event) => {
       type: "payment_status",
     };
 
-    if (accountFileUrl) {
-      message.content +=
-        "\n\nYour account file has been uploaded. You can view it in your inbox.";
-      message.type = "account_file";
-      message.file_url = accountFileUrl;
-    }
-
     const { error: inboxError } = await supabase
       .from("inbox_messages")
       .insert([message]);
 
     if (inboxError) {
-      throw inboxError;
+      logError(inboxError, "Inbox message creation");
+      // Don't throw here as it's not critical
     }
 
-    // Update Discord thread
-    const client = new Client({
-      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
-    });
+    // Update Discord thread if available
+    if (order.discord_channels?.channel_id) {
+      discordClient = new Client({
+        intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+      });
 
-    await client.login(process.env.DISCORD_TOKEN);
+      await discordClient.login(process.env.DISCORD_TOKEN);
 
-    const channel = await client.channels.fetch(
-      order.discord_channels.channel_id
-    );
-    if (channel?.isTextBased()) {
-      const embed = new EmbedBuilder()
-        .setColor(status === "approved" ? 0x00ff00 : 0xff0000)
-        .setTitle(`Payment ${status.toUpperCase()}`)
-        .setDescription(message.content)
-        .setTimestamp();
+      const channel = await discordClient.channels.fetch(
+        order.discord_channels.channel_id
+      );
 
-      await channel.send({ embeds: [embed] });
+      if (channel?.isTextBased()) {
+        const embed = new EmbedBuilder()
+          .setColor(status === "approved" ? 0x00ff00 : 0xff0000)
+          .setTitle(`Payment ${status.toUpperCase()}`)
+          .setDescription(message.content)
+          .setTimestamp();
+
+        await channel.send({ embeds: [embed] });
+      }
     }
 
     return {
@@ -114,7 +125,7 @@ export const handler: Handler = async (event) => {
       body: JSON.stringify({ success: true }),
     };
   } catch (error) {
-    console.error("Error updating payment status:", error);
+    logError(error, "Payment status update");
     return {
       statusCode: 500,
       body: JSON.stringify({
@@ -122,5 +133,9 @@ export const handler: Handler = async (event) => {
         details: error instanceof Error ? error.message : "Unknown error",
       }),
     };
+  } finally {
+    if (discordClient) {
+      await discordClient.destroy();
+    }
   }
 };

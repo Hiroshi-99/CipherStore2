@@ -115,12 +115,16 @@ function AdminPage() {
             "Content-Type": "application/json",
             Authorization: headers.Authorization,
           },
-          body: JSON.stringify({ orderId, status, notes }),
+          body: JSON.stringify({
+            orderId,
+            status,
+            notes: notes || `Payment ${status} by admin`,
+          }),
         }
       );
 
+      const data = await response.json();
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(
           data.details || data.error || "Failed to update payment status"
         );
