@@ -2,6 +2,14 @@ import { useState, useCallback, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import { User } from "@supabase/supabase-js";
 
+interface FileAttachment {
+  id: string;
+  url: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
 interface Message {
   id: string;
   content: string;
@@ -11,6 +19,8 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
+  is_read?: boolean;
+  attachments?: FileAttachment[];
 }
 
 export function useMessages(user: User | null) {
@@ -32,6 +42,9 @@ export function useMessages(user: User | null) {
           orders!inner(
             user_id,
             full_name
+          ),
+          message_reads!left(
+            is_read
           )
         `
         )
@@ -44,7 +57,9 @@ export function useMessages(user: User | null) {
         data?.map((msg) => ({
           ...msg,
           is_admin: msg.user_id !== msg.orders.user_id,
+          is_read: msg.message_reads?.[0]?.is_read ?? false,
           orders: undefined,
+          message_reads: undefined,
         })) || []
       );
     } catch (err) {

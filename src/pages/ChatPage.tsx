@@ -1,11 +1,18 @@
-import React, { useCallback } from "react";
-import { Send, RefreshCw } from "lucide-react";
+import React, { useCallback, useRef, useState } from "react";
+import { Send, RefreshCw, ChevronDown, Paperclip, X } from "lucide-react";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { useAuth } from "../hooks/useAuth";
 import { usePageTitle } from "../hooks/usePageTitle";
 import { useChat } from "../hooks/useChat";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { useScrollToBottom } from "../hooks/useScrollToBottom";
+import { useTypingStatus } from "../hooks/useTypingStatus";
+import { useReadReceipts } from "../hooks/useReadReceipts";
+import { MessageAttachment } from "../components/MessageAttachment";
+import { useFileAttachments } from "../hooks/useFileAttachments";
+import { useDragAndDrop } from "../hooks/useDragAndDrop";
+import { FilePreview } from "../components/FilePreview";
 
 interface Message {
   id: string;
@@ -16,12 +23,24 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
+  is_read: boolean;
+  attachments?: { id: string; url: string }[];
 }
 
 interface Order {
   id: string;
   full_name: string;
   messages?: { id: string; created_at: string }[];
+}
+
+interface MessageBubbleProps {
+  message: Message;
+  isLatest: boolean;
+  sending: boolean;
+  isUnread: boolean;
+  onRetry: () => void;
+  isPending: boolean;
+  isRead: boolean;
 }
 
 // Separate components for better performance
@@ -32,16 +51,11 @@ const MessageBubble = React.memo(function MessageBubble({
   isUnread,
   onRetry,
   isPending,
-}: {
-  message: Message;
-  isLatest: boolean;
-  sending: boolean;
-  isUnread: boolean;
-  onRetry: () => void;
-  isPending: boolean;
-}) {
+  isRead,
+}: MessageBubbleProps) {
   return (
     <div
+      data-message-id={message.id}
       className={`flex items-start gap-3 ${
         message.is_admin ? "justify-start" : "justify-end"
       } ${isLatest && sending ? "opacity-50" : ""} ${
@@ -56,38 +70,62 @@ const MessageBubble = React.memo(function MessageBubble({
           loading="lazy"
         />
       )}
-      <div
-        className={`max-w-[70%] ${
-          message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-        } rounded-lg p-3`}
-      >
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-medium text-white/90">
-            {message.user_name}
-          </span>
-          <span className="text-xs text-white/50">
-            {new Date(message.created_at).toLocaleString()}
-          </span>
+      <div className="space-y-2">
+        <div
+          className={`max-w-[70%] ${
+            message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
+          } rounded-lg p-3`}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-sm font-medium text-white/90">
+              {message.user_name}
+            </span>
+            <span className="text-xs text-white/50">
+              {new Date(message.created_at).toLocaleString()}
+            </span>
+          </div>
+          <p className="text-white/90 whitespace-pre-wrap break-words">
+            {message.content}
+          </p>
         </div>
-        <p className="text-white/90 whitespace-pre-wrap break-words">
-          {message.content}
-        </p>
+        {message.attachments?.map((attachment) => (
+          <MessageAttachment key={attachment.id} attachment={attachment} />
+        ))}
       </div>
       {!message.is_admin && (
-        <img
-          src={message.user_avatar || "/default-avatar.png"}
-          alt="Avatar"
-          className="w-8 h-8 rounded-full"
-          loading="lazy"
-        />
-      )}
-      {isPending && (
-        <button
-          onClick={onRetry}
-          className="text-xs text-red-400 hover:text-red-300 transition-colors"
-        >
-          Retry
-        </button>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            {isPending && (
+              <button
+                onClick={onRetry}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                Retry
+              </button>
+            )}
+            {isRead && (
+              <svg
+                className="w-4 h-4 text-emerald-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            )}
+          </div>
+          <img
+            src={message.user_avatar || "/default-avatar.png"}
+            alt="Avatar"
+            className="w-8 h-8 rounded-full"
+            loading="lazy"
+          />
+        </div>
       )}
     </div>
   );
@@ -124,6 +162,217 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
+function ChatArea({
+  messages,
+  messageQueue,
+  pendingMessages,
+  unreadMessages,
+  onRetry,
+  typingUsers,
+}: {
+  messages: Message[];
+  messageQueue: React.RefObject<Set<string>>;
+  pendingMessages: React.RefObject<Map<string, Message>>;
+  unreadMessages: Set<string>;
+  onRetry: (id: string) => void;
+  typingUsers: Set<string>;
+}) {
+  const { containerRef, showScrollButton, scrollToBottom } = useScrollToBottom([
+    messages.length,
+  ]);
+
+  if (!messages.length) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+        <p>No messages yet</p>
+        <p className="text-sm">Start the conversation!</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative h-full">
+      <div
+        ref={containerRef}
+        className="h-full overflow-y-auto p-4 md:p-6 space-y-4 scroll-smooth"
+      >
+        {messages.map((message) => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            isLatest={message.id === messages[messages.length - 1].id}
+            sending={messageQueue.current.has(message.id)}
+            isUnread={unreadMessages.has(message.id)}
+            onRetry={() => onRetry(message.id)}
+            isPending={pendingMessages.current.has(message.id)}
+            isRead={message.is_read}
+          />
+        ))}
+
+        {typingUsers.size > 0 && (
+          <div className="flex items-center gap-2 text-white/50 text-sm animate-fade-in">
+            <div className="flex items-center gap-1">
+              {Array.from(typingUsers).join(", ")}
+              <span>{typingUsers.size === 1 ? "is" : "are"} typing</span>
+            </div>
+            <div className="flex gap-1">
+              <span className="animate-bounce">•</span>
+              <span
+                className="animate-bounce"
+                style={{ animationDelay: "0.2s" }}
+              >
+                •
+              </span>
+              <span
+                className="animate-bounce"
+                style={{ animationDelay: "0.4s" }}
+              >
+                •
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showScrollButton && (
+        <button
+          onClick={() => scrollToBottom()}
+          className="absolute bottom-4 right-4 bg-emerald-500 p-2 rounded-full shadow-lg hover:bg-emerald-600 transition-colors"
+          aria-label="Scroll to bottom"
+        >
+          <ChevronDown className="w-5 h-5 text-white" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ChatInput({
+  onSubmit,
+  disabled,
+  value,
+  onChange,
+  onTyping,
+}: {
+  onSubmit: (content: string, attachments: FileAttachment[]) => void;
+  disabled: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  onTyping: () => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const { uploadFile, uploading, progress } = useFileAttachments();
+  const { isDragging, handleDragOver, handleDragLeave, handleDrop } =
+    useDragAndDrop((files) => setPendingFiles((prev) => [...prev, ...files]));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (disabled || (!value.trim() && !pendingFiles.length)) return;
+
+    try {
+      const uploadedFiles = await Promise.all(
+        pendingFiles.map((file) => uploadFile(file))
+      );
+
+      const attachments = uploadedFiles.filter(Boolean) as FileAttachment[];
+      onSubmit(value.trim(), attachments);
+      setPendingFiles([]);
+    } catch (error) {
+      console.error("Failed to upload files:", error);
+      // You might want to show an error toast here
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setPendingFiles((prev) => [...prev, ...files]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeFile = (index: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative"
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-10 backdrop-blur-sm bg-black/50 border-2 border-dashed border-emerald-500 rounded-lg flex items-center justify-center">
+          <div className="text-emerald-400 text-lg font-medium">
+            Drop files to upload
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
+        {pendingFiles.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+            {pendingFiles.map((file, index) => (
+              <FilePreview
+                key={index}
+                file={file}
+                onRemove={() => removeFile(index)}
+              />
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+            disabled={disabled}
+          >
+            <Paperclip className="w-5 h-5 text-white/70" />
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            className="hidden"
+            multiple
+            accept={ALLOWED_TYPES.join(",")}
+          />
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => {
+              onTyping();
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit(e);
+              }
+            }}
+            placeholder="Type your message..."
+            className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+            disabled={disabled}
+          />
+          <button
+            type="submit"
+            disabled={disabled || (!value.trim() && !pendingFiles.length)}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {uploading ? (
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 animate-spin" />
+                <span>{Math.round(progress)}%</span>
+              </div>
+            ) : (
+              <Send className="w-5 h-5" />
+            )}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function ChatPage() {
   usePageTitle("Chat");
   const { user, isAdmin, loading: authLoading } = useAuth();
@@ -144,6 +393,14 @@ function ChatPage() {
     orders,
     handleSendMessage,
   } = useChat(user, isAdmin);
+
+  const { typingUsers, handleTyping } = useTypingStatus(
+    selectedOrderId,
+    user?.id ?? null,
+    user?.user_metadata?.full_name ?? user?.email ?? null
+  );
+
+  useReadReceipts(selectedOrderId, user?.id ?? null, isAdmin);
 
   const handleRetry = useCallback(
     (messageId: string) => {
@@ -249,53 +506,30 @@ function ChatPage() {
               <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
                 {selectedOrderId ? (
                   <>
-                    <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
+                    <div className="h-[calc(100vh-16rem)] md:h-[600px]">
                       {messagesLoading ? (
                         <div className="flex items-center justify-center h-full">
                           <LoadingSpinner size="lg" light />
                         </div>
                       ) : (
-                        messages.map((message) => (
-                          <MessageBubble
-                            key={message.id}
-                            message={message}
-                            isLatest={
-                              message.id === messages[messages.length - 1].id
-                            }
-                            sending={messageQueue.current.has(message.id)}
-                            isUnread={unreadMessages.has(message.id)}
-                            onRetry={() => handleRetry(message.id)}
-                            isPending={pendingMessages.current.has(message.id)}
-                          />
-                        ))
+                        <ChatArea
+                          messages={messages}
+                          messageQueue={messageQueue}
+                          pendingMessages={pendingMessages}
+                          unreadMessages={unreadMessages}
+                          onRetry={handleRetry}
+                          typingUsers={typingUsers}
+                        />
                       )}
                     </div>
 
-                    <form
+                    <ChatInput
                       onSubmit={handleSendMessage}
-                      className="border-t border-white/10 p-4"
-                    >
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newMessage}
-                          onChange={(e) => setNewMessage(e.target.value)}
-                          placeholder="Type your message..."
-                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newMessage.trim() || sending}
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {sending ? (
-                            <RefreshCw className="w-5 h-5 animate-spin" />
-                          ) : (
-                            <Send className="w-5 h-5" />
-                          )}
-                        </button>
-                      </div>
-                    </form>
+                      disabled={!newMessage.trim() || sending}
+                      value={newMessage}
+                      onChange={(value) => setNewMessage(value)}
+                      onTyping={handleTyping}
+                    />
                   </>
                 ) : (
                   <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
