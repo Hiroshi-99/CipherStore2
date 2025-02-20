@@ -67,7 +67,8 @@ CREATE TABLE inbox_messages (
 CREATE TABLE admin_users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL UNIQUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_owner BOOLEAN DEFAULT FALSE
 );
 
 ------------------------------------------
@@ -277,28 +278,22 @@ WITH CHECK (
 );
 
 -- Messages policies
-CREATE POLICY "Users can view messages"
+CREATE POLICY "Allow users to view their own messages"
 ON messages FOR SELECT
 TO authenticated
 USING (
-    EXISTS (
-        SELECT 1 FROM orders
-        WHERE orders.id = order_id
-        AND (orders.user_id = auth.uid() OR is_owner())
-    )
+    user_id = auth.uid()::text
+    OR auth.uid() IN (SELECT user_id FROM admin_users)
+    OR is_owner()
 );
 
-CREATE POLICY "Users can create messages"
+CREATE POLICY "Allow users to send messages"
 ON messages FOR INSERT
 TO authenticated
 WITH CHECK (
-    EXISTS (
-        SELECT 1 FROM orders
-        WHERE orders.id = order_id
-        AND orders.user_id = auth.uid()
-    )
-    OR is_owner()
+    user_id = auth.uid()::text
     OR auth.uid() IN (SELECT user_id FROM admin_users)
+    OR is_owner()
 );
 
 -- Inbox messages policies
@@ -445,3 +440,16 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Add is_owner column to admin_users if not exists
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name = 'admin_users' 
+        AND column_name = 'is_owner'
+    ) THEN
+        ALTER TABLE admin_users ADD COLUMN is_owner BOOLEAN DEFAULT FALSE;
+    END IF;
+END $$;
