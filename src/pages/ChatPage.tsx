@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import { Send, RefreshCw } from "lucide-react";
@@ -16,11 +22,106 @@ interface Message {
   is_admin: boolean;
   created_at: string;
   order_id: string;
+  user_id: string;
+}
+
+interface Order {
+  id: string;
+  full_name: string;
+  messages?: { id: string; created_at: string }[];
 }
 
 interface ChatProps {
   orderId: string;
 }
+
+// Create separate components for better performance
+const MessageBubble = React.memo(function MessageBubble({
+  message,
+  isLatest,
+  sending,
+  isUnread,
+}: {
+  message: Message;
+  isLatest: boolean;
+  sending: boolean;
+  isUnread: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-start gap-3 ${
+        message.is_admin ? "justify-start" : "justify-end"
+      } ${isLatest && sending ? "opacity-50" : ""} ${
+        isUnread ? "animate-highlight-fade" : ""
+      }`}
+    >
+      {message.is_admin && (
+        <img
+          src={message.user_avatar || "/default-avatar.png"}
+          alt="Avatar"
+          className="w-8 h-8 rounded-full"
+          loading="lazy"
+        />
+      )}
+      <div
+        className={`max-w-[70%] ${
+          message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
+        } rounded-lg p-3`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-medium text-white/90">
+            {message.user_name}
+          </span>
+          <span className="text-xs text-white/50">
+            {new Date(message.created_at).toLocaleString()}
+          </span>
+        </div>
+        <p className="text-white/90 whitespace-pre-wrap break-words">
+          {message.content}
+        </p>
+      </div>
+      {!message.is_admin && (
+        <img
+          src={message.user_avatar || "/default-avatar.png"}
+          alt="Avatar"
+          className="w-8 h-8 rounded-full"
+          loading="lazy"
+        />
+      )}
+    </div>
+  );
+});
+
+const OrderButton = React.memo(function OrderButton({
+  order,
+  isSelected,
+  isAdmin,
+  onClick,
+}: {
+  order: Order;
+  isSelected: boolean;
+  isAdmin: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+        isSelected
+          ? "bg-emerald-500/20 text-emerald-400"
+          : "text-white/70 hover:bg-white/10"
+      }`}
+    >
+      <div className="font-medium">{order.full_name}</div>
+      <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
+      {isAdmin && order.messages?.length > 0 && (
+        <div className="text-xs text-emerald-400 mt-1">
+          {order.messages.length} messages
+        </div>
+      )}
+    </button>
+  );
+});
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -48,9 +149,46 @@ function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  // Memoize orders list
+  const ordersList = useMemo(() => {
+    return (isAdmin ? adminOrders : userOrders).map((order) => (
+      <OrderButton
+        key={order.id}
+        order={order}
+        isSelected={selectedOrderId === order.id}
+        isAdmin={isAdmin}
+        onClick={() => {
+          setSelectedOrderId(order.id);
+          setShowSidebar(false);
+        }}
+      />
+    ));
+  }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
+
+  // Memoize messages list
+  const messagesList = useMemo(() => {
+    return messages.map((message, index) => (
+      <MessageBubble
+        key={message.id}
+        message={message}
+        isLatest={index === messages.length - 1}
+        sending={sending}
+        isUnread={unreadMessages.has(message.id)}
+      />
+    ));
+  }, [messages, sending, unreadMessages]);
+
+  // Debounced message input handler
+  const debouncedSetNewMessage = useCallback(
+    debounce((value: string) => setNewMessage(value), 100),
+    []
+  );
+
+  // Optimized message subscription
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
+    let isSubscribed = true;
     const channel = supabase
       .channel(`messages:${selectedOrderId}`)
       .on(
@@ -62,75 +200,76 @@ function ChatPage() {
           filter: `order_id=eq.${selectedOrderId}`,
         },
         async (payload) => {
-          if (payload.eventType === "INSERT") {
-            const newMessage = payload.new as Message;
+          if (!isSubscribed || payload.eventType !== "INSERT") return;
 
-            // Skip if message is already in the list
-            setMessages((prev) => {
-              if (prev.some((msg) => msg.id === newMessage.id)) {
-                return prev;
-              }
+          const newMessage = payload.new as Message;
+          if (!newMessage) return;
 
-              // Get order data to determine admin status
-              const getOrderData = async () => {
-                const { data: orderData } = await supabase
-                  .from("orders")
-                  .select("user_id, full_name")
-                  .eq("id", selectedOrderId)
-                  .single();
+          // Skip if message is already in the list
+          setMessages((prev) => {
+            if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
-                if (!orderData) return prev;
+            // Get order data to determine admin status
+            const getOrderData = async () => {
+              if (!isSubscribed) return prev;
 
-                const isFromOther = newMessage.user_id !== user?.id;
-                const messageWithAdmin = {
-                  ...newMessage,
-                  is_admin: newMessage.user_id !== orderData.user_id,
-                };
+              const { data: orderData } = await supabase
+                .from("orders")
+                .select("user_id, full_name")
+                .eq("id", selectedOrderId)
+                .single();
 
-                // Handle notifications for messages from others
-                if (isFromOther) {
-                  // Play sound if tab is not focused
-                  if (!isTabFocused) {
-                    const audio = new Audio("/notification.mp3");
-                    audio.volume = 0.5;
-                    audio.play().catch(() => {});
+              if (!orderData || !isSubscribed) return prev;
 
-                    // Show notification
-                    setNotification(
-                      `${
-                        messageWithAdmin.user_name
-                      }: ${messageWithAdmin.content.slice(0, 60)}${
-                        messageWithAdmin.content.length > 60 ? "..." : ""
-                      }`
-                    );
-                    setTimeout(() => setNotification(null), 4000);
-                  }
-
-                  // Add to unread messages if tab not focused
-                  if (!isTabFocused) {
-                    setUnreadMessages((prev) =>
-                      new Set(prev).add(newMessage.id)
-                    );
-                  }
-                }
-
-                return [...prev, messageWithAdmin];
+              const isFromOther = newMessage.user_id !== user?.id;
+              const messageWithAdmin = {
+                ...newMessage,
+                is_admin: newMessage.user_id !== orderData.user_id,
               };
 
-              getOrderData();
-              return prev;
-            });
+              // Handle notifications for messages from others
+              if (isFromOther) {
+                handleNewMessageNotification(messageWithAdmin);
+              }
 
-            scrollToBottom();
-          }
+              return [...prev, messageWithAdmin];
+            };
+
+            getOrderData();
+            return prev;
+          });
+
+          requestAnimationFrame(scrollToBottom);
         }
       )
       .subscribe();
 
     return () => {
+      isSubscribed = false;
       supabase.removeChannel(channel);
     };
   }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
+
+  // Extracted notification logic
+  const handleNewMessageNotification = useCallback(
+    (message: Message) => {
+      if (!isTabFocused) {
+        const audio = new Audio("/notification.mp3");
+        audio.volume = 0.5;
+        audio.play().catch(() => {});
+
+        setNotification(
+          `${message.user_name}: ${message.content.slice(0, 60)}${
+            message.content.length > 60 ? "..." : ""
+          }`
+        );
+        setTimeout(() => setNotification(null), 4000);
+
+        setUnreadMessages((prev) => new Set(prev).add(message.id));
+      }
+    },
+    [isTabFocused]
+  );
 
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
@@ -427,30 +566,7 @@ function ChatPage() {
 
               {/* Orders List */}
               <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                {(isAdmin ? adminOrders : userOrders).map((order) => (
-                  <button
-                    key={order.id}
-                    onClick={() => {
-                      setSelectedOrderId(order.id);
-                      setShowSidebar(false);
-                    }}
-                    className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
-                      selectedOrderId === order.id
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : "text-white/70 hover:bg-white/10"
-                    }`}
-                  >
-                    <div className="font-medium">{order.full_name}</div>
-                    <div className="text-sm text-white/50">
-                      Order #{order.id.slice(0, 8)}
-                    </div>
-                    {isAdmin && order.messages?.length > 0 && (
-                      <div className="text-xs text-emerald-400 mt-1">
-                        {order.messages.length} messages
-                      </div>
-                    )}
-                  </button>
-                ))}
+                {ordersList}
               </div>
             </div>
           </div>
@@ -472,57 +588,7 @@ function ChatPage() {
                         <p className="text-sm">Start the conversation!</p>
                       </div>
                     ) : (
-                      messages.map((message) => (
-                        <div
-                          key={message.id}
-                          className={`flex items-start gap-3 ${
-                            message.is_admin ? "justify-start" : "justify-end"
-                          } ${
-                            sending &&
-                            message.id === messages[messages.length - 1].id
-                              ? "opacity-50"
-                              : ""
-                          } ${
-                            unreadMessages.has(message.id)
-                              ? "animate-highlight-fade"
-                              : ""
-                          }`}
-                        >
-                          {message.is_admin && (
-                            <img
-                              src={message.user_avatar || "/default-avatar.png"}
-                              alt="Avatar"
-                              className="w-8 h-8 rounded-full"
-                            />
-                          )}
-                          <div
-                            className={`max-w-[70%] ${
-                              message.is_admin
-                                ? "bg-white/10"
-                                : "bg-emerald-500/20"
-                            } rounded-lg p-3`}
-                          >
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-medium text-white/90">
-                                {message.user_name}
-                              </span>
-                              <span className="text-xs text-white/50">
-                                {new Date(message.created_at).toLocaleString()}
-                              </span>
-                            </div>
-                            <p className="text-white/90 whitespace-pre-wrap break-words">
-                              {message.content}
-                            </p>
-                          </div>
-                          {!message.is_admin && (
-                            <img
-                              src={message.user_avatar || "/default-avatar.png"}
-                              alt="Avatar"
-                              className="w-8 h-8 rounded-full"
-                            />
-                          )}
-                        </div>
-                      ))
+                      messagesList
                     )}
                     <div ref={messagesEndRef} />
                   </div>
@@ -536,7 +602,7 @@ function ChatPage() {
                       <input
                         type="text"
                         value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
+                        onChange={(e) => debouncedSetNewMessage(e.target.value)}
                         placeholder="Type your message..."
                         className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                       />
@@ -566,6 +632,18 @@ function ChatPage() {
       </main>
     </PageContainer>
   );
+}
+
+// Debounce utility
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
 }
 
 export default React.memo(ChatPage);
