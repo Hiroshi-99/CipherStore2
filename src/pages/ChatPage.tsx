@@ -38,6 +38,7 @@ function ChatPage() {
   >([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -218,18 +219,13 @@ function ChatPage() {
       setLoading(true);
       const { data, error } = await supabase
         .from("messages")
-        .select(
-          `
-          *,
-          orders!inner (
-            user_id
-          )
-        `
-        )
+        .select("*, orders!inner(user_id)")
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
       if (error) throw error;
+
+      // Compare message sender with order owner to determine admin status
       setMessages(
         data?.map((msg) => ({
           ...msg,
@@ -264,18 +260,68 @@ function ChatPage() {
   return (
     <PageContainer title="CHAT" showBack user={user}>
       <main className="max-w-6xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
+          {/* Mobile Order Toggle */}
+          <button
+            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
+            onClick={() => setShowSidebar(!showSidebar)}
+          >
+            <svg
+              className="w-6 h-6 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 6h16M4 12h16m-7 6h7"
+              />
+            </svg>
+          </button>
+
           {/* Orders Sidebar */}
-          <div className="md:col-span-1">
-            <div className="backdrop-blur-md bg-black/30 rounded-2xl p-4">
-              <h2 className="text-lg font-medium text-white mb-4">
-                {isAdmin ? "All Orders" : "Your Orders"}
-              </h2>
-              <div className="space-y-2">
+          <div
+            className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
+              showSidebar ? "translate-x-0" : "-translate-x-full"
+            } md:translate-x-0 transition-transform duration-200 ease-in-out`}
+          >
+            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
+              {/* Mobile Close Button */}
+              <div className="flex justify-between items-center mb-4 md:hidden">
+                <h2 className="text-lg font-medium text-white">
+                  {isAdmin ? "All Orders" : "Your Orders"}
+                </h2>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-2 hover:bg-white/10 rounded-lg"
+                >
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Orders List */}
+              <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
                 {(isAdmin ? adminOrders : userOrders).map((order) => (
                   <button
                     key={order.id}
-                    onClick={() => setSelectedOrderId(order.id)}
+                    onClick={() => {
+                      setSelectedOrderId(order.id);
+                      setShowSidebar(false);
+                    }}
                     className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
                       selectedOrderId === order.id
                         ? "bg-emerald-500/20 text-emerald-400"
@@ -303,8 +349,12 @@ function ChatPage() {
               {selectedOrderId ? (
                 <>
                   {/* Messages Container */}
-                  <div className="h-[600px] overflow-y-auto p-6 space-y-4">
-                    {messages.length === 0 ? (
+                  <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
+                    {loading ? (
+                      <div className="flex items-center justify-center h-full">
+                        <LoadingSpinner size="lg" light />
+                      </div>
+                    ) : messages.length === 0 ? (
                       <div className="flex items-center justify-center h-full text-white/50">
                         No messages yet. Start the conversation!
                       </div>
@@ -383,7 +433,7 @@ function ChatPage() {
                   </form>
                 </>
               ) : (
-                <div className="h-[600px] flex items-center justify-center text-white/50">
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex items-center justify-center text-white/50">
                   Select an order to start chatting
                 </div>
               )}

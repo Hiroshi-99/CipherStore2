@@ -48,7 +48,8 @@ CREATE TABLE messages (
     user_avatar TEXT,
     user_name VARCHAR(255),
     discord_message_id VARCHAR(255),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    order_user_id UUID
 );
 
 -- Inbox messages table
@@ -119,6 +120,21 @@ CREATE TRIGGER update_payment_proofs_updated_at
     BEFORE UPDATE ON payment_proofs
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- Add trigger to automatically set order_user_id
+CREATE OR REPLACE FUNCTION set_order_user_id()
+RETURNS TRIGGER AS $$
+BEGIN
+  SELECT user_id INTO NEW.order_user_id
+  FROM orders WHERE id = NEW.order_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_order_user_id_trigger
+BEFORE INSERT ON messages
+FOR EACH ROW
+EXECUTE FUNCTION set_order_user_id();
 
 ------------------------------------------
 -- Storage Configuration
