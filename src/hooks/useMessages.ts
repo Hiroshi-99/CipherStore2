@@ -19,7 +19,7 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
-  is_read?: boolean;
+  is_read: boolean;
   attachments?: FileAttachment[];
 }
 
@@ -31,44 +31,62 @@ export function useMessages(user: User | null) {
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
 
-  const fetchMessages = useCallback(async (orderId: string) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select(
-          `
+  const fetchMessages = useCallback(
+    async (orderId: string) => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // First fetch messages
+        const { data: messagesData, error: messagesError } = await supabase
+          .from("messages")
+          .select(
+            `
           *,
           orders!inner(
             user_id,
             full_name
-          ),
-          message_reads!left(
-            is_read
           )
         `
-        )
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: true });
+          )
+          .eq("order_id", orderId)
+          .order("created_at", { ascending: true });
 
-      if (error) throw error;
+        if (messagesError) throw messagesError;
 
-      setMessages(
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          is_read: msg.message_reads?.[0]?.is_read ?? false,
-          orders: undefined,
-          message_reads: undefined,
-        })) || []
-      );
-    } catch (err) {
-      console.error("Error fetching messages:", err);
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+        // Then fetch read status for these messages
+        const { data: readData, error: readError } = await supabase
+          .from("message_reads")
+          .select("message_id, is_read")
+          .eq("order_id", orderId)
+          .eq("user_id", user?.id);
+
+        if (readError) throw readError;
+
+        // Create a map of read statuses
+        const readMap = new Map(
+          readData?.map((read) => [read.message_id, read.is_read]) ?? []
+        );
+
+        // Combine messages with read status
+        const processedMessages =
+          messagesData?.map((msg) => ({
+            ...msg,
+            is_admin: msg.user_id !== msg.orders.user_id,
+            is_read: readMap.get(msg.id) ?? false,
+            orders: undefined,
+          })) || [];
+
+        setMessages(processedMessages);
+      } catch (err) {
+        console.error("Error fetching messages:", err);
+        setError("Failed to load messages");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [user?.id]
+  );
 
   const sendMessage = useCallback(
     async (content: string, orderId: string, isAdmin: boolean) => {
