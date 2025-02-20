@@ -433,7 +433,7 @@ function ChatPage() {
     [handleSendMessage, pendingMessages, setNewMessage]
   );
 
-  const handleSendMessage = useCallback(
+  const sendMessage = useCallback(
     async (content: string, attachments: FileAttachment[] = []) => {
       if (!selectedOrderId || !user) return;
 
@@ -558,7 +558,7 @@ function ChatPage() {
                     </div>
 
                     <ChatInput
-                      onSubmit={handleSendMessage}
+                      onSubmit={sendMessage}
                       disabled={!selectedOrderId || sending}
                       value={newMessage}
                       onChange={setNewMessage}
