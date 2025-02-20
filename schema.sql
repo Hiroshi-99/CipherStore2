@@ -108,7 +108,7 @@ BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
 -- Add triggers to tables
 CREATE TRIGGER update_orders_updated_at
@@ -186,7 +186,7 @@ WITH CHECK (
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 
 ------------------------------------------
--- Admin Access Control
+-- Row Level Security (RLS) Configuration
 ------------------------------------------
 
 -- Enable RLS on tables
@@ -197,16 +197,37 @@ ALTER TABLE discord_channels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inbox_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 
--- Drop existing policies and functions
-DROP POLICY IF EXISTS "Admin users owner access" ON admin_users;
-DROP POLICY IF EXISTS "Admin users view access" ON admin_users;
-DROP FUNCTION IF EXISTS is_admin();
-
--- Create owner check function
+-- Owner check function
 CREATE OR REPLACE FUNCTION is_owner()
 RETURNS BOOLEAN AS $$
 BEGIN
   RETURN auth.jwt() ->> 'sub' = current_setting('app.owner_id', TRUE);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Admin check function
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN (
+    EXISTS (
+      SELECT 1 FROM admin_users 
+      WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Order permission check function
+CREATE OR REPLACE FUNCTION has_order_permission(order_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = order_id
+    AND (orders.user_id = auth.uid() OR is_admin())
+  );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -221,6 +242,17 @@ ON admin_users FOR INSERT
 TO authenticated
 WITH CHECK (true);
 
+CREATE POLICY "Allow users to view their own admin status"
+ON admin_users FOR SELECT
+TO authenticated
+USING (
+  auth.uid() = user_id
+  OR EXISTS (
+    SELECT 1 FROM admin_users 
+    WHERE user_id = auth.uid()
+  )
+);
+
 -- Orders policies
 CREATE POLICY "Users can create their own orders"
 ON orders FOR INSERT
@@ -230,12 +262,12 @@ WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can view their own orders"
 ON orders FOR SELECT
 TO authenticated
-USING (auth.uid() = user_id OR is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
+USING (auth.uid() = user_id OR is_admin());
 
-CREATE POLICY "Allow admins to update orders"
-ON orders FOR UPDATE
+CREATE POLICY "Allow admins to manage orders"
+ON orders FOR ALL
 TO authenticated
-USING (is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
+USING (is_admin() OR auth.uid() = user_id);
 
 -- Payment proofs policies
 CREATE POLICY "Users can create payment proofs for their orders"
@@ -256,14 +288,14 @@ USING (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
-        AND (orders.user_id = auth.uid() OR is_owner())
+        AND (orders.user_id = auth.uid() OR is_admin())
     )
 );
 
-CREATE POLICY "Allow admins to update payment proofs"
-ON payment_proofs FOR UPDATE
+CREATE POLICY "Allow admins to manage payment proofs"
+ON payment_proofs FOR ALL
 TO authenticated
-USING (is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
+USING (is_admin());
 
 -- Discord channels policies
 CREATE POLICY "Users can view their own discord channels"
@@ -273,14 +305,18 @@ USING (
     EXISTS (
         SELECT 1 FROM orders
         WHERE orders.id = order_id
-        AND (orders.user_id = auth.uid() OR is_owner())
+        AND (orders.user_id = auth.uid() OR is_admin())
     )
 );
 
 CREATE POLICY "Allow admins to manage discord channels"
 ON discord_channels FOR ALL
 TO authenticated
-USING (is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users));
+USING (is_admin() OR EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = discord_channels.order_id
+    AND orders.user_id = auth.uid()
+));
 
 CREATE POLICY "Allow users to create discord channels for their orders"
 ON discord_channels FOR INSERT
@@ -294,22 +330,50 @@ WITH CHECK (
 );
 
 -- Messages policies
-CREATE OR REPLACE POLICY "Allow users to view their own messages"
+-- First disable RLS temporarily
+ALTER TABLE messages DISABLE ROW LEVEL SECURITY;
+
+-- Drop ALL existing policies on messages table
+DROP POLICY IF EXISTS "Allow users to view their own messages" ON messages;
+DROP POLICY IF EXISTS "Allow users to send messages" ON messages;
+DROP POLICY IF EXISTS "Users can view messages" ON messages;
+DROP POLICY IF EXISTS "Users can create messages" ON messages;
+
+-- Now we can alter the column types
+ALTER TABLE messages 
+  ALTER COLUMN user_id TYPE UUID USING user_id::UUID,
+  ALTER COLUMN order_user_id TYPE UUID USING order_user_id::UUID;
+
+-- Re-enable RLS
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+-- Then recreate the policies with proper UUID casting
+CREATE POLICY "Allow users to view their own messages"
 ON messages FOR SELECT
 TO authenticated
 USING (
-  auth.uid()::UUID = user_id
-  OR auth.uid()::UUID IN (SELECT user_id FROM admin_users)
-  OR is_owner()
+  EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = messages.order_id
+    AND (
+      orders.user_id = (SELECT auth.uid())::UUID
+      OR is_admin()
+    )
+  )
 );
 
-CREATE OR REPLACE POLICY "Allow users to send messages"
+CREATE POLICY "Allow users to send messages"
 ON messages FOR INSERT
 TO authenticated
 WITH CHECK (
-  auth.uid()::UUID = user_id
-  OR auth.uid()::UUID IN (SELECT user_id FROM admin_users)
-  OR is_owner()
+  EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = order_id
+    AND (
+      orders.user_id = (SELECT auth.uid())::UUID
+      OR is_admin()
+    )
+  )
 );
 
 -- Inbox messages policies
@@ -326,15 +390,14 @@ USING (auth.uid() = user_id);
 CREATE POLICY "Allow admins to manage inbox messages"
 ON inbox_messages FOR ALL
 TO authenticated
-USING (is_owner());
+USING (is_admin());
 
 CREATE POLICY "Allow system to create inbox messages"
 ON inbox_messages FOR INSERT
 TO authenticated
 WITH CHECK (
     auth.uid() = user_id
-    OR is_owner()
-    OR auth.uid() IN (SELECT user_id FROM admin_users)
+    OR is_admin()
     OR EXISTS (
         SELECT 1 FROM orders
         WHERE orders.user_id = user_id
@@ -342,18 +405,22 @@ WITH CHECK (
     )
 );
 
--- Remove the duplicate policy section
-DROP POLICY IF EXISTS "Allow users to view their own auth data" ON auth.users;
-
-CREATE POLICY "Allow users to view their own auth data"
-ON auth.users
-FOR SELECT
-TO authenticated
-USING (auth.uid() = id);
-
--- Grant permissions
-GRANT ALL ON admin_users TO authenticated;
-GRANT USAGE ON SCHEMA public TO authenticated;
+-- Auth users policy
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'auth'
+        AND tablename = 'users'
+        AND policyname = 'Allow users to view their own auth data'
+    ) THEN
+        CREATE POLICY "Allow users to view their own auth data"
+        ON auth.users
+        FOR SELECT
+        TO authenticated
+        USING (auth.uid() = id);
+    END IF;
+END $$;
 
 ------------------------------------------
 -- Permissions
@@ -369,17 +436,13 @@ GRANT SELECT ON storage.buckets TO public;
 GRANT USAGE ON SCHEMA auth TO authenticated;
 GRANT SELECT ON auth.users TO authenticated;
 
--- Add a function to check if user has permission for an order
-CREATE OR REPLACE FUNCTION has_order_permission(order_id UUID)
-RETURNS BOOLEAN AS $$
-BEGIN
-  RETURN EXISTS (
-    SELECT 1 FROM orders
-    WHERE orders.id = order_id
-    AND (orders.user_id = auth.uid() OR is_owner() OR auth.uid() IN (SELECT user_id FROM admin_users))
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+-- Grant permissions
+GRANT ALL ON admin_users TO authenticated;
+GRANT USAGE ON SCHEMA public TO authenticated;
+
+------------------------------------------
+-- Additional Configurations
+------------------------------------------
 
 -- Add account_file_url column if it doesn't exist
 DO $$ 
@@ -407,56 +470,6 @@ BEGIN
     END IF;
 END $$;
 
--- Add policies for payment_proofs table
-DROP POLICY IF EXISTS "Allow admins to manage payment proofs" ON payment_proofs;
-CREATE POLICY "Allow admins to manage payment proofs"
-ON payment_proofs FOR ALL
-TO authenticated
-USING (
-  auth.uid() IN (SELECT user_id FROM admin_users)
-  OR is_owner()
-);
-
--- Add policies for orders table
-DROP POLICY IF EXISTS "Allow admins to manage orders" ON orders;
-CREATE POLICY "Allow admins to manage orders"
-ON orders FOR ALL
-TO authenticated
-USING (
-  auth.uid() IN (SELECT user_id FROM admin_users)
-  OR is_owner()
-  OR auth.uid() = user_id
-);
-
--- Add policies for discord_channels table
-DROP POLICY IF EXISTS "Allow admins to manage discord channels" ON discord_channels;
-CREATE POLICY "Allow admins to manage discord channels"
-ON discord_channels FOR ALL
-TO authenticated
-USING (
-  auth.uid() IN (SELECT user_id FROM admin_users)
-  OR is_owner()
-  OR EXISTS (
-    SELECT 1 FROM orders
-    WHERE orders.id = discord_channels.order_id
-    AND orders.user_id = auth.uid()
-  )
-);
-
--- Update the is_admin function to include both admins and owner
-CREATE OR REPLACE FUNCTION is_admin()
-RETURNS BOOLEAN AS $$
-BEGIN
-  RETURN (
-    EXISTS (
-      SELECT 1 FROM admin_users 
-      WHERE user_id = auth.uid()
-    )
-    OR is_owner()
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
 -- Add is_owner column to admin_users if not exists
 DO $$ 
 BEGIN
@@ -470,23 +483,31 @@ BEGIN
     END IF;
 END $$;
 
+------------------------------------------
 -- Update admin_users table
+------------------------------------------
+
+-- First disable RLS temporarily
+ALTER TABLE admin_users DISABLE ROW LEVEL SECURITY;
+
+-- Drop the policy that depends on user_id
+DROP POLICY IF EXISTS "Allow users to view their own admin status" ON admin_users;
+
+-- Now we can alter the column type
 ALTER TABLE admin_users 
   ALTER COLUMN user_id TYPE UUID USING user_id::UUID;
 
--- Update messages table
-ALTER TABLE messages 
-  ALTER COLUMN user_id TYPE UUID USING user_id::UUID,
-  ALTER COLUMN order_user_id TYPE UUID USING order_user_id::UUID;
+-- Re-enable RLS
+ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 
--- Add policy for admin_users
+-- Recreate the policy with proper UUID casting
 CREATE POLICY "Allow users to view their own admin status"
 ON admin_users FOR SELECT
 TO authenticated
 USING (
-  auth.uid() = user_id
+  (SELECT auth.uid())::UUID = user_id
   OR EXISTS (
     SELECT 1 FROM admin_users 
-    WHERE user_id = auth.uid()
+    WHERE user_id = (SELECT auth.uid())::UUID
   )
 );

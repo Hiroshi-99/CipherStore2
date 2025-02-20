@@ -105,7 +105,7 @@ function StorePage() {
         <main className="flex items-center justify-center px-4 py-12">
           <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-md">
             <h2 className="text-4xl font-bold text-white text-center mb-8">
-              Elite Account
+              Minecraft Account
             </h2>
 
             <div className="text-5xl font-bold text-emerald-400 text-center mb-8">
