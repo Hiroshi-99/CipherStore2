@@ -42,7 +42,7 @@ CREATE TABLE discord_channels (
 CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID NOT NULL REFERENCES orders(id),
-    user_id VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL,
     content TEXT NOT NULL,
     is_admin BOOLEAN DEFAULT FALSE,
     user_avatar TEXT,
@@ -469,3 +469,23 @@ BEGIN
         ALTER TABLE admin_users ADD COLUMN is_owner BOOLEAN DEFAULT FALSE;
     END IF;
 END $$;
+
+-- Update admin_users table
+ALTER TABLE admin_users 
+  ALTER COLUMN user_id TYPE UUID USING user_id::UUID;
+
+-- Update messages table
+ALTER TABLE messages 
+  ALTER COLUMN user_id TYPE UUID USING user_id::UUID;
+
+-- Add policy for admin_users
+CREATE POLICY "Allow users to view their own admin status"
+ON admin_users FOR SELECT
+TO authenticated
+USING (
+  auth.uid() = user_id
+  OR EXISTS (
+    SELECT 1 FROM admin_users 
+    WHERE user_id = auth.uid()
+  )
+);

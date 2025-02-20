@@ -151,15 +151,21 @@ function ChatPage() {
       }
 
       setUser(session.user);
-      // Check if user is admin
-      const { data: adminData } = await supabase
+
+      // Fix admin check query
+      const { data: adminData, error: adminError } = await supabase
         .from("admin_users")
         .select("*")
         .eq("user_id", session.user.id)
-        .single();
+        .maybeSingle(); // Use maybeSingle instead of single to avoid errors
+
+      if (adminError) {
+        console.error("Error checking admin status:", adminError);
+      }
 
       setIsAdmin(!!adminData);
 
+      // Fetch orders based on user role
       if (adminData) {
         await fetchAdminOrders();
       } else {

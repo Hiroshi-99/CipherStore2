@@ -412,7 +412,7 @@ function OrderPage() {
                 </h3>
                 <div className="relative group">
                   <img
-                    src="https://cdn.discordapp.com/attachments/1326517715279810674/1341748229770969108/qr.jpg?ex=67b71fea&is=67b5ce6a&hm=52a9f607ce191c6c368c79b7c1098ffaade0fdceb2a62d11354ee4eb3184884f&" // Add your QR code image here
+                    src="/images/qr.jpg" // Add your QR code image here
                     alt="Payment QR Code"
                     className="w-full rounded-lg border-2 border-emerald-400/50 cursor-pointer transition-transform hover:scale-[1.02]"
                     onClick={() => setShowQRModal(true)}
