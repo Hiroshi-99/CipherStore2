@@ -54,3 +54,35 @@ export async function isAdmin(userId: string): Promise<boolean> {
     return false;
   }
 }
+
+export const handleDiscordAuth = async () => {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) return;
+
+    const discordId = session.user.user_metadata.provider_id;
+
+    // Add user to Discord server
+    const response = await fetch("/.netlify/functions/discord-user-manager", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "add_to_server",
+        discordId,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(
+        "Failed to add user to Discord server:",
+        await response.json()
+      );
+    }
+  } catch (error) {
+    console.error("Error handling Discord auth:", error);
+  }
+};

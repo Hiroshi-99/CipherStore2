@@ -395,3 +395,53 @@ BEGIN
         ALTER TABLE inbox_messages ADD COLUMN file_url TEXT;
     END IF;
 END $$;
+
+-- Add policies for payment_proofs table
+DROP POLICY IF EXISTS "Allow admins to manage payment proofs" ON payment_proofs;
+CREATE POLICY "Allow admins to manage payment proofs"
+ON payment_proofs FOR ALL
+TO authenticated
+USING (
+  auth.uid() IN (SELECT user_id FROM admin_users)
+  OR is_owner()
+);
+
+-- Add policies for orders table
+DROP POLICY IF EXISTS "Allow admins to manage orders" ON orders;
+CREATE POLICY "Allow admins to manage orders"
+ON orders FOR ALL
+TO authenticated
+USING (
+  auth.uid() IN (SELECT user_id FROM admin_users)
+  OR is_owner()
+  OR auth.uid() = user_id
+);
+
+-- Add policies for discord_channels table
+DROP POLICY IF EXISTS "Allow admins to manage discord channels" ON discord_channels;
+CREATE POLICY "Allow admins to manage discord channels"
+ON discord_channels FOR ALL
+TO authenticated
+USING (
+  auth.uid() IN (SELECT user_id FROM admin_users)
+  OR is_owner()
+  OR EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = discord_channels.order_id
+    AND orders.user_id = auth.uid()
+  )
+);
+
+-- Update the is_admin function to include both admins and owner
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN (
+    EXISTS (
+      SELECT 1 FROM admin_users 
+      WHERE user_id = auth.uid()
+    )
+    OR is_owner()
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
