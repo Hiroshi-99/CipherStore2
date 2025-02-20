@@ -155,6 +155,29 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
+// Add keyboard shortcut hook
+function useKeyboardShortcuts(
+  handleSendMessage: (e: React.FormEvent) => Promise<void>,
+  inputRef: React.RefObject<HTMLInputElement>
+) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + K to focus search
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+      // Esc to blur input
+      if (e.key === "Escape") {
+        inputRef.current?.blur();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [inputRef]);
+}
+
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -183,6 +206,88 @@ function ChatPage() {
 
   const isMobile = useIsMobile();
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [isScrolled, setIsScrolled] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
+  // Use keyboard shortcuts
+  useKeyboardShortcuts(handleSendMessage, inputRef);
+
+  // Improved scroll handling
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+    setIsScrolled(!isAtBottom);
+    setShowScrollButton(!isAtBottom);
+  }, []);
+
+  // Scroll to bottom button handler
+  const handleScrollToBottom = useCallback(() => {
+    scrollToBottom(true);
+    setShowScrollButton(false);
+  }, [scrollToBottom]);
+
+  // Update message container with virtualization for better performance
+  const MessageContainer = useMemo(() => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <LoadingSpinner size="lg" light />
+        </div>
+      );
+    }
+
+    if (messages.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+          <p>No messages yet.</p>
+          <p className="text-sm">Start the conversation!</p>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div
+          className="space-y-4 px-2 md:px-4"
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
+          {messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              isLatest={message.id === messages[messages.length - 1].id}
+              sending={messageQueue.current.has(message.id)}
+              isUnread={unreadMessages.has(message.id)}
+              onRetry={() => retryMessage(message.id)}
+              isPending={pendingMessages.current.has(message.id)}
+            />
+          ))}
+        </div>
+        {showScrollButton && (
+          <button
+            onClick={handleScrollToBottom}
+            className="fixed bottom-20 right-4 md:right-8 bg-emerald-500 p-2 rounded-full shadow-lg transition-transform hover:scale-110 animate-fade-in"
+            aria-label="Scroll to bottom"
+          >
+            <svg
+              className="w-5 h-5 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 14l-7 7m0 0l-7-7m7 7V3"
+              />
+            </svg>
+          </button>
+        )}
+      </>
+    );
+  }, [messages, loading, showScrollButton, handleScrollToBottom]);
 
   // Improved scroll handling for mobile
   const scrollToBottom = useCallback((smooth = true) => {
@@ -607,7 +712,7 @@ function ChatPage() {
           {notification}
         </div>
       )}
-      <main className="max-w-6xl mx-auto px-2 md:px-4 py-4 md:py-8">
+      <main className="max-w-7xl mx-auto px-2 md:px-4 py-4 md:py-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6 relative">
           {/* Mobile Order Toggle - Updated for better visibility */}
           <button
@@ -675,68 +780,54 @@ function ChatPage() {
             </div>
           </div>
 
-          {/* Chat Area - Updated for better mobile display */}
+          {/* Chat Area - Updated for better PC experience */}
           <div className="md:col-span-3">
             <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
               {selectedOrderId ? (
                 <>
-                  <div className="h-[calc(100vh-12rem)] md:h-[600px] overflow-y-auto p-3 md:p-6 space-y-4">
-                    {loading ? (
-                      <div className="flex items-center justify-center h-full">
-                        <LoadingSpinner size="lg" light />
-                      </div>
-                    ) : messages.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-                        <p>No messages yet.</p>
-                        <p className="text-sm">Start the conversation!</p>
-                      </div>
-                    ) : (
-                      messages.map((message) => (
-                        <MessageBubble
-                          key={message.id}
-                          message={message}
-                          isLatest={
-                            message.id === messages[messages.length - 1].id
-                          }
-                          sending={messageQueue.current.has(message.id)}
-                          isUnread={unreadMessages.has(message.id)}
-                          onRetry={() => retryMessage(message.id)}
-                          isPending={pendingMessages.current.has(message.id)}
-                        />
-                      ))
-                    )}
+                  <div
+                    className="h-[calc(100vh-12rem)] md:h-[700px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+                    onScroll={handleScroll}
+                  >
+                    {MessageContainer}
                     <div ref={messagesEndRef} />
                   </div>
 
-                  {/* Message Input - Updated for mobile */}
+                  {/* Message Input - Updated for PC */}
                   <form
                     onSubmit={handleSendMessage}
-                    className="border-t border-white/10 p-2 md:p-4"
+                    className="border-t border-white/10 p-2 md:p-4 backdrop-blur-md bg-black/30"
                   >
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
                       <input
+                        ref={inputRef}
                         type="text"
                         value={newMessage}
                         onChange={(e) => debouncedSetNewMessage(e.target.value)}
-                        placeholder="Type your message..."
-                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm md:text-base text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        placeholder={`Type your message... ${
+                          isMobile ? "" : "(Cmd/Ctrl + K to focus)"
+                        }`}
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm md:text-base text-white placeholder-white/50 focus:outline-none focus:border-white/40 transition-colors"
                       />
                       <button
                         type="submit"
                         disabled={!newMessage.trim() || sending}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 md:px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 md:px-6 py-2 rounded-lg flex items-center gap-2 transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
                       >
                         {sending ? (
                           <RefreshCw className="w-4 h-4 md:w-5 md:h-5 animate-spin" />
                         ) : (
-                          <Send className="w-4 h-4 md:w-5 md:h-5" />
+                          <>
+                            <Send className="w-4 h-4 md:w-5 md:h-5" />
+                            {!isMobile && <span>Send</span>}
+                          </>
                         )}
                       </button>
                     </div>
                   </form>
                 </>
               ) : (
-                <div className="h-[calc(100vh-12rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2 p-4 text-center">
+                <div className="h-[calc(100vh-12rem)] md:h-[700px] flex flex-col items-center justify-center text-white/50 space-y-2 p-4 text-center">
                   <p>{isMobile ? "Tap the button below" : "Select an order"}</p>
                   <p className="text-sm">to start chatting</p>
                 </div>
