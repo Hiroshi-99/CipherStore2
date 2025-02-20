@@ -294,22 +294,22 @@ WITH CHECK (
 );
 
 -- Messages policies
-CREATE POLICY "Allow users to view their own messages"
+CREATE OR REPLACE POLICY "Allow users to view their own messages"
 ON messages FOR SELECT
 TO authenticated
 USING (
-    user_id = auth.uid()::text
-    OR auth.uid() IN (SELECT user_id FROM admin_users)
-    OR is_owner()
+  auth.uid()::UUID = user_id
+  OR auth.uid()::UUID IN (SELECT user_id FROM admin_users)
+  OR is_owner()
 );
 
-CREATE POLICY "Allow users to send messages"
+CREATE OR REPLACE POLICY "Allow users to send messages"
 ON messages FOR INSERT
 TO authenticated
 WITH CHECK (
-    user_id = auth.uid()::text
-    OR auth.uid() IN (SELECT user_id FROM admin_users)
-    OR is_owner()
+  auth.uid()::UUID = user_id
+  OR auth.uid()::UUID IN (SELECT user_id FROM admin_users)
+  OR is_owner()
 );
 
 -- Inbox messages policies
@@ -476,7 +476,8 @@ ALTER TABLE admin_users
 
 -- Update messages table
 ALTER TABLE messages 
-  ALTER COLUMN user_id TYPE UUID USING user_id::UUID;
+  ALTER COLUMN user_id TYPE UUID USING user_id::UUID,
+  ALTER COLUMN order_user_id TYPE UUID USING order_user_id::UUID;
 
 -- Add policy for admin_users
 CREATE POLICY "Allow users to view their own admin status"

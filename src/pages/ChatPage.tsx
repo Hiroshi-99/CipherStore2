@@ -110,6 +110,7 @@ function ChatPage() {
             user_name: user.user_metadata.full_name || user.email,
             user_avatar: user.user_metadata.avatar_url,
             order_id: selectedOrderId,
+            order_user_id: orderData.user_id,
           },
         ]);
 
@@ -152,12 +153,12 @@ function ChatPage() {
 
       setUser(session.user);
 
-      // Fix admin check query
+      // Fix admin check query with proper UUID casting
       const { data: adminData, error: adminError } = await supabase
         .from("admin_users")
         .select("*")
         .eq("user_id", session.user.id)
-        .maybeSingle(); // Use maybeSingle instead of single to avoid errors
+        .maybeSingle();
 
       if (adminError) {
         console.error("Error checking admin status:", adminError);
