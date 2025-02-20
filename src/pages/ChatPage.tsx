@@ -6,7 +6,7 @@ import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { toast } from "sonner";
+import { Toaster } from "sonner";
 
 interface Message {
   id: string;
@@ -42,6 +42,7 @@ function ChatPage() {
   const [showSidebar, setShowSidebar] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
   const [isTabFocused, setIsTabFocused] = useState(true);
+  const [notification, setNotification] = useState<string | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -91,19 +92,19 @@ function ChatPage() {
                   // Play sound if tab is not focused
                   if (!isTabFocused) {
                     const audio = new Audio("/notification.mp3");
-                    audio.volume = 0.5; // Reduce volume to 50%
+                    audio.volume = 0.5;
                     audio.play().catch(() => {});
-                  }
 
-                  // Show toast notification
-                  toast.message("New message", {
-                    description: `${
-                      messageWithAdmin.user_name
-                    }: ${messageWithAdmin.content.slice(0, 60)}${
-                      messageWithAdmin.content.length > 60 ? "..." : ""
-                    }`,
-                    duration: 4000,
-                  });
+                    // Show notification
+                    setNotification(
+                      `${
+                        messageWithAdmin.user_name
+                      }: ${messageWithAdmin.content.slice(0, 60)}${
+                        messageWithAdmin.content.length > 60 ? "..." : ""
+                      }`
+                    );
+                    setTimeout(() => setNotification(null), 4000);
+                  }
 
                   // Add to unread messages if tab not focused
                   if (!isTabFocused) {
@@ -116,7 +117,6 @@ function ChatPage() {
                 return [...prev, messageWithAdmin];
               };
 
-              // Execute the async function
               getOrderData();
               return prev;
             });
@@ -366,6 +366,11 @@ function ChatPage() {
 
   return (
     <PageContainer title="CHAT" showBack user={user}>
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
+          {notification}
+        </div>
+      )}
       <main className="max-w-6xl mx-auto px-4 py-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
           {/* Mobile Order Toggle */}
