@@ -47,10 +47,6 @@ function ChatPage() {
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
-    // First fetch existing messages
-    fetchMessages(selectedOrderId);
-
-    // Then subscribe to new messages
     const channel = supabase
       .channel(`messages:${selectedOrderId}`)
       .on(
@@ -71,16 +67,22 @@ function ChatPage() {
 
             if (orderData) {
               const newMessage = payload.new as Message;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  ...newMessage,
-                  is_admin: newMessage.user_id !== orderData.user_id,
-                },
-              ]);
+              // Only add message if it's not already in the list
+              setMessages((prev) => {
+                if (prev.some((msg) => msg.id === newMessage.id)) {
+                  return prev;
+                }
+                return [
+                  ...prev,
+                  {
+                    ...newMessage,
+                    is_admin: newMessage.user_id !== orderData.user_id,
+                  },
+                ];
+              });
               scrollToBottom();
 
-              // Play notification sound for new messages
+              // Play notification sound for new messages from others
               if (newMessage.user_id !== user?.id) {
                 const audio = new Audio("/notification.mp3");
                 audio.play().catch(() => {}); // Ignore autoplay errors
@@ -166,13 +168,19 @@ function ChatPage() {
   }, []);
 
   useEffect(() => {
-    const cleanup = subscribeToMessages();
-    return () => {
-      if (cleanup && typeof cleanup === "function") {
-        cleanup();
-      }
-    };
-  }, [subscribeToMessages]);
+    if (selectedOrderId) {
+      // Fetch messages first
+      fetchMessages(selectedOrderId);
+
+      // Then set up subscription
+      const cleanup = subscribeToMessages();
+      return () => {
+        if (cleanup && typeof cleanup === "function") {
+          cleanup();
+        }
+      };
+    }
+  }, [selectedOrderId, subscribeToMessages]);
 
   const checkUser = async () => {
     try {
@@ -294,12 +302,6 @@ function ChatPage() {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (selectedOrderId) {
-      fetchMessages(selectedOrderId);
-    }
-  }, [selectedOrderId]);
 
   if (initialLoading) {
     return (
