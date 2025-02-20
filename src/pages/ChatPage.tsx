@@ -71,46 +71,54 @@ function ChatPage() {
               }
 
               // Get order data to determine admin status
-              const { data: orderData } = await supabase
-                .from("orders")
-                .select("user_id, full_name")
-                .eq("id", selectedOrderId)
-                .single();
+              const getOrderData = async () => {
+                const { data: orderData } = await supabase
+                  .from("orders")
+                  .select("user_id, full_name")
+                  .eq("id", selectedOrderId)
+                  .single();
 
-              if (!orderData) return prev;
+                if (!orderData) return prev;
 
-              const isFromOther = newMessage.user_id !== user?.id;
-              const messageWithAdmin = {
-                ...newMessage,
-                is_admin: newMessage.user_id !== orderData.user_id,
+                const isFromOther = newMessage.user_id !== user?.id;
+                const messageWithAdmin = {
+                  ...newMessage,
+                  is_admin: newMessage.user_id !== orderData.user_id,
+                };
+
+                // Handle notifications for messages from others
+                if (isFromOther) {
+                  // Play sound if tab is not focused
+                  if (!isTabFocused) {
+                    const audio = new Audio("/notification.mp3");
+                    audio.volume = 0.5; // Reduce volume to 50%
+                    audio.play().catch(() => {});
+                  }
+
+                  // Show toast notification
+                  toast.message("New message", {
+                    description: `${
+                      messageWithAdmin.user_name
+                    }: ${messageWithAdmin.content.slice(0, 60)}${
+                      messageWithAdmin.content.length > 60 ? "..." : ""
+                    }`,
+                    duration: 4000,
+                  });
+
+                  // Add to unread messages if tab not focused
+                  if (!isTabFocused) {
+                    setUnreadMessages((prev) =>
+                      new Set(prev).add(newMessage.id)
+                    );
+                  }
+                }
+
+                return [...prev, messageWithAdmin];
               };
 
-              // Handle notifications for messages from others
-              if (isFromOther) {
-                // Play sound if tab is not focused
-                if (!isTabFocused) {
-                  const audio = new Audio("/notification.mp3");
-                  audio.volume = 0.5; // Reduce volume to 50%
-                  audio.play().catch(() => {});
-                }
-
-                // Show toast notification
-                toast.message("New message", {
-                  description: `${
-                    messageWithAdmin.user_name
-                  }: ${messageWithAdmin.content.slice(0, 60)}${
-                    messageWithAdmin.content.length > 60 ? "..." : ""
-                  }`,
-                  duration: 4000,
-                });
-
-                // Add to unread messages if tab not focused
-                if (!isTabFocused) {
-                  setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-                }
-              }
-
-              return [...prev, messageWithAdmin];
+              // Execute the async function
+              getOrderData();
+              return prev;
             });
 
             scrollToBottom();
