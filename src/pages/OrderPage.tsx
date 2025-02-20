@@ -237,20 +237,23 @@ function OrderPage() {
       // Create Discord channel/thread
       try {
         const headers = await getAuthHeaders();
-        const response = await fetch("/api/discord-create-channel", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            Authorization: headers.Authorization,
-          },
-          body: JSON.stringify({
-            orderId: order.id,
-            customerName: formData.name,
-            paymentProofUrl: proofUrl,
-            userId: user.id,
-          }),
-        });
+        const response = await fetch(
+          "/.netlify/functions/discord-create-channel",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              Authorization: headers.Authorization,
+            },
+            body: JSON.stringify({
+              orderId: order.id,
+              customerName: formData.name,
+              paymentProofUrl: proofUrl,
+              userId: user.id,
+            }),
+          }
+        );
 
         const responseData = await response.json();
 

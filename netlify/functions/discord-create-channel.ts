@@ -14,33 +14,37 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Validate environment variables
-const requiredEnvVars = {
-  DISCORD_TOKEN: process.env.DISCORD_TOKEN,
-  DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID,
-  DISCORD_CHANNEL_ID: process.env.DISCORD_CHANNEL_ID,
+// Add better error logging
+const logError = (error: any, context: string) => {
+  console.error(`Error in ${context}:`, {
+    message: error.message,
+    stack: error.stack,
+    details: error,
+  });
 };
-
-// Check all required environment variables
-Object.entries(requiredEnvVars).forEach(([key, value]) => {
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${key}`);
-  }
-});
-
-// Add more detailed debug logging
-// console.log("Function loaded, checking environment...");
-// console.log("DISCORD_TOKEN length:", process.env.DISCORD_TOKEN?.length);
-// console.log("GUILD_ID:", process.env.DISCORD_GUILD_ID);
-// console.log("DISCORD_CHANNEL_ID:", process.env.DISCORD_CHANNEL_ID);
 
 export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
 
   try {
+    // Validate environment variables first
+    const requiredEnvVars = {
+      DISCORD_TOKEN: process.env.DISCORD_TOKEN,
+      DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID,
+      DISCORD_CHANNEL_ID: process.env.DISCORD_CHANNEL_ID,
+      VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    };
+
+    for (const [key, value] of Object.entries(requiredEnvVars)) {
+      if (!value) {
+        throw new Error(`Missing required environment variable: ${key}`);
+      }
+    }
+
     // Verify authentication
     const authHeader = event.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!authHeader?.startsWith("Bearer ")) {
       return {
         statusCode: 401,
         body: JSON.stringify({ error: "Unauthorized" }),
@@ -52,6 +56,7 @@ export const handler: Handler = async (event) => {
       data: { user },
       error: authError,
     } = await supabase.auth.getUser(token);
+
     if (authError || !user) {
       return {
         statusCode: 401,
@@ -70,11 +75,9 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const parsedBody = JSON.parse(event.body);
-    // Remove this line in production
-    // console.log("Parsed request body:", parsedBody);
-
-    const { orderId, customerName, paymentProofUrl, userId } = parsedBody;
+    const { orderId, customerName, paymentProofUrl, userId } = JSON.parse(
+      event.body
+    );
 
     if (!orderId || !customerName || !userId) {
       return {
@@ -96,13 +99,11 @@ export const handler: Handler = async (event) => {
       ],
     });
 
-    // Login to Discord
+    // Login to Discord with better error handling
     try {
       await discordClient.login(process.env.DISCORD_TOKEN);
-      // Remove this line in production
-      // console.log("Successfully logged into Discord");
     } catch (loginError) {
-      console.error("Discord login error:", loginError);
+      logError(loginError, "Discord login");
       return {
         statusCode: 500,
         body: JSON.stringify({
@@ -153,20 +154,16 @@ export const handler: Handler = async (event) => {
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Order thread for ${customerName}`,
       });
-      // Remove this line in production
-      // console.log("Successfully created thread:", thread.id);
     } catch (threadError) {
-      console.error("Thread creation error:", threadError);
+      logError(threadError, "Thread creation");
       throw new Error("Failed to create Discord thread");
     }
 
     // Send initial message
     try {
       await thread.send({ embeds: [embed] });
-      // Remove this line in production
-      // console.log("Successfully sent initial message to thread");
     } catch (messageError) {
-      console.error("Failed to send initial message:", messageError);
+      logError(messageError, "Sending initial message");
       throw new Error("Failed to send initial message to thread");
     }
 
@@ -177,10 +174,8 @@ export const handler: Handler = async (event) => {
         name: "Order Bot",
         avatar: "https://i.imgur.com/AfFp7pu.png",
       });
-      // Remove this line in production
-      // console.log("Successfully created webhook");
     } catch (webhookError) {
-      console.error("Webhook creation error:", webhookError);
+      logError(webhookError, "Webhook creation");
       throw new Error("Failed to create Discord webhook");
     }
 
@@ -203,7 +198,7 @@ export const handler: Handler = async (event) => {
         );
       }
     } catch (dbInsertError) {
-      console.error("Database insertion error:", dbInsertError);
+      logError(dbInsertError, "Database insertion");
       throw dbInsertError;
     }
 
@@ -221,12 +216,10 @@ export const handler: Handler = async (event) => {
         ]);
 
       if (inboxError) {
-        console.error("Failed to create inbox message:", inboxError);
-        // Don't throw here as it's not critical
+        logError(inboxError, "Inbox message insertion");
       }
     } catch (inboxInsertError) {
-      console.error("Inbox message insertion error:", inboxInsertError);
-      // Don't throw here as it's not critical
+      logError(inboxInsertError, "Inbox message insertion");
     }
 
     return {
@@ -238,19 +231,18 @@ export const handler: Handler = async (event) => {
       }),
     };
   } catch (error) {
-    console.error("Error in discord-create-channel:", error);
+    logError(error, "discord-create-channel");
     return {
       statusCode: 500,
       body: JSON.stringify({
         error: "Failed to create Discord channel",
-        details: error.message,
+        details:
+          error instanceof Error ? error.message : "Unknown error occurred",
       }),
     };
   } finally {
     if (discordClient) {
       await discordClient.destroy();
-      // Remove this line in production
-      // console.log("Discord client destroyed");
     }
   }
 };
