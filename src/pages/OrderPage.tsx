@@ -153,21 +153,21 @@ function OrderPage() {
         .from("discord_channels")
         .select("thread_id, webhook_url")
         .eq("order_id", orderId)
-        .single(); // Use .single() to expect a single result
+        .maybeSingle(); // Use maybeSingle() instead of single()
 
       if (error) {
         if (error.code === "PGRST116") {
           console.warn("No Discord channel found for order:", orderId);
-          return null; // or return an empty object, depending on your needs
-        } else {
-          throw error;
+          return null;
         }
+        throw error;
       }
 
       return data;
     } catch (error) {
       console.error("Error fetching Discord channel:", error);
-      throw error;
+      // Return null instead of throwing to handle the error gracefully
+      return null;
     }
   };
 
@@ -265,19 +265,27 @@ function OrderPage() {
           );
         }
 
+        // Add delay before fetching the Discord channel
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
         // Fetch the newly created Discord channel
         const discordChannel = await fetchDiscordChannel(order.id);
         if (!discordChannel) {
           console.warn(
-            "No Discord channel found after creation. Continuing..."
+            "No Discord channel found after creation. Will retry..."
           );
-          // You might want to handle this case differently, e.g., show a warning to the user
-          alert(
-            "Warning: No Discord channel found after creation. Please check your order status in the inbox."
-          );
+
+          // Retry once after a short delay
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const retryChannel = await fetchDiscordChannel(order.id);
+
+          if (!retryChannel) {
+            console.warn("Still no Discord channel found after retry.");
+          } else {
+            console.log("Discord channel found on retry:", retryChannel);
+          }
         } else {
           console.log("Discord channel fetched successfully:", discordChannel);
-          // Use the discordChannel data as needed
         }
       } catch (discordError) {
         console.error("Discord channel creation failed:", discordError);

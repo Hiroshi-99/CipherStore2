@@ -30,14 +30,12 @@ CREATE TABLE payment_proofs (
 -- Discord integration tables
 CREATE TABLE discord_channels (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    order_id UUID NOT NULL REFERENCES orders(id),
-    channel_id VARCHAR(255) NOT NULL,
-    thread_id VARCHAR(255),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
     webhook_url TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(order_id),
-    UNIQUE(channel_id),
-    UNIQUE(thread_id)
+    UNIQUE(order_id)
 );
 
 CREATE TABLE messages (
@@ -82,8 +80,7 @@ CREATE INDEX idx_payment_proofs_order_id ON payment_proofs(order_id);
 CREATE INDEX idx_payment_proofs_status ON payment_proofs(status);
 
 -- Discord channels indexes
-CREATE INDEX idx_discord_channels_order_channel 
-ON discord_channels(order_id, channel_id, thread_id);
+CREATE INDEX idx_discord_channels_order_id ON discord_channels(order_id);
 
 -- Messages indexes
 CREATE INDEX idx_messages_order_id ON messages(order_id);

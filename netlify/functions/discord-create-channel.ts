@@ -186,16 +186,17 @@ export const handler: Handler = async (event) => {
     try {
       const { error: dbError } = await supabase
         .from("discord_channels")
-        .insert([
-          {
-            order_id: orderId,
-            channel_id: channel.id,
-            thread_id: thread.id,
-            webhook_url: webhook.url,
-          },
-        ]);
+        .insert({
+          order_id: orderId,
+          channel_id: channel.id,
+          thread_id: thread.id,
+          webhook_url: webhook.url,
+        })
+        .select()
+        .single();
 
       if (dbError) {
+        logError(dbError, "Database insertion");
         throw new Error(
           `Failed to store channel info in database: ${dbError.message}`
         );
