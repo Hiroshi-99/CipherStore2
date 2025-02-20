@@ -1,6 +1,13 @@
 import React from "react";
-import { ArrowLeft, Bell, User, LogOut } from "lucide-react";
-import { useNavigate, Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  ArrowLeft,
+  Bell,
+  User,
+  LogOut,
+  Inbox,
+  MessageCircle,
+} from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
@@ -34,82 +41,39 @@ function Header({ title, showBack = false, user, onLogout }: HeaderProps) {
   };
 
   return (
-    <header className="bg-black/30 backdrop-blur-md border-b border-white/10">
-      <div className="max-w-7xl mx-auto px-4 py-4">
+    <header className="bg-black/30 backdrop-blur-sm border-b border-white/10">
+      <div className="max-w-6xl mx-auto px-4 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             {showBack && (
               <button
-                onClick={() => navigate("/")}
-                className="text-white flex items-center gap-2 hover:text-emerald-400 transition-colors"
+                onClick={() => navigate(-1)}
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                title="Go back"
               >
-                <ArrowLeft size={24} />
-                Back to Store
+                <ArrowLeft className="w-5 h-5 text-white" />
               </button>
             )}
-            <h1 className="text-4xl font-bold text-emerald-400">{title}</h1>
+            <h1 className="text-xl font-bold text-white">{title}</h1>
           </div>
-
           {user && (
-            <nav className="flex items-center gap-6">
-              <Link
-                to="/order"
-                className="text-white/70 hover:text-white transition-colors"
-              >
-                Order
-              </Link>
+            <div className="flex items-center gap-2">
               <Link
                 to="/chat"
-                className="text-white/70 hover:text-white transition-colors"
+                className="p-2 hover:bg-white/10 rounded-full transition-colors relative"
+                title="Chat"
               >
-                Chat
+                <MessageCircle className="w-5 h-5 text-white" />
               </Link>
               <Link
                 to="/inbox"
-                className="text-white/70 hover:text-white transition-colors"
+                className="p-2 hover:bg-white/10 rounded-full transition-colors relative"
+                title="Inbox"
               >
-                Inbox
+                <Inbox className="w-5 h-5 text-white" />
               </Link>
-            </nav>
+            </div>
           )}
-
-          <div className="flex items-center gap-4">
-            {user && (
-              <>
-                <button
-                  onClick={() => navigate("/inbox")}
-                  className="relative text-white hover:text-emerald-400 transition-colors"
-                >
-                  <Bell size={24} />
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center">
-                      {unreadCount}
-                    </span>
-                  )}
-                </button>
-                <div className="flex items-center gap-3">
-                  {getDiscordProfile().avatar_url ? (
-                    <img
-                      src={getDiscordProfile().avatar_url}
-                      alt="Profile"
-                      className="w-8 h-8 rounded-full border-2 border-emerald-400"
-                    />
-                  ) : (
-                    <User className="w-8 h-8 text-emerald-400" />
-                  )}
-                  <span className="text-white">
-                    {getDiscordProfile().username || "User"}
-                  </span>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="text-white hover:text-emerald-400 transition-colors"
-                >
-                  <LogOut size={24} />
-                </button>
-              </>
-            )}
-          </div>
         </div>
       </div>
     </header>
