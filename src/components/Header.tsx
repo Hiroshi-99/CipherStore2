@@ -1,13 +1,13 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Inbox, MessageCircle, LogOut } from "lucide-react";
-import type { User } from "@supabase/supabase-js";
+import { ArrowLeft, MessageCircle, Inbox, LogOut, User } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import type { User } from "@supabase/supabase-js";
 
 interface HeaderProps {
   title: string;
   showBack?: boolean;
-  user?: User | null;
+  user: User | null;
 }
 
 function Header({ title, showBack = false, user }: HeaderProps) {
@@ -37,40 +37,51 @@ function Header({ title, showBack = false, user }: HeaderProps) {
           <div className="flex items-center gap-4">
             <Link
               to="/chat"
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors relative group"
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white flex items-center gap-2"
             >
-              <MessageCircle className="w-5 h-5 text-white" />
-              <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                Chat Support
-              </span>
+              <MessageCircle className="w-5 h-5" />
+              <span className="hidden sm:inline">Chat</span>
             </Link>
             <Link
               to="/inbox"
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors relative group"
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white flex items-center gap-2"
             >
-              <Inbox className="w-5 h-5 text-white" />
-              <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                Inbox
-              </span>
+              <Inbox className="w-5 h-5" />
+              <span className="hidden sm:inline">Inbox</span>
             </Link>
-            <div className="flex items-center gap-3 pl-4 border-l border-white/10">
-              <div className="flex flex-col">
-                <span className="text-sm font-medium text-white">
+
+            {/* User Profile Dropdown */}
+            <div className="relative group">
+              <button className="flex items-center gap-2 p-2 hover:bg-white/10 rounded-lg transition-colors text-white">
+                <img
+                  src={user.user_metadata.avatar_url || "/default-avatar.png"}
+                  alt="Avatar"
+                  className="w-8 h-8 rounded-full"
+                />
+                <span className="hidden sm:inline">
                   {user.user_metadata.full_name || user.email}
                 </span>
-                <span className="text-xs text-white/50">
-                  {user.user_metadata.full_name ? user.email : "User"}
-                </span>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="p-2 hover:bg-white/10 rounded-lg transition-colors relative group"
-              >
-                <LogOut className="w-5 h-5 text-white" />
-                <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                  Logout
-                </span>
               </button>
+
+              {/* Dropdown Menu */}
+              <div className="absolute right-0 top-full mt-2 w-48 bg-black/90 backdrop-blur-md border border-white/10 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
+                <div className="p-2">
+                  <div className="px-4 py-2 text-sm text-white/70">
+                    Signed in as
+                    <div className="font-medium text-white truncate">
+                      {user.email}
+                    </div>
+                  </div>
+                  <div className="border-t border-white/10 my-1"></div>
+                  <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-white hover:bg-white/10 rounded-md transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sign Out
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
