@@ -428,9 +428,9 @@ function ChatPage() {
       if (!message) return;
 
       setNewMessage(message.content);
-      handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
+      sendMessage(message.content, message.attachments || []);
     },
-    [handleSendMessage, pendingMessages, setNewMessage]
+    [sendMessage, pendingMessages, setNewMessage]
   );
 
   const sendMessage = useCallback(
@@ -444,7 +444,7 @@ function ChatPage() {
         console.error("Error sending message:", error);
       }
     },
-    [selectedOrderId, user, handleSendMessage]
+    [selectedOrderId, user, handleSendMessage, setNewMessage]
   );
 
   if (authLoading) {

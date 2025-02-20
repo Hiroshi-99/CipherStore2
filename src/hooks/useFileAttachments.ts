@@ -81,6 +81,12 @@ export function useFileAttachments() {
           });
 
         if (uploadError) {
+          // Check if bucket doesn't exist
+          if (uploadError.message.includes("Bucket not found")) {
+            throw new Error(
+              "Storage not properly configured. Please contact support."
+            );
+          }
           const error = {
             message: `Failed to upload ${file.name}: ${uploadError.message}`,
             file,
