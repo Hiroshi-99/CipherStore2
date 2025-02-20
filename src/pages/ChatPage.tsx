@@ -1,13 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import {
-  Send,
-  RefreshCw,
-  Image as ImageIcon,
-  Paperclip,
-  Smile,
-} from "lucide-react";
+import { Send, RefreshCw, Paperclip, Image } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 
@@ -18,7 +12,8 @@ interface Message {
   user_avatar: string;
   is_admin: boolean;
   created_at: string;
-  image_url?: string;
+  attachment_url?: string;
+  attachment_type?: "image" | "file";
 }
 
 function ChatPage() {
@@ -28,8 +23,8 @@ function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,7 +77,11 @@ function ChatPage() {
       .channel("messages")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+        },
         (payload) => {
           if (payload.eventType === "INSERT") {
             setMessages((prev) => [...prev, payload.new as Message]);
@@ -97,59 +96,63 @@ function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setImageFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+  const handleAttachment = async (file: File) => {
+    setIsUploading(true);
+    try {
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${Math.random().toString(36).slice(2)}.${fileExt}`;
+      const filePath = `chat-attachments/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("chat-files")
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const {
+        data: { publicUrl },
+      } = supabase.storage.from("chat-files").getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      throw error;
+    } finally {
+      setIsUploading(false);
     }
-  };
-
-  const uploadImage = async (file: File): Promise<string> => {
-    const fileName = `${crypto.randomUUID()}-${file.name}`;
-    const { data, error } = await supabase.storage
-      .from("chat-images")
-      .upload(fileName, file);
-
-    if (error) throw error;
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from("chat-images").getPublicUrl(data.path);
-
-    return publicUrl;
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!newMessage.trim() && !imageFile) || sending || !user) return;
+    if ((!newMessage.trim() && !attachment) || sending || isUploading) return;
 
     setSending(true);
     try {
-      let imageUrl: string | undefined;
-      if (imageFile) {
-        imageUrl = await uploadImage(imageFile);
+      let attachmentUrl = "";
+      let attachmentType: "image" | "file" | undefined;
+
+      if (attachment) {
+        attachmentUrl = await handleAttachment(attachment);
+        attachmentType = attachment.type.startsWith("image/")
+          ? "image"
+          : "file";
       }
 
       const { error: messageError } = await supabase.from("messages").insert([
         {
           content: newMessage.trim(),
-          user_id: user.id,
+          user_id: user?.id,
           is_admin: isAdmin,
-          user_name: user.user_metadata.full_name || user.email,
-          user_avatar: user.user_metadata.avatar_url,
-          image_url: imageUrl,
+          user_name: user?.user_metadata.full_name || user?.email,
+          user_avatar: user?.user_metadata.avatar_url,
+          attachment_url: attachmentUrl || null,
+          attachment_type: attachmentType,
         },
       ]);
 
       if (messageError) throw messageError;
       setNewMessage("");
-      setImageFile(null);
-      setImagePreview(null);
+      setAttachment(null);
     } catch (error) {
       console.error("Error sending message:", error);
       setError("Failed to send message");
@@ -158,10 +161,17 @@ function ChatPage() {
     }
   };
 
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setAttachment(file);
+    }
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-white text-xl">Loading messages...</div>
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-white">Loading messages...</div>
       </div>
     );
   }
@@ -215,16 +225,29 @@ function ChatPage() {
                         {new Date(message.created_at).toLocaleTimeString()}
                       </span>
                     </div>
-                    {message.image_url && (
-                      <img
-                        src={message.image_url}
-                        alt="Attached"
-                        className="max-w-full rounded-lg mb-2 cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => window.open(message.image_url, "_blank")}
-                      />
-                    )}
                     {message.content && (
-                      <p className="text-white/90">{message.content}</p>
+                      <p className="text-white/90 mb-2">{message.content}</p>
+                    )}
+                    {message.attachment_url && (
+                      <div className="mt-2">
+                        {message.attachment_type === "image" ? (
+                          <img
+                            src={message.attachment_url}
+                            alt="Attachment"
+                            className="max-w-full rounded-lg"
+                          />
+                        ) : (
+                          <a
+                            href={message.attachment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300"
+                          >
+                            <Paperclip className="w-4 h-4" />
+                            <span>View Attachment</span>
+                          </a>
+                        )}
+                      </div>
                     )}
                   </div>
                   {!message.is_admin && (
@@ -239,33 +262,25 @@ function ChatPage() {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Image Preview */}
-            {imagePreview && (
-              <div className="px-4 pb-2">
-                <div className="relative inline-block">
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="max-h-32 rounded-lg"
-                  />
-                  <button
-                    onClick={() => {
-                      setImageFile(null);
-                      setImagePreview(null);
-                    }}
-                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Message Input */}
             <form
               onSubmit={handleSendMessage}
               className="border-t border-white/10 p-4"
             >
+              {attachment && (
+                <div className="mb-2 px-4 py-2 bg-white/5 rounded-lg flex items-center justify-between">
+                  <span className="text-white/70 text-sm">
+                    {attachment.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachment(null)}
+                    className="text-white/50 hover:text-white/70"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -277,24 +292,27 @@ function ChatPage() {
                 <input
                   type="file"
                   ref={fileInputRef}
-                  onChange={handleImageSelect}
-                  accept="image/*"
+                  onChange={handleFileSelect}
                   className="hidden"
+                  accept="image/*,.pdf,.doc,.docx"
                 />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                  title="Attach image"
+                  className="px-3 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
                 >
-                  <ImageIcon className="w-5 h-5 text-white" />
+                  <Paperclip className="w-5 h-5" />
                 </button>
                 <button
                   type="submit"
-                  disabled={(!newMessage.trim() && !imageFile) || sending}
+                  disabled={
+                    (!newMessage.trim() && !attachment) ||
+                    sending ||
+                    isUploading
+                  }
                   className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {sending ? (
+                  {sending || isUploading ? (
                     <RefreshCw className="w-5 h-5 animate-spin" />
                   ) : (
                     <Send className="w-5 h-5" />
