@@ -56,10 +56,26 @@ function ChatPage() {
             ? `order_id=eq.${selectedOrderId}`
             : undefined,
         },
-        (payload) => {
+        async (payload) => {
           if (payload.eventType === "INSERT") {
-            setMessages((prev) => [...prev, payload.new as Message]);
-            scrollToBottom();
+            const newMessage = payload.new as Message;
+            // Get order details to determine if message is from admin
+            const { data: orderData } = await supabase
+              .from("orders")
+              .select("user_id")
+              .eq("id", newMessage.order_id)
+              .single();
+
+            if (orderData) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  ...newMessage,
+                  is_admin: newMessage.user_id !== orderData.user_id,
+                },
+              ]);
+              scrollToBottom();
+            }
           }
         }
       )
@@ -73,11 +89,20 @@ function ChatPage() {
 
       setSending(true);
       try {
+        // Get order details first
+        const { data: orderData, error: orderError } = await supabase
+          .from("orders")
+          .select("user_id")
+          .eq("id", selectedOrderId)
+          .single();
+
+        if (orderError) throw orderError;
+
         const { error: messageError } = await supabase.from("messages").insert([
           {
             content: newMessage.trim(),
             user_id: user.id,
-            is_admin: isAdmin,
+            is_admin: user.id !== orderData.user_id,
             user_name: user.user_metadata.full_name || user.email,
             user_avatar: user.user_metadata.avatar_url,
             order_id: selectedOrderId,
@@ -93,7 +118,7 @@ function ChatPage() {
         setSending(false);
       }
     },
-    [user, newMessage, sending, selectedOrderId, isAdmin]
+    [user, newMessage, sending, selectedOrderId]
   );
 
   useEffect(() => {
@@ -193,12 +218,24 @@ function ChatPage() {
       setLoading(true);
       const { data, error } = await supabase
         .from("messages")
-        .select("*")
+        .select(
+          `
+          *,
+          orders!inner (
+            user_id
+          )
+        `
+        )
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
       if (error) throw error;
-      setMessages(data || []);
+      setMessages(
+        data?.map((msg) => ({
+          ...msg,
+          is_admin: msg.user_id !== msg.orders.user_id,
+        })) || []
+      );
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
