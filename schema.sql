@@ -500,14 +500,10 @@ ALTER TABLE admin_users
 -- Re-enable RLS
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 
--- Recreate the policy with proper UUID casting
+-- Recreate the policy with simplified logic
 CREATE POLICY "Allow users to view their own admin status"
 ON admin_users FOR SELECT
 TO authenticated
 USING (
   (SELECT auth.uid())::UUID = user_id
-  OR EXISTS (
-    SELECT 1 FROM admin_users 
-    WHERE user_id = (SELECT auth.uid())::UUID
-  )
 );

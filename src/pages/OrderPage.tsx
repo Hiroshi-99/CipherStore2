@@ -353,7 +353,7 @@ function OrderPage() {
             <div className="text-white mb-8">
               <h2 className="text-2xl font-bold mb-2">Order Summary</h2>
               <div className="flex justify-between items-center py-4 border-t border-white/20">
-                <span>Minecraft Account</span>
+                <span>Elite Account</span>
                 <span className="text-emerald-400 font-bold">$10.00</span>
               </div>
             </div>
@@ -412,7 +412,7 @@ function OrderPage() {
                 </h3>
                 <div className="relative group">
                   <img
-                    src="/images/qr.jpg" // Add your QR code image here
+                    src="https://i.imgur.com/poLlTH7.jpeg" // Add your QR code image here
                     alt="Payment QR Code"
                     className="w-full rounded-lg border-2 border-emerald-400/50 cursor-pointer transition-transform hover:scale-[1.02]"
                     onClick={() => setShowQRModal(true)}

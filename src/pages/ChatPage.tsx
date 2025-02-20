@@ -6,6 +6,7 @@ import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
+import { debounce } from "lodash";
 
 interface Message {
   id: string;
@@ -15,6 +16,7 @@ interface Message {
   is_admin: boolean;
   created_at: string;
   order_id: string;
+  order_user_id: UUID;
 }
 
 interface ChatProps {
@@ -39,6 +41,8 @@ function ChatPage() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -59,14 +63,16 @@ function ChatPage() {
         },
         async (payload) => {
           if (payload.eventType === "INSERT") {
-            const { data: orderData } = await supabase
-              .from("orders")
-              .select("user_id")
-              .eq("id", selectedOrderId)
-              .single();
+            const newMessage = payload.new as Message;
+            try {
+              const { data: orderData, error: orderError } = await supabase
+                .from("orders")
+                .select("user_id")
+                .eq("id", selectedOrderId)
+                .single();
 
-            if (orderData) {
-              const newMessage = payload.new as Message;
+              if (orderError) throw orderError;
+
               setMessages((prev) => [
                 ...prev,
                 {
@@ -75,6 +81,8 @@ function ChatPage() {
                 },
               ]);
               scrollToBottom();
+            } catch (error) {
+              console.error("Error processing new message:", error);
             }
           }
         }
@@ -86,14 +94,13 @@ function ChatPage() {
     };
   }, [selectedOrderId, scrollToBottom]);
 
-  const handleSendMessage = useCallback(
-    async (e: React.FormEvent) => {
+  const debouncedSendMessage = useCallback(
+    debounce(async (e: React.FormEvent) => {
       e.preventDefault();
       if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
 
       setSending(true);
       try {
-        // Get order details first
         const { data: orderData, error: orderError } = await supabase
           .from("orders")
           .select("user_id")
@@ -122,7 +129,7 @@ function ChatPage() {
       } finally {
         setSending(false);
       }
-    },
+    }, 300),
     [user, newMessage, sending, selectedOrderId]
   );
 
@@ -226,31 +233,51 @@ function ChatPage() {
     }
   };
 
-  const fetchMessages = async (orderId: string) => {
+  const fetchMessages = async (
+    orderId: string,
+    limit: number = 20,
+    offset: number = 0
+  ) => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      const { data, error, count } = await supabase
         .from("messages")
-        .select("*, orders(user_id)")
+        .select("*, orders(user_id)", { count: "exact" })
         .eq("order_id", orderId)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
 
       if (error) throw error;
 
-      // Compare message sender with order owner to determine admin status
-      setMessages(
-        data?.map((msg) => ({
+      setMessages((prev) => [
+        ...prev,
+        ...(data?.map((msg) => ({
           ...msg,
           is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined, // Remove orders data from message object
-        })) || []
-      );
+          orders: undefined,
+        })) || []),
+      ]);
+
+      setHasMoreMessages(count !== undefined && count > offset + limit);
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
       setError("Failed to load messages");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMoreMessages = async () => {
+    if (loadingMore || !hasMoreMessages) return;
+
+    setLoadingMore(true);
+    try {
+      await fetchMessages(selectedOrderId!, 20, messages.length);
+    } catch (error) {
+      console.error("Error loading more messages:", error);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -363,6 +390,15 @@ function ChatPage() {
                 <>
                   {/* Messages Container */}
                   <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
+                    {hasMoreMessages && (
+                      <button
+                        onClick={loadMoreMessages}
+                        disabled={loadingMore}
+                        className="w-full py-2 text-center text-emerald-400 hover:text-emerald-500"
+                      >
+                        {loadingMore ? "Loading more..." : "Load More"}
+                      </button>
+                    )}
                     {loading ? (
                       <div className="flex items-center justify-center h-full">
                         <LoadingSpinner size="lg" light />
@@ -420,7 +456,7 @@ function ChatPage() {
 
                   {/* Message Input */}
                   <form
-                    onSubmit={handleSendMessage}
+                    onSubmit={debouncedSendMessage}
                     className="border-t border-white/10 p-4"
                   >
                     <div className="flex gap-2">
