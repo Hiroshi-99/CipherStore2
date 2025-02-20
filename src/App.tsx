@@ -7,10 +7,24 @@ import AdminPage from "./pages/AdminPage";
 import AdminGuard from "./components/AdminGuard";
 import { setPageTitle } from "./utils/title";
 import Fireflies from "./components/Fireflies";
+import { supabase } from "./lib/supabase";
+import { handleDiscordAuth } from "./lib/auth";
 
 function App() {
   useEffect(() => {
     setPageTitle(""); // This will just show "Cipher"
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN") {
+        handleDiscordAuth();
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   return (

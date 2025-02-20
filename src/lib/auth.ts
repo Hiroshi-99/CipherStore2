@@ -64,7 +64,7 @@ export const handleDiscordAuth = async () => {
 
     const discordId = session.user.user_metadata.provider_id;
 
-    // Add user to Discord server
+    // Get Discord invite
     const response = await fetch("/.netlify/functions/discord-user-manager", {
       method: "POST",
       headers: {
@@ -76,11 +76,15 @@ export const handleDiscordAuth = async () => {
       }),
     });
 
+    const data = await response.json();
     if (!response.ok) {
-      console.warn(
-        "Failed to add user to Discord server:",
-        await response.json()
-      );
+      console.warn("Failed to get Discord invite:", data);
+      return;
+    }
+
+    // Open invite in new tab
+    if (data.inviteUrl) {
+      window.open(data.inviteUrl, "_blank");
     }
   } catch (error) {
     console.error("Error handling Discord auth:", error);
