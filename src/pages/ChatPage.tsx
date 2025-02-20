@@ -6,7 +6,6 @@ import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { debounce } from "lodash";
 
 interface Message {
   id: string;
@@ -16,7 +15,6 @@ interface Message {
   is_admin: boolean;
   created_at: string;
   order_id: string;
-  order_user_id: UUID;
 }
 
 interface ChatProps {
@@ -41,8 +39,6 @@ function ChatPage() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
-  const [hasMoreMessages, setHasMoreMessages] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -51,6 +47,10 @@ function ChatPage() {
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
+    // First fetch existing messages
+    fetchMessages(selectedOrderId);
+
+    // Then subscribe to new messages
     const channel = supabase
       .channel(`messages:${selectedOrderId}`)
       .on(
@@ -63,16 +63,14 @@ function ChatPage() {
         },
         async (payload) => {
           if (payload.eventType === "INSERT") {
-            const newMessage = payload.new as Message;
-            try {
-              const { data: orderData, error: orderError } = await supabase
-                .from("orders")
-                .select("user_id")
-                .eq("id", selectedOrderId)
-                .single();
+            const { data: orderData } = await supabase
+              .from("orders")
+              .select("user_id, full_name")
+              .eq("id", selectedOrderId)
+              .single();
 
-              if (orderError) throw orderError;
-
+            if (orderData) {
+              const newMessage = payload.new as Message;
               setMessages((prev) => [
                 ...prev,
                 {
@@ -81,8 +79,12 @@ function ChatPage() {
                 },
               ]);
               scrollToBottom();
-            } catch (error) {
-              console.error("Error processing new message:", error);
+
+              // Play notification sound for new messages
+              if (newMessage.user_id !== user?.id) {
+                const audio = new Audio("/notification.mp3");
+                audio.play().catch(() => {}); // Ignore autoplay errors
+              }
             }
           }
         }
@@ -92,15 +94,34 @@ function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, scrollToBottom]);
+  }, [selectedOrderId, user?.id, scrollToBottom]);
 
-  const debouncedSendMessage = useCallback(
-    debounce(async (e: React.FormEvent) => {
+  const handleSendMessage = useCallback(
+    async (e: React.FormEvent) => {
       e.preventDefault();
       if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
 
+      const messageContent = newMessage.trim();
+      setNewMessage("");
       setSending(true);
+
+      // Add optimistic message
+      const optimisticMessage: Message = {
+        id: crypto.randomUUID(),
+        content: messageContent,
+        user_id: user.id,
+        user_name: user.user_metadata.full_name || user.email,
+        user_avatar: user.user_metadata.avatar_url,
+        is_admin: isAdmin,
+        created_at: new Date().toISOString(),
+        order_id: selectedOrderId,
+      };
+
+      setMessages((prev) => [...prev, optimisticMessage]);
+      scrollToBottom();
+
       try {
+        // Get order details first
         const { data: orderData, error: orderError } = await supabase
           .from("orders")
           .select("user_id")
@@ -111,7 +132,7 @@ function ChatPage() {
 
         const { error: messageError } = await supabase.from("messages").insert([
           {
-            content: newMessage.trim(),
+            content: messageContent,
             user_id: user.id,
             is_admin: user.id !== orderData.user_id,
             user_name: user.user_metadata.full_name || user.email,
@@ -121,16 +142,22 @@ function ChatPage() {
           },
         ]);
 
-        if (messageError) throw messageError;
-        setNewMessage("");
+        if (messageError) {
+          // Remove optimistic message on error
+          setMessages((prev) =>
+            prev.filter((msg) => msg.id !== optimisticMessage.id)
+          );
+          throw messageError;
+        }
       } catch (error) {
         console.error("Error sending message:", error);
         setError("Failed to send message");
+        setNewMessage(messageContent); // Restore message on error
       } finally {
         setSending(false);
       }
-    }, 300),
-    [user, newMessage, sending, selectedOrderId]
+    },
+    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
   );
 
   useEffect(() => {
@@ -233,51 +260,38 @@ function ChatPage() {
     }
   };
 
-  const fetchMessages = async (
-    orderId: string,
-    limit: number = 20,
-    offset: number = 0
-  ) => {
+  const fetchMessages = async (orderId: string) => {
     try {
       setLoading(true);
-      const { data, error, count } = await supabase
+      const { data, error } = await supabase
         .from("messages")
-        .select("*, orders(user_id)", { count: "exact" })
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
         .eq("order_id", orderId)
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+        .order("created_at", { ascending: true });
 
       if (error) throw error;
 
-      setMessages((prev) => [
-        ...prev,
-        ...(data?.map((msg) => ({
+      setMessages(
+        data?.map((msg) => ({
           ...msg,
           is_admin: msg.user_id !== msg.orders.user_id,
           orders: undefined,
-        })) || []),
-      ]);
-
-      setHasMoreMessages(count !== undefined && count > offset + limit);
+        })) || []
+      );
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
       setError("Failed to load messages");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadMoreMessages = async () => {
-    if (loadingMore || !hasMoreMessages) return;
-
-    setLoadingMore(true);
-    try {
-      await fetchMessages(selectedOrderId!, 20, messages.length);
-    } catch (error) {
-      console.error("Error loading more messages:", error);
-    } finally {
-      setLoadingMore(false);
     }
   };
 
@@ -390,22 +404,14 @@ function ChatPage() {
                 <>
                   {/* Messages Container */}
                   <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
-                    {hasMoreMessages && (
-                      <button
-                        onClick={loadMoreMessages}
-                        disabled={loadingMore}
-                        className="w-full py-2 text-center text-emerald-400 hover:text-emerald-500"
-                      >
-                        {loadingMore ? "Loading more..." : "Load More"}
-                      </button>
-                    )}
                     {loading ? (
                       <div className="flex items-center justify-center h-full">
                         <LoadingSpinner size="lg" light />
                       </div>
                     ) : messages.length === 0 ? (
-                      <div className="flex items-center justify-center h-full text-white/50">
-                        No messages yet. Start the conversation!
+                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+                        <p>No messages yet.</p>
+                        <p className="text-sm">Start the conversation!</p>
                       </div>
                     ) : (
                       messages.map((message) => (
@@ -413,6 +419,11 @@ function ChatPage() {
                           key={message.id}
                           className={`flex items-start gap-3 ${
                             message.is_admin ? "justify-start" : "justify-end"
+                          } ${
+                            sending &&
+                            message.id === messages[messages.length - 1].id
+                              ? "opacity-50"
+                              : ""
                           }`}
                         >
                           {message.is_admin && (
@@ -456,7 +467,7 @@ function ChatPage() {
 
                   {/* Message Input */}
                   <form
-                    onSubmit={debouncedSendMessage}
+                    onSubmit={handleSendMessage}
                     className="border-t border-white/10 p-4"
                   >
                     <div className="flex gap-2">
@@ -482,8 +493,9 @@ function ChatPage() {
                   </form>
                 </>
               ) : (
-                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex items-center justify-center text-white/50">
-                  Select an order to start chatting
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                  <p>Select an order to start chatting</p>
+                  <p className="text-sm">Your conversations will appear here</p>
                 </div>
               )}
             </div>
