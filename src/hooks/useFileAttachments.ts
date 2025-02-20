@@ -11,21 +11,35 @@ interface FileAttachment {
   type: string;
 }
 
+interface UploadError {
+  message: string;
+  file: File;
+}
+
 export function useFileAttachments() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<UploadError | null>(null);
+
+  const validateFile = useCallback((file: File): void => {
+    if (file.size > MAX_FILE_SIZE) {
+      throw new Error(`File ${file.name} is too large (max 10MB)`);
+    }
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      throw new Error(
+        `File type ${
+          file.type
+        } is not supported. Allowed types: ${ALLOWED_TYPES.join(", ")}`
+      );
+    }
+  }, []);
 
   const uploadFile = useCallback(
     async (file: File): Promise<FileAttachment | null> => {
-      if (file.size > MAX_FILE_SIZE) {
-        throw new Error("File size too large (max 10MB)");
-      }
-
-      if (!ALLOWED_TYPES.includes(file.type)) {
-        throw new Error("File type not supported");
-      }
-
       try {
+        setError(null);
+        validateFile(file);
         setUploading(true);
         setProgress(0);
 
@@ -50,7 +64,11 @@ export function useFileAttachments() {
             },
           });
 
-        if (uploadError) throw uploadError;
+        if (uploadError) {
+          throw new Error(
+            uploadError.message || "An error occurred while uploading the file"
+          );
+        }
 
         const { data: publicUrl } = supabase.storage
           .from("chat-attachments")
@@ -63,20 +81,23 @@ export function useFileAttachments() {
           size: file.size,
           type: file.type,
         };
-      } catch (error) {
-        console.error("Upload error:", error);
+      } catch (err) {
+        const error = err as Error;
+        setError({ message: error.message, file });
         throw error;
       } finally {
         setUploading(false);
         setProgress(0);
       }
     },
-    []
+    [validateFile]
   );
 
   return {
     uploadFile,
     uploading,
     progress,
+    error,
+    setError,
   };
 }

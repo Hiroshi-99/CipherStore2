@@ -14,6 +14,7 @@ import { useFileAttachments } from "../hooks/useFileAttachments";
 import { useDragAndDrop } from "../hooks/useDragAndDrop";
 import { FilePreview } from "../components/FilePreview";
 import { ALLOWED_TYPES } from "../constants/files";
+import { Toast } from "../components/Toast";
 
 interface Message {
   id: string;
@@ -263,7 +264,8 @@ function ChatInput({
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const { uploadFile, uploading, progress } = useFileAttachments();
+  const { uploadFile, uploading, progress, error, setError } =
+    useFileAttachments();
   const { isDragging, handleDragOver, handleDragLeave, handleDrop } =
     useDragAndDrop((files) => setPendingFiles((prev) => [...prev, ...files]));
 
@@ -296,81 +298,90 @@ function ChatInput({
   };
 
   return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className="relative"
-    >
-      {isDragging && (
-        <div className="absolute inset-0 z-10 backdrop-blur-sm bg-black/50 border-2 border-dashed border-emerald-500 rounded-lg flex items-center justify-center">
-          <div className="text-emerald-400 text-lg font-medium">
-            Drop files to upload
-          </div>
-        </div>
+    <>
+      {error && (
+        <Toast
+          message={error.message}
+          type="error"
+          onClose={() => setError(null)}
+        />
       )}
-
-      <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
-        {pendingFiles.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
-            {pendingFiles.map((file, index) => (
-              <FilePreview
-                key={index}
-                file={file}
-                onRemove={() => removeFile(index)}
-              />
-            ))}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className="relative"
+      >
+        {isDragging && (
+          <div className="absolute inset-0 z-10 backdrop-blur-sm bg-black/50 border-2 border-dashed border-emerald-500 rounded-lg flex items-center justify-center">
+            <div className="text-emerald-400 text-lg font-medium">
+              Drop files to upload
+            </div>
           </div>
         )}
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-            disabled={disabled}
-          >
-            <Paperclip className="w-5 h-5 text-white/70" />
-          </button>
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            className="hidden"
-            multiple
-            accept={ALLOWED_TYPES.join(",")}
-          />
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => {
-              onTyping();
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit(e);
-              }
-            }}
-            placeholder="Type your message..."
-            className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-            disabled={disabled}
-          />
-          <button
-            type="submit"
-            disabled={disabled || (!value.trim() && !pendingFiles.length)}
-            className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {uploading ? (
-              <div className="flex items-center gap-2">
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                <span>{Math.round(progress)}%</span>
-              </div>
-            ) : (
-              <Send className="w-5 h-5" />
-            )}
-          </button>
-        </div>
-      </form>
-    </div>
+
+        <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
+          {pendingFiles.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+              {pendingFiles.map((file, index) => (
+                <FilePreview
+                  key={index}
+                  file={file}
+                  onRemove={() => removeFile(index)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              disabled={disabled}
+            >
+              <Paperclip className="w-5 h-5 text-white/70" />
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              className="hidden"
+              multiple
+              accept={ALLOWED_TYPES.join(",")}
+            />
+            <input
+              type="text"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={(e) => {
+                onTyping();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
+              placeholder="Type your message..."
+              className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+              disabled={disabled}
+            />
+            <button
+              type="submit"
+              disabled={disabled || (!value.trim() && !pendingFiles.length)}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {uploading ? (
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                  <span>{Math.round(progress)}%</span>
+                </div>
+              ) : (
+                <Send className="w-5 h-5" />
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
   );
 }
 
