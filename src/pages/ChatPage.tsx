@@ -422,6 +422,19 @@ function ChatPage() {
 
   useReadReceipts(selectedOrderId, user?.id ?? null, isAdmin);
 
+  const sendMessage = useCallback(
+    async (content: string, attachments: FileAttachment[] = []) => {
+      if (!selectedOrderId || !user) return;
+
+      try {
+        await handleSendMessage(content, attachments);
+      } catch (error) {
+        console.error("Error sending message:", error);
+      }
+    },
+    [selectedOrderId, user, handleSendMessage]
+  );
+
   const handleRetry = useCallback(
     (messageId: string) => {
       const message = pendingMessages.current.get(messageId);
@@ -431,20 +444,6 @@ function ChatPage() {
       sendMessage(message.content, message.attachments || []);
     },
     [sendMessage, pendingMessages, setNewMessage]
-  );
-
-  const sendMessage = useCallback(
-    async (content: string, attachments: FileAttachment[] = []) => {
-      if (!selectedOrderId || !user) return;
-
-      try {
-        await handleSendMessage(content, attachments);
-        setNewMessage("");
-      } catch (error) {
-        console.error("Error sending message:", error);
-      }
-    },
-    [selectedOrderId, user, handleSendMessage, setNewMessage]
   );
 
   if (authLoading) {
