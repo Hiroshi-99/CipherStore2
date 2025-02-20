@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import { Send, RefreshCw, Paperclip, Image } from "lucide-react";
+import { Send, RefreshCw, Paperclip, X } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 
@@ -13,7 +13,6 @@ interface Message {
   is_admin: boolean;
   created_at: string;
   attachment_url?: string;
-  attachment_type?: "image" | "file";
 }
 
 function ChatPage() {
@@ -96,26 +95,36 @@ function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleAttachment = async (file: File) => {
+  const handleAttachment = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        // 5MB limit
+        alert("File size must be less than 5MB");
+        return;
+      }
+      setAttachment(file);
+    }
+  };
+
+  const uploadAttachment = async () => {
+    if (!attachment) return null;
     setIsUploading(true);
     try {
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${Math.random().toString(36).slice(2)}.${fileExt}`;
-      const filePath = `chat-attachments/${fileName}`;
+      const fileName = `${Date.now()}-${attachment.name}`;
+      const { data, error } = await supabase.storage
+        .from("chat-attachments")
+        .upload(fileName, attachment);
 
-      const { error: uploadError } = await supabase.storage
-        .from("chat-files")
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
+      if (error) throw error;
 
       const {
         data: { publicUrl },
-      } = supabase.storage.from("chat-files").getPublicUrl(filePath);
+      } = supabase.storage.from("chat-attachments").getPublicUrl(data.path);
 
       return publicUrl;
     } catch (error) {
-      console.error("Error uploading file:", error);
+      console.error("Error uploading attachment:", error);
       throw error;
     } finally {
       setIsUploading(false);
@@ -124,18 +133,13 @@ function ChatPage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!newMessage.trim() && !attachment) || sending || isUploading) return;
+    if ((!newMessage.trim() && !attachment) || sending) return;
 
     setSending(true);
     try {
-      let attachmentUrl = "";
-      let attachmentType: "image" | "file" | undefined;
-
+      let attachmentUrl;
       if (attachment) {
-        attachmentUrl = await handleAttachment(attachment);
-        attachmentType = attachment.type.startsWith("image/")
-          ? "image"
-          : "file";
+        attachmentUrl = await uploadAttachment();
       }
 
       const { error: messageError } = await supabase.from("messages").insert([
@@ -145,14 +149,16 @@ function ChatPage() {
           is_admin: isAdmin,
           user_name: user?.user_metadata.full_name || user?.email,
           user_avatar: user?.user_metadata.avatar_url,
-          attachment_url: attachmentUrl || null,
-          attachment_type: attachmentType,
+          attachment_url: attachmentUrl,
         },
       ]);
 
       if (messageError) throw messageError;
       setNewMessage("");
       setAttachment(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     } catch (error) {
       console.error("Error sending message:", error);
       setError("Failed to send message");
@@ -161,17 +167,12 @@ function ChatPage() {
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setAttachment(file);
-    }
-  };
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white">Loading messages...</div>
+      <div className="min-h-screen relative">
+        <div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center">
+          <div className="text-white text-lg">Loading messages...</div>
+        </div>
       </div>
     );
   }
@@ -196,69 +197,74 @@ function ChatPage() {
 
         <main className="max-w-4xl mx-auto px-4 py-8">
           <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+            {error && (
+              <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-2 m-4 rounded-lg">
+                {error}
+              </div>
+            )}
+
             {/* Messages Container */}
             <div className="h-[600px] overflow-y-auto p-6 space-y-4">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex items-start gap-3 ${
-                    message.is_admin ? "justify-start" : "justify-end"
-                  }`}
-                >
-                  {message.is_admin && (
-                    <img
-                      src={message.user_avatar || "/default-avatar.png"}
-                      alt="Avatar"
-                      className="w-8 h-8 rounded-full"
-                    />
-                  )}
+              {messages.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-white/70 text-lg">No messages yet</p>
+                  <p className="text-white/50 text-sm mt-2">
+                    Start the conversation by sending a message
+                  </p>
+                </div>
+              ) : (
+                messages.map((message) => (
                   <div
-                    className={`max-w-[70%] ${
-                      message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-                    } rounded-lg p-3`}
+                    key={message.id}
+                    className={`flex items-start gap-3 ${
+                      message.is_admin ? "justify-start" : "justify-end"
+                    }`}
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-medium text-white/90">
-                        {message.user_name}
-                      </span>
-                      <span className="text-xs text-white/50">
-                        {new Date(message.created_at).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    {message.content && (
-                      <p className="text-white/90 mb-2">{message.content}</p>
+                    {message.is_admin && (
+                      <img
+                        src={message.user_avatar || "/default-avatar.png"}
+                        alt="Avatar"
+                        className="w-8 h-8 rounded-full"
+                      />
                     )}
-                    {message.attachment_url && (
-                      <div className="mt-2">
-                        {message.attachment_type === "image" ? (
-                          <img
-                            src={message.attachment_url}
-                            alt="Attachment"
-                            className="max-w-full rounded-lg"
-                          />
-                        ) : (
-                          <a
-                            href={message.attachment_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300"
-                          >
-                            <Paperclip className="w-4 h-4" />
-                            <span>View Attachment</span>
-                          </a>
-                        )}
+                    <div
+                      className={`max-w-[70%] ${
+                        message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
+                      } rounded-lg p-3`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-medium text-white/90">
+                          {message.user_name}
+                        </span>
+                        <span className="text-xs text-white/50">
+                          {new Date(message.created_at).toLocaleString()}
+                        </span>
                       </div>
+                      <p className="text-white/90 whitespace-pre-wrap">
+                        {message.content}
+                      </p>
+                      {message.attachment_url && (
+                        <a
+                          href={message.attachment_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-2 text-emerald-400 hover:underline flex items-center gap-1 text-sm"
+                        >
+                          <Paperclip className="w-4 h-4" />
+                          View Attachment
+                        </a>
+                      )}
+                    </div>
+                    {!message.is_admin && (
+                      <img
+                        src={message.user_avatar || "/default-avatar.png"}
+                        alt="Avatar"
+                        className="w-8 h-8 rounded-full"
+                      />
                     )}
                   </div>
-                  {!message.is_admin && (
-                    <img
-                      src={message.user_avatar || "/default-avatar.png"}
-                      alt="Avatar"
-                      className="w-8 h-8 rounded-full"
-                    />
-                  )}
-                </div>
-              ))}
+                ))
+              )}
               <div ref={messagesEndRef} />
             </div>
 
@@ -268,16 +274,17 @@ function ChatPage() {
               className="border-t border-white/10 p-4"
             >
               {attachment && (
-                <div className="mb-2 px-4 py-2 bg-white/5 rounded-lg flex items-center justify-between">
-                  <span className="text-white/70 text-sm">
-                    {attachment.name}
-                  </span>
+                <div className="mb-2 px-3 py-2 bg-white/5 rounded-lg flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-white/80">
+                    <Paperclip className="w-4 h-4" />
+                    <span className="text-sm truncate">{attachment.name}</span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setAttachment(null)}
-                    className="text-white/50 hover:text-white/70"
+                    className="text-white/50 hover:text-white/80"
                   >
-                    ×
+                    <X className="w-4 h-4" />
                   </button>
                 </div>
               )}
@@ -292,7 +299,7 @@ function ChatPage() {
                 <input
                   type="file"
                   ref={fileInputRef}
-                  onChange={handleFileSelect}
+                  onChange={handleAttachment}
                   className="hidden"
                   accept="image/*,.pdf,.doc,.docx"
                 />
@@ -310,12 +317,18 @@ function ChatPage() {
                     sending ||
                     isUploading
                   }
-                  className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[100px] justify-center"
                 >
                   {sending || isUploading ? (
-                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <>
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                      <span>{isUploading ? "Uploading..." : "Sending..."}</span>
+                    </>
                   ) : (
-                    <Send className="w-5 h-5" />
+                    <>
+                      <Send className="w-5 h-5" />
+                      <span>Send</span>
+                    </>
                   )}
                 </button>
               </div>
