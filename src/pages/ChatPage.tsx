@@ -45,29 +45,28 @@ function ChatPage() {
   }, []);
 
   const subscribeToMessages = useCallback(() => {
-    return supabase
-      .channel("messages")
+    if (!selectedOrderId) return;
+
+    const channel = supabase
+      .channel(`messages:${selectedOrderId}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "messages",
-          filter: selectedOrderId
-            ? `order_id=eq.${selectedOrderId}`
-            : undefined,
+          filter: `order_id=eq.${selectedOrderId}`,
         },
         async (payload) => {
           if (payload.eventType === "INSERT") {
-            const newMessage = payload.new as Message;
-            // Get order details to determine if message is from admin
             const { data: orderData } = await supabase
               .from("orders")
               .select("user_id")
-              .eq("id", newMessage.order_id)
+              .eq("id", selectedOrderId)
               .single();
 
             if (orderData) {
+              const newMessage = payload.new as Message;
               setMessages((prev) => [
                 ...prev,
                 {
@@ -81,6 +80,10 @@ function ChatPage() {
         }
       )
       .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
   }, [selectedOrderId]);
 
   const handleSendMessage = useCallback(
@@ -219,7 +222,7 @@ function ChatPage() {
       setLoading(true);
       const { data, error } = await supabase
         .from("messages")
-        .select("*, orders!inner(user_id)")
+        .select("*, orders(user_id)")
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
@@ -230,6 +233,7 @@ function ChatPage() {
         data?.map((msg) => ({
           ...msg,
           is_admin: msg.user_id !== msg.orders.user_id,
+          orders: undefined, // Remove orders data from message object
         })) || []
       );
       setTimeout(scrollToBottom, 100);
