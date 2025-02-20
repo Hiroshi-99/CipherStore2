@@ -41,11 +41,15 @@ const MessageBubble = React.memo(function MessageBubble({
   isLatest,
   sending,
   isUnread,
+  onRetry,
+  isPending,
 }: {
   message: Message;
   isLatest: boolean;
   sending: boolean;
   isUnread: boolean;
+  onRetry: () => void;
+  isPending: boolean;
 }) {
   return (
     <div
@@ -87,6 +91,14 @@ const MessageBubble = React.memo(function MessageBubble({
           className="w-8 h-8 rounded-full"
           loading="lazy"
         />
+      )}
+      {isPending && (
+        <button
+          onClick={onRetry}
+          className="text-xs text-red-400 hover:text-red-300 transition-colors"
+        >
+          Retry
+        </button>
       )}
     </div>
   );
@@ -145,6 +157,10 @@ function ChatPage() {
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
 
+  // Add message queue for optimistic updates
+  const messageQueue = useRef<Set<string>>(new Set());
+  const pendingMessages = useRef<Map<string, Message>>(new Map());
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
@@ -184,7 +200,7 @@ function ChatPage() {
     []
   );
 
-  // Optimized message subscription
+  // Optimized message subscription with better real-time handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -203,40 +219,21 @@ function ChatPage() {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
           const newMessage = payload.new as Message;
-          if (!newMessage) return;
+          if (!newMessage || messageQueue.current.has(newMessage.id)) {
+            messageQueue.current.delete(newMessage.id);
+            pendingMessages.current.delete(newMessage.id);
+            return;
+          }
 
-          // Skip if message is already in the list
           setMessages((prev) => {
             if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
-            // Get order data to determine admin status
-            const getOrderData = async () => {
-              if (!isSubscribed) return prev;
+            const isFromOther = newMessage.user_id !== user?.id;
+            if (isFromOther) {
+              handleNewMessageNotification(newMessage);
+            }
 
-              const { data: orderData } = await supabase
-                .from("orders")
-                .select("user_id, full_name")
-                .eq("id", selectedOrderId)
-                .single();
-
-              if (!orderData || !isSubscribed) return prev;
-
-              const isFromOther = newMessage.user_id !== user?.id;
-              const messageWithAdmin = {
-                ...newMessage,
-                is_admin: newMessage.user_id !== orderData.user_id,
-              };
-
-              // Handle notifications for messages from others
-              if (isFromOther) {
-                handleNewMessageNotification(messageWithAdmin);
-              }
-
-              return [...prev, messageWithAdmin];
-            };
-
-            getOrderData();
-            return prev;
+            return [...prev, newMessage];
           });
 
           requestAnimationFrame(scrollToBottom);
@@ -248,7 +245,7 @@ function ChatPage() {
       isSubscribed = false;
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
+  }, [selectedOrderId, user?.id, scrollToBottom]);
 
   // Extracted notification logic
   const handleNewMessageNotification = useCallback(
@@ -271,6 +268,7 @@ function ChatPage() {
     [isTabFocused]
   );
 
+  // Optimized message sending with better error handling
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -280,9 +278,9 @@ function ChatPage() {
       setNewMessage("");
       setSending(true);
 
-      // Add optimistic message
+      const tempId = crypto.randomUUID();
       const optimisticMessage: Message = {
-        id: crypto.randomUUID(),
+        id: tempId,
         content: messageContent,
         user_id: user.id,
         user_name: user.user_metadata.full_name || user.email,
@@ -292,47 +290,80 @@ function ChatPage() {
         order_id: selectedOrderId,
       };
 
+      // Add to pending queue
+      messageQueue.current.add(tempId);
+      pendingMessages.current.set(tempId, optimisticMessage);
+
+      // Optimistic update
       setMessages((prev) => [...prev, optimisticMessage]);
-      scrollToBottom();
+      requestAnimationFrame(scrollToBottom);
 
       try {
         // Get order details first
-        const { data: orderData, error: orderError } = await supabase
+        const { data: orderData } = await supabase
           .from("orders")
           .select("user_id")
           .eq("id", selectedOrderId)
           .single();
 
-        if (orderError) throw orderError;
+        if (!orderData) throw new Error("Order not found");
 
-        const { error: messageError } = await supabase.from("messages").insert([
-          {
-            content: messageContent,
-            user_id: user.id,
-            is_admin: user.id !== orderData.user_id,
-            user_name: user.user_metadata.full_name || user.email,
-            user_avatar: user.user_metadata.avatar_url,
-            order_id: selectedOrderId,
-            order_user_id: orderData.user_id,
-          },
-        ]);
+        // Send message
+        const { data: messageData, error: messageError } = await supabase
+          .from("messages")
+          .insert([
+            {
+              content: messageContent,
+              user_id: user.id,
+              is_admin: user.id !== orderData.user_id,
+              user_name: user.user_metadata.full_name || user.email,
+              user_avatar: user.user_metadata.avatar_url,
+              order_id: selectedOrderId,
+              order_user_id: orderData.user_id,
+            },
+          ])
+          .select()
+          .single();
 
-        if (messageError) {
-          // Remove optimistic message on error
-          setMessages((prev) =>
-            prev.filter((msg) => msg.id !== optimisticMessage.id)
-          );
-          throw messageError;
-        }
+        if (messageError) throw messageError;
+
+        // Update message with real ID
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, id: messageData.id } : msg
+          )
+        );
       } catch (error) {
         console.error("Error sending message:", error);
+        // Remove optimistic message on error
+        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
         setError("Failed to send message");
-        setNewMessage(messageContent); // Restore message on error
+        setNewMessage(messageContent);
       } finally {
+        messageQueue.current.delete(tempId);
+        pendingMessages.current.delete(tempId);
         setSending(false);
       }
     },
     [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
+  );
+
+  // Add message retry functionality
+  const retryMessage = useCallback(
+    async (tempId: string) => {
+      const message = pendingMessages.current.get(tempId);
+      if (!message) return;
+
+      // Remove failed message
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+
+      // Retry sending
+      const content = message.content;
+      pendingMessages.current.delete(tempId);
+      setNewMessage(content);
+      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
+    },
+    [handleSendMessage]
   );
 
   useEffect(() => {
@@ -588,7 +619,19 @@ function ChatPage() {
                         <p className="text-sm">Start the conversation!</p>
                       </div>
                     ) : (
-                      messagesList
+                      messages.map((message) => (
+                        <MessageBubble
+                          key={message.id}
+                          message={message}
+                          isLatest={
+                            message.id === messages[messages.length - 1].id
+                          }
+                          sending={messageQueue.current.has(message.id)}
+                          isUnread={unreadMessages.has(message.id)}
+                          onRetry={() => retryMessage(message.id)}
+                          isPending={pendingMessages.current.has(message.id)}
+                        />
+                      ))
                     )}
                     <div ref={messagesEndRef} />
                   </div>
