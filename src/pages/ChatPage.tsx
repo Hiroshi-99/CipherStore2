@@ -13,6 +13,7 @@ import { MessageAttachment } from "../components/MessageAttachment";
 import { useFileAttachments } from "../hooks/useFileAttachments";
 import { useDragAndDrop } from "../hooks/useDragAndDrop";
 import { FilePreview } from "../components/FilePreview";
+import { ALLOWED_TYPES } from "../constants/files";
 
 interface Message {
   id: string;

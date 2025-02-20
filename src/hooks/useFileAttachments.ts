@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import { compressImage } from "../utils/imageCompression";
+import { ALLOWED_TYPES, MAX_FILE_SIZE } from "../constants/files";
 
 interface FileAttachment {
   id: string;
@@ -9,15 +10,6 @@ interface FileAttachment {
   size: number;
   type: string;
 }
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "application/pdf",
-  "text/plain",
-];
 
 export function useFileAttachments() {
   const [uploading, setUploading] = useState(false);

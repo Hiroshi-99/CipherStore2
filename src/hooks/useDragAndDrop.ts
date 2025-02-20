@@ -1,13 +1,5 @@
 import { useState, useCallback, DragEvent } from "react";
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "application/pdf",
-  "text/plain",
-];
+import { ALLOWED_TYPES, MAX_FILE_SIZE } from "../constants/files";
 
 interface ValidationError {
   file: File;
