@@ -75,39 +75,6 @@ export const handler: Handler = async (event) => {
       throw fetchError || new Error("Order not found");
     }
 
-    // Get user's Discord ID from auth metadata
-    const { data: userData, error: userError } =
-      await supabase.auth.admin.getUserById(order.user_id);
-
-    if (userError || !userData.user) {
-      logError(userError || new Error("User not found"), "User fetch");
-    } else {
-      const discordId = userData.user.user_metadata.provider_id;
-
-      // Send DM to user
-      try {
-        await fetch("/.netlify/functions/discord-user-manager", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "send_dm",
-            discordId,
-            message:
-              status === "approved"
-                ? "🎉 Your payment has been approved! Your order is now active."
-                : `❌ Your payment was rejected. Reason: ${
-                    notes || "No reason provided"
-                  }`,
-          }),
-        });
-      } catch (dmError) {
-        logError(dmError, "Sending DM");
-        // Don't throw here as it's not critical
-      }
-    }
-
     // Create inbox message
     const message = {
       user_id: order.user_id,
@@ -120,6 +87,32 @@ export const handler: Handler = async (event) => {
             }`,
       type: "payment_status",
     };
+
+    // Send DM to user if approved
+    if (status === "approved") {
+      try {
+        const { data: userData } = await supabase.auth.admin.getUserById(
+          order.user_id
+        );
+        if (userData?.user?.user_metadata?.provider_id) {
+          const discordId = userData.user.user_metadata.provider_id;
+          await fetch("/.netlify/functions/discord-user-manager", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "send_dm",
+              userId: order.user_id,
+              discordId,
+              message:
+                "Your payment has been approved! Check your inbox for more details.",
+            }),
+          });
+        }
+      } catch (dmError) {
+        logError(dmError, "Sending DM notification");
+        // Don't throw here as it's not critical
+      }
+    }
 
     const { error: inboxError } = await supabase
       .from("inbox_messages")

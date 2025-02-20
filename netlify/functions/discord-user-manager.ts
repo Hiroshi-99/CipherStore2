@@ -19,15 +19,25 @@ export const handler: Handler = async (event) => {
   let discordClient: Client | null = null;
 
   try {
-    const { action, discordId, message } = JSON.parse(event.body || "{}");
+    if (event.httpMethod !== "POST") {
+      return {
+        statusCode: 405,
+        body: JSON.stringify({ error: "Method not allowed" }),
+      };
+    }
 
-    if (!action || !discordId) {
+    const { action, userId, discordId, message } = JSON.parse(
+      event.body || "{}"
+    );
+
+    if (!action || !userId || !discordId) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: "Missing required fields" }),
       };
     }
 
+    // Initialize Discord client
     discordClient = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -38,57 +48,46 @@ export const handler: Handler = async (event) => {
 
     await discordClient.login(process.env.DISCORD_TOKEN);
 
+    const guild = await discordClient.guilds.fetch(
+      process.env.DISCORD_GUILD_ID!
+    );
+    if (!guild) {
+      throw new Error("Could not find Discord guild");
+    }
+
     switch (action) {
-      case "add_to_server": {
+      case "add_to_guild":
         try {
-          const guild = await discordClient.guilds.fetch(
-            process.env.DISCORD_GUILD_ID!
-          );
-
-          // Create an invite
-          const channel = await discordClient.channels.fetch(
-            process.env.DISCORD_CHANNEL_ID!
-          );
-
-          if (!channel?.isTextBased()) {
-            throw new Error("Invalid channel");
-          }
-
-          const invite = await channel.createInvite({
-            maxAge: 86400, // 24 hours
-            maxUses: 1,
-            unique: true,
-          });
-
+          // Try to add user to guild
+          await guild.members.add(discordId);
+          return {
+            statusCode: 200,
+            body: JSON.stringify({ success: true, action: "added_to_guild" }),
+          };
+        } catch (error) {
+          logError(error, "Adding user to guild");
+          // Don't throw here as the user might already be in the guild
           return {
             statusCode: 200,
             body: JSON.stringify({
-              success: true,
-              inviteUrl: invite.url,
+              success: false,
+              error: "Failed to add to guild, user might already be a member",
             }),
           };
-        } catch (error) {
-          logError(error, "Creating invite");
-          throw error;
         }
-      }
 
-      case "send_dm": {
+      case "send_dm":
         try {
           const user = await discordClient.users.fetch(discordId);
-          await user.send({
-            content: message,
-            flags: ["SUPPRESS_EMBEDS"],
-          });
+          await user.send(message || "Your payment has been approved!");
           return {
             statusCode: 200,
-            body: JSON.stringify({ success: true }),
+            body: JSON.stringify({ success: true, action: "dm_sent" }),
           };
         } catch (error) {
           logError(error, "Sending DM");
-          throw error;
+          throw new Error("Failed to send DM to user");
         }
-      }
 
       default:
         return {

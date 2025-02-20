@@ -1,18 +1,36 @@
 import { supabase } from "./supabase";
 
-export async function getAuthHeaders() {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
-    throw new Error("No active session");
-  }
-
+export const getAuthHeaders = async () => {
+  const session = await supabase.auth.getSession();
   return {
-    Authorization: `Bearer ${session.access_token}`,
+    Authorization: `Bearer ${session.data.session?.access_token}`,
   };
-}
+};
+
+export const handleDiscordAuth = async (userId: string, discordId: string) => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch("/.netlify/functions/discord-user-manager", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify({
+        action: "add_to_guild",
+        userId,
+        discordId,
+      }),
+    });
+
+    const data = await response.json();
+    if (!data.success) {
+      console.warn("Failed to add user to guild:", data.error);
+    }
+  } catch (error) {
+    console.error("Error handling Discord auth:", error);
+  }
+};
 
 export async function isAdmin(userId: string): Promise<boolean> {
   try {
@@ -54,39 +72,3 @@ export async function isAdmin(userId: string): Promise<boolean> {
     return false;
   }
 }
-
-export const handleDiscordAuth = async () => {
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return;
-
-    const discordId = session.user.user_metadata.provider_id;
-
-    // Get Discord invite
-    const response = await fetch("/.netlify/functions/discord-user-manager", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "add_to_server",
-        discordId,
-      }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      console.warn("Failed to get Discord invite:", data);
-      return;
-    }
-
-    // Open invite in new tab
-    if (data.inviteUrl) {
-      window.open(data.inviteUrl, "_blank");
-    }
-  } catch (error) {
-    console.error("Error handling Discord auth:", error);
-  }
-};

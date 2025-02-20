@@ -14,17 +14,19 @@ function App() {
   useEffect(() => {
     setPageTitle(""); // This will just show "Cipher"
 
+    // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_IN") {
-        handleDiscordAuth();
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        const discordId = session.user.user_metadata?.provider_id;
+        if (discordId) {
+          await handleDiscordAuth(session.user.id, discordId);
+        }
       }
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   return (
