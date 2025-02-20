@@ -35,7 +35,23 @@ interface ChatProps {
   orderId: string;
 }
 
-// Create separate components for better performance
+// Add mobile detection hook
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  return isMobile;
+}
+
+// Update MessageBubble for better mobile display
 const MessageBubble = React.memo(function MessageBubble({
   message,
   isLatest,
@@ -51,9 +67,11 @@ const MessageBubble = React.memo(function MessageBubble({
   onRetry: () => void;
   isPending: boolean;
 }) {
+  const isMobile = useIsMobile();
+
   return (
     <div
-      className={`flex items-start gap-3 ${
+      className={`flex items-start gap-2 md:gap-3 animate-fade-in ${
         message.is_admin ? "justify-start" : "justify-end"
       } ${isLatest && sending ? "opacity-50" : ""} ${
         isUnread ? "animate-highlight-fade" : ""
@@ -63,24 +81,26 @@ const MessageBubble = React.memo(function MessageBubble({
         <img
           src={message.user_avatar || "/default-avatar.png"}
           alt="Avatar"
-          className="w-8 h-8 rounded-full"
+          className="w-6 h-6 md:w-8 md:h-8 rounded-full"
           loading="lazy"
         />
       )}
       <div
-        className={`max-w-[70%] ${
+        className={`max-w-[85%] md:max-w-[70%] ${
           message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-        } rounded-lg p-3`}
+        } rounded-lg p-2 md:p-3`}
       >
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-medium text-white/90">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <span className="text-xs md:text-sm font-medium text-white/90">
             {message.user_name}
           </span>
-          <span className="text-xs text-white/50">
-            {new Date(message.created_at).toLocaleString()}
+          <span className="text-[10px] md:text-xs text-white/50">
+            {isMobile
+              ? new Date(message.created_at).toLocaleTimeString()
+              : new Date(message.created_at).toLocaleString()}
           </span>
         </div>
-        <p className="text-white/90 whitespace-pre-wrap break-words">
+        <p className="text-sm md:text-base text-white/90 whitespace-pre-wrap break-words">
           {message.content}
         </p>
       </div>
@@ -88,14 +108,14 @@ const MessageBubble = React.memo(function MessageBubble({
         <img
           src={message.user_avatar || "/default-avatar.png"}
           alt="Avatar"
-          className="w-8 h-8 rounded-full"
+          className="w-6 h-6 md:w-8 md:h-8 rounded-full"
           loading="lazy"
         />
       )}
       {isPending && (
         <button
           onClick={onRetry}
-          className="text-xs text-red-400 hover:text-red-300 transition-colors"
+          className="absolute -bottom-4 right-0 text-xs text-red-400 hover:text-red-300 transition-colors bg-black/50 px-2 py-1 rounded"
         >
           Retry
         </button>
@@ -161,9 +181,55 @@ function ChatPage() {
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const isMobile = useIsMobile();
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Improved scroll handling for mobile
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (chatContainerRef.current) {
+      const scrollOptions: ScrollIntoViewOptions = {
+        behavior: smooth ? "smooth" : "auto",
+        block: "end",
+      };
+      requestAnimationFrame(() => {
+        chatContainerRef.current?.scrollIntoView(scrollOptions);
+      });
+    }
   }, []);
+
+  // Add touch handling for mobile
+  useEffect(() => {
+    if (!isMobile) return;
+
+    let touchStartX = 0;
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartX = e.touches[0].clientX;
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      const touchEndX = e.changedTouches[0].clientX;
+      const diff = touchStartX - touchEndX;
+
+      if (Math.abs(diff) > 50) {
+        // Minimum swipe distance
+        if (diff > 0) {
+          // Swipe left
+          setShowSidebar(false);
+        } else {
+          // Swipe right
+          setShowSidebar(true);
+        }
+      }
+    };
+
+    document.addEventListener("touchstart", handleTouchStart);
+    document.addEventListener("touchend", handleTouchEnd);
+
+    return () => {
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [isMobile]);
 
   // Memoize orders list
   const ordersList = useMemo(() => {
@@ -541,15 +607,18 @@ function ChatPage() {
           {notification}
         </div>
       )}
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
-          {/* Mobile Order Toggle */}
+      <main className="max-w-6xl mx-auto px-2 md:px-4 py-4 md:py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6 relative">
+          {/* Mobile Order Toggle - Updated for better visibility */}
           <button
-            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
+            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg flex items-center gap-2"
             onClick={() => setShowSidebar(!showSidebar)}
           >
+            <span className="text-white text-sm">
+              {showSidebar ? "Hide Orders" : "Show Orders"}
+            </span>
             <svg
-              className="w-6 h-6 text-white"
+              className="w-5 h-5 text-white"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -558,18 +627,22 @@ function ChatPage() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M4 6h16M4 12h16m-7 6h7"
+                d={
+                  showSidebar
+                    ? "M6 18L18 6M6 6l12 12"
+                    : "M4 6h16M4 12h16m-7 6h7"
+                }
               />
             </svg>
           </button>
 
-          {/* Orders Sidebar */}
+          {/* Orders Sidebar - Updated for better mobile UX */}
           <div
             className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
               showSidebar ? "translate-x-0" : "-translate-x-full"
             } md:translate-x-0 transition-transform duration-200 ease-in-out`}
           >
-            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
+            <div className="backdrop-blur-xl bg-black/95 md:bg-black/30 h-full md:h-auto rounded-2xl p-3 md:p-4">
               {/* Mobile Close Button */}
               <div className="flex justify-between items-center mb-4 md:hidden">
                 <h2 className="text-lg font-medium text-white">
@@ -602,13 +675,12 @@ function ChatPage() {
             </div>
           </div>
 
-          {/* Chat Area */}
+          {/* Chat Area - Updated for better mobile display */}
           <div className="md:col-span-3">
             <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
               {selectedOrderId ? (
                 <>
-                  {/* Messages Container */}
-                  <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
+                  <div className="h-[calc(100vh-12rem)] md:h-[600px] overflow-y-auto p-3 md:p-6 space-y-4">
                     {loading ? (
                       <div className="flex items-center justify-center h-full">
                         <LoadingSpinner size="lg" light />
@@ -636,10 +708,10 @@ function ChatPage() {
                     <div ref={messagesEndRef} />
                   </div>
 
-                  {/* Message Input */}
+                  {/* Message Input - Updated for mobile */}
                   <form
                     onSubmit={handleSendMessage}
-                    className="border-t border-white/10 p-4"
+                    className="border-t border-white/10 p-2 md:p-4"
                   >
                     <div className="flex gap-2">
                       <input
@@ -647,26 +719,26 @@ function ChatPage() {
                         value={newMessage}
                         onChange={(e) => debouncedSetNewMessage(e.target.value)}
                         placeholder="Type your message..."
-                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm md:text-base text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                       />
                       <button
                         type="submit"
                         disabled={!newMessage.trim() || sending}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 md:px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {sending ? (
-                          <RefreshCw className="w-5 h-5 animate-spin" />
+                          <RefreshCw className="w-4 h-4 md:w-5 md:h-5 animate-spin" />
                         ) : (
-                          <Send className="w-5 h-5" />
+                          <Send className="w-4 h-4 md:w-5 md:h-5" />
                         )}
                       </button>
                     </div>
                   </form>
                 </>
               ) : (
-                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
-                  <p>Select an order to start chatting</p>
-                  <p className="text-sm">Your conversations will appear here</p>
+                <div className="h-[calc(100vh-12rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2 p-4 text-center">
+                  <p>{isMobile ? "Tap the button below" : "Select an order"}</p>
+                  <p className="text-sm">to start chatting</p>
                 </div>
               )}
             </div>
