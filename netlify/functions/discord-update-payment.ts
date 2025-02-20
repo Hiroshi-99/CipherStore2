@@ -41,9 +41,11 @@ export const handler: Handler = async (event) => {
       .from("orders")
       .select(
         `
-        *, 
-        discord_channels(*),
-        auth.users!orders_user_id_fkey(raw_user_meta_data)
+        *,
+        discord_channels (*),
+        user:user_id (
+          raw_user_meta_data
+        )
       `
       )
       .eq("id", orderId)
@@ -132,7 +134,7 @@ export const handler: Handler = async (event) => {
 
     // Send DM to user
     try {
-      const discordUserId = order.users?.raw_user_meta_data?.provider_id;
+      const discordUserId = order.user?.raw_user_meta_data?.provider_id;
       if (discordUserId) {
         const user = await discordClient.users.fetch(discordUserId);
         const dmEmbed = new EmbedBuilder()
