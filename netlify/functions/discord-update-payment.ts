@@ -36,6 +36,24 @@ export const handler: Handler = async (event) => {
       };
     }
 
+    // Get order and user details first
+    const { data: order, error: fetchError } = await supabase
+      .from("orders")
+      .select(
+        `
+        *, 
+        discord_channels(*),
+        auth.users!orders_user_id_fkey(raw_user_meta_data)
+      `
+      )
+      .eq("id", orderId)
+      .single();
+
+    if (fetchError || !order) {
+      logError(fetchError || new Error("Order not found"), "Order fetch");
+      throw fetchError || new Error("Order not found");
+    }
+
     // Update payment proof status
     const { error: updateError } = await supabase
       .from("payment_proofs")
@@ -63,18 +81,6 @@ export const handler: Handler = async (event) => {
       throw orderError;
     }
 
-    // Get order details
-    const { data: order, error: fetchError } = await supabase
-      .from("orders")
-      .select("*, discord_channels(*)")
-      .eq("id", orderId)
-      .single();
-
-    if (fetchError || !order) {
-      logError(fetchError || new Error("Order not found"), "Order fetch");
-      throw fetchError || new Error("Order not found");
-    }
-
     // Create inbox message
     const message = {
       user_id: order.user_id,
@@ -88,49 +94,27 @@ export const handler: Handler = async (event) => {
       type: "payment_status",
     };
 
-    // Send DM to user if approved
-    if (status === "approved") {
-      try {
-        const { data: userData } = await supabase.auth.admin.getUserById(
-          order.user_id
-        );
-        if (userData?.user?.user_metadata?.provider_id) {
-          const discordId = userData.user.user_metadata.provider_id;
-          await fetch("/.netlify/functions/discord-user-manager", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "send_dm",
-              userId: order.user_id,
-              discordId,
-              message:
-                "Your payment has been approved! Check your inbox for more details.",
-            }),
-          });
-        }
-      } catch (dmError) {
-        logError(dmError, "Sending DM notification");
-        // Don't throw here as it's not critical
-      }
-    }
-
     const { error: inboxError } = await supabase
       .from("inbox_messages")
       .insert([message]);
 
     if (inboxError) {
       logError(inboxError, "Inbox message creation");
-      // Don't throw here as it's not critical
     }
 
-    // Update Discord thread if available
+    // Initialize Discord client
+    discordClient = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.DirectMessages,
+      ],
+    });
+
+    await discordClient.login(process.env.DISCORD_TOKEN);
+
+    // Send message to thread if available
     if (order.discord_channels?.channel_id) {
-      discordClient = new Client({
-        intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
-      });
-
-      await discordClient.login(process.env.DISCORD_TOKEN);
-
       const channel = await discordClient.channels.fetch(
         order.discord_channels.channel_id
       );
@@ -144,6 +128,32 @@ export const handler: Handler = async (event) => {
 
         await channel.send({ embeds: [embed] });
       }
+    }
+
+    // Send DM to user
+    try {
+      const discordUserId = order.users?.raw_user_meta_data?.provider_id;
+      if (discordUserId) {
+        const user = await discordClient.users.fetch(discordUserId);
+        const dmEmbed = new EmbedBuilder()
+          .setColor(status === "approved" ? 0x00ff00 : 0xff0000)
+          .setTitle(`Order Update: Payment ${status.toUpperCase()}`)
+          .setDescription(message.content)
+          .addFields(
+            { name: "Order ID", value: orderId, inline: true },
+            {
+              name: "Status",
+              value: status === "approved" ? "Active" : "Rejected",
+              inline: true,
+            }
+          )
+          .setTimestamp();
+
+        await user.send({ embeds: [dmEmbed] });
+      }
+    } catch (dmError) {
+      logError(dmError, "Discord DM");
+      // Don't throw here as DM failure shouldn't fail the whole process
     }
 
     return {
