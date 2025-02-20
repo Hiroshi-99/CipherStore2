@@ -12,6 +12,7 @@ CREATE TABLE orders (
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    account_file_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -58,6 +59,7 @@ CREATE TABLE inbox_messages (
     content TEXT NOT NULL,
     is_read BOOLEAN DEFAULT FALSE,
     type VARCHAR(50) NOT NULL, -- payment_status, system, etc.
+    file_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -367,3 +369,29 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Add account_file_url column if it doesn't exist
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name = 'orders' 
+        AND column_name = 'account_file_url'
+    ) THEN
+        ALTER TABLE orders ADD COLUMN account_file_url TEXT;
+    END IF;
+END $$;
+
+-- Add file_url column if it doesn't exist
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name = 'inbox_messages' 
+        AND column_name = 'file_url'
+    ) THEN
+        ALTER TABLE inbox_messages ADD COLUMN file_url TEXT;
+    END IF;
+END $$;
