@@ -411,6 +411,7 @@ function ChatPage() {
     messageQueue,
     pendingMessages,
     orders,
+    ordersLoading,
     handleSendMessage,
   } = useChat(user, isAdmin);
 
@@ -517,20 +518,26 @@ function ChatPage() {
                   </button>
                 </div>
 
-                <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                  {orders.map((order) => (
-                    <OrderButton
-                      key={order.id}
-                      order={order}
-                      isSelected={selectedOrderId === order.id}
-                      isAdmin={isAdmin}
-                      onClick={() => {
-                        setSelectedOrderId(order.id);
-                        setShowSidebar(false);
-                      }}
-                    />
-                  ))}
-                </div>
+                {ordersLoading ? (
+                  <div className="flex items-center justify-center h-32">
+                    <LoadingSpinner size="lg" light />
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
+                    {orders.map((order) => (
+                      <OrderButton
+                        key={order.id}
+                        order={order}
+                        isSelected={selectedOrderId === order.id}
+                        isAdmin={isAdmin}
+                        onClick={() => {
+                          setSelectedOrderId(order.id);
+                          setShowSidebar(false);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             </aside>
 

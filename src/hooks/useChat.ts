@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
@@ -32,9 +32,99 @@ export function useChat(user: User | null, isAdmin: boolean) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
-  const [orders, setOrders] = useState<any[]>([]);
+
+  // Fetch orders
+  useEffect(() => {
+    async function fetchOrders() {
+      if (!user) return;
+
+      try {
+        setOrdersLoading(true);
+        const { data: ordersData, error } = await supabase
+          .from("orders")
+          .select(
+            `
+            *,
+            messages (
+              id,
+              created_at
+            )
+          `
+          )
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        setOrders(ordersData || []);
+
+        // Select first order by default if none selected
+        if (!selectedOrderId && ordersData && ordersData.length > 0) {
+          setSelectedOrderId(ordersData[0].id);
+        }
+      } catch (error) {
+        console.error("Error fetching orders:", error);
+      } finally {
+        setOrdersLoading(false);
+      }
+    }
+
+    fetchOrders();
+  }, [user, isAdmin]);
+
+  // Fetch messages when order is selected
+  useEffect(() => {
+    async function fetchMessages() {
+      if (!selectedOrderId) return;
+
+      try {
+        setMessagesLoading(true);
+        const { data: messagesData, error } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("order_id", selectedOrderId)
+          .order("created_at", { ascending: true });
+
+        if (error) throw error;
+
+        setMessages(messagesData || []);
+      } catch (error) {
+        console.error("Error fetching messages:", error);
+      } finally {
+        setMessagesLoading(false);
+      }
+    }
+
+    fetchMessages();
+  }, [selectedOrderId]);
+
+  // Subscribe to new messages
+  useEffect(() => {
+    if (!selectedOrderId) return;
+
+    const subscription = supabase
+      .channel(`messages:${selectedOrderId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `order_id=eq.${selectedOrderId}`,
+        },
+        (payload) => {
+          setMessages((prev) => [...prev, payload.new as Message]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [selectedOrderId]);
 
   const handleSendMessage = useCallback(
     async (content: string, attachments: FileAttachment[] = []) => {
@@ -92,6 +182,7 @@ export function useChat(user: User | null, isAdmin: boolean) {
     messageQueue,
     pendingMessages,
     orders,
+    ordersLoading,
     handleSendMessage,
   };
 }
