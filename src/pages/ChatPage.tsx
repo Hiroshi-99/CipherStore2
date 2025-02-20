@@ -249,139 +249,147 @@ function ChatArea({
   );
 }
 
+interface ChatInputProps {
+  onSubmit: (content: string, attachments: FileAttachment[]) => void;
+  disabled: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  onTyping: () => void;
+}
+
 function ChatInput({
   onSubmit,
   disabled,
   value,
   onChange,
   onTyping,
-}: {
-  onSubmit: (content: string, attachments: FileAttachment[]) => void;
-  disabled: boolean;
-  value: string;
-  onChange: (value: string) => void;
-  onTyping: () => void;
-}) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
+}: ChatInputProps) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const { uploadFile, uploading, progress, error, setError } =
+  const { uploadFile, uploading, progress, error, clearError } =
     useFileAttachments();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { isDragging, handleDragOver, handleDragLeave, handleDrop } =
     useDragAndDrop((files) => setPendingFiles((prev) => [...prev, ...files]));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (disabled || (!value.trim() && !pendingFiles.length)) return;
+    if (disabled || !value.trim()) return;
 
     try {
       const uploadedFiles = await Promise.all(
-        pendingFiles.map((file) => uploadFile(file))
+        pendingFiles.map(async (file) => {
+          try {
+            return await uploadFile(file);
+          } catch (error) {
+            console.error(`Failed to upload ${file.name}:`, error);
+            return null;
+          }
+        })
       );
 
       const attachments = uploadedFiles.filter(Boolean) as FileAttachment[];
       onSubmit(value.trim(), attachments);
       setPendingFiles([]);
+      onChange("");
     } catch (error) {
-      console.error("Failed to upload files:", error);
-      // You might want to show an error toast here
+      console.error("Error sending message:", error);
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    setPendingFiles((prev) => [...prev, ...files]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const removeFile = (index: number) => {
+  const removeFile = useCallback((index: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
-  };
+  }, []);
+
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files || []);
+      setPendingFiles((prev) => [...prev, ...files]);
+      e.target.value = ""; // Reset input
+    },
+    []
+  );
 
   return (
-    <>
-      {error && (
-        <Toast
-          message={error.message}
-          type="error"
-          onClose={() => setError(null)}
-        />
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative"
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-10 backdrop-blur-sm bg-black/50 border-2 border-dashed border-emerald-500 rounded-lg flex items-center justify-center">
+          <div className="text-emerald-400 text-lg font-medium">
+            Drop files to upload
+          </div>
+        </div>
       )}
-      <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        className="relative"
-      >
-        {isDragging && (
-          <div className="absolute inset-0 z-10 backdrop-blur-sm bg-black/50 border-2 border-dashed border-emerald-500 rounded-lg flex items-center justify-center">
-            <div className="text-emerald-400 text-lg font-medium">
-              Drop files to upload
-            </div>
+
+      <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
+        {pendingFiles.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+            {pendingFiles.map((file, index) => (
+              <FilePreview
+                key={index}
+                file={file}
+                onRemove={() => removeFile(index)}
+              />
+            ))}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
-          {pendingFiles.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
-              {pendingFiles.map((file, index) => (
-                <FilePreview
-                  key={index}
-                  file={file}
-                  onRemove={() => removeFile(index)}
-                />
-              ))}
-            </div>
-          )}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-              disabled={disabled}
-            >
-              <Paperclip className="w-5 h-5 text-white/70" />
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileSelect}
-              className="hidden"
-              multiple
-              accept={ALLOWED_TYPES.join(",")}
-            />
-            <input
-              type="text"
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <textarea
               value={value}
-              onChange={(e) => onChange(e.target.value)}
-              onKeyDown={(e) => {
+              onChange={(e) => {
+                onChange(e.target.value);
                 onTyping();
+              }}
+              placeholder="Type a message..."
+              className="w-full bg-white/5 rounded-lg px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
+              rows={1}
+              onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSubmit(e);
                 }
               }}
-              placeholder="Type your message..."
-              className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-              disabled={disabled}
             />
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-3 hover:bg-white/10 rounded-lg transition-colors"
+              disabled={disabled}
+            >
+              <Paperclip className="w-5 h-5 text-white/70" />
+            </button>
             <button
               type="submit"
-              disabled={disabled || (!value.trim() && !pendingFiles.length)}
-              className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="p-3 bg-emerald-500 hover:bg-emerald-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={disabled || !value.trim()}
             >
-              {uploading ? (
-                <div className="flex items-center gap-2">
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  <span>{Math.round(progress)}%</span>
-                </div>
-              ) : (
-                <Send className="w-5 h-5" />
-              )}
+              <Send className="w-5 h-5 text-white" />
             </button>
           </div>
-        </form>
-      </div>
-    </>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          onChange={handleFileSelect}
+          className="hidden"
+          multiple
+          accept={ALLOWED_TYPES.join(",")}
+        />
+      </form>
+
+      {error && (
+        <Toast message={error.message} type="error" onClose={clearError} />
+      )}
+    </div>
   );
 }
 
@@ -423,6 +431,20 @@ function ChatPage() {
       handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
     },
     [handleSendMessage, pendingMessages, setNewMessage]
+  );
+
+  const handleSendMessage = useCallback(
+    async (content: string, attachments: FileAttachment[] = []) => {
+      if (!selectedOrderId || !user) return;
+
+      try {
+        await handleSendMessage(content, attachments);
+        setNewMessage("");
+      } catch (error) {
+        console.error("Error sending message:", error);
+      }
+    },
+    [selectedOrderId, user, handleSendMessage]
   );
 
   if (authLoading) {
@@ -537,9 +559,9 @@ function ChatPage() {
 
                     <ChatInput
                       onSubmit={handleSendMessage}
-                      disabled={!newMessage.trim() || sending}
+                      disabled={!selectedOrderId || sending}
                       value={newMessage}
-                      onChange={(value) => setNewMessage(value)}
+                      onChange={setNewMessage}
                       onTyping={handleTyping}
                     />
                   </>

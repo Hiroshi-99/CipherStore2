@@ -21,27 +21,43 @@ export function useFileAttachments() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<UploadError | null>(null);
 
-  const validateFile = useCallback((file: File): void => {
+  const validateFile = useCallback((file: File): UploadError | null => {
     if (file.size > MAX_FILE_SIZE) {
-      throw new Error(`File ${file.name} is too large (max 10MB)`);
+      return {
+        message: `File ${file.name} is too large (max ${(
+          MAX_FILE_SIZE /
+          (1024 * 1024)
+        ).toFixed(0)}MB)`,
+        file,
+      };
     }
 
     if (!ALLOWED_TYPES.includes(file.type)) {
-      throw new Error(
-        `File type ${
+      return {
+        message: `File type ${
           file.type
-        } is not supported. Allowed types: ${ALLOWED_TYPES.join(", ")}`
-      );
+        } is not supported. Allowed types: ${ALLOWED_TYPES.map(
+          (type) => type.split("/")[1]
+        ).join(", ")}`,
+        file,
+      };
     }
+
+    return null;
   }, []);
 
   const uploadFile = useCallback(
     async (file: File): Promise<FileAttachment | null> => {
+      const validationError = validateFile(file);
+      if (validationError) {
+        setError(validationError);
+        throw new Error(validationError.message);
+      }
+
       try {
-        setError(null);
-        validateFile(file);
         setUploading(true);
         setProgress(0);
+        setError(null);
 
         // Compress image if it's an image file
         const processedFile = file.type.startsWith("image/")
@@ -65,9 +81,12 @@ export function useFileAttachments() {
           });
 
         if (uploadError) {
-          throw new Error(
-            uploadError.message || "An error occurred while uploading the file"
-          );
+          const error = {
+            message: `Failed to upload ${file.name}: ${uploadError.message}`,
+            file,
+          };
+          setError(error);
+          throw new Error(error.message);
         }
 
         const { data: publicUrl } = supabase.storage
@@ -82,9 +101,14 @@ export function useFileAttachments() {
           type: file.type,
         };
       } catch (err) {
-        const error = err as Error;
-        setError({ message: error.message, file });
-        throw error;
+        const error = {
+          message: `Failed to upload ${file.name}: ${
+            err instanceof Error ? err.message : "Unknown error"
+          }`,
+          file,
+        };
+        setError(error);
+        throw err;
       } finally {
         setUploading(false);
         setProgress(0);
@@ -93,11 +117,15 @@ export function useFileAttachments() {
     [validateFile]
   );
 
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
   return {
     uploadFile,
     uploading,
     progress,
     error,
-    setError,
+    clearError,
   };
 }
