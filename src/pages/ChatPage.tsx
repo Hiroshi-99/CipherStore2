@@ -35,23 +35,7 @@ interface ChatProps {
   orderId: string;
 }
 
-// Add mobile detection hook
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
-
-  return isMobile;
-}
-
-// Update MessageBubble for better mobile display
+// Create separate components for better performance
 const MessageBubble = React.memo(function MessageBubble({
   message,
   isLatest,
@@ -67,11 +51,9 @@ const MessageBubble = React.memo(function MessageBubble({
   onRetry: () => void;
   isPending: boolean;
 }) {
-  const isMobile = useIsMobile();
-
   return (
     <div
-      className={`flex items-start gap-2 md:gap-3 animate-fade-in ${
+      className={`flex items-start gap-3 ${
         message.is_admin ? "justify-start" : "justify-end"
       } ${isLatest && sending ? "opacity-50" : ""} ${
         isUnread ? "animate-highlight-fade" : ""
@@ -81,26 +63,24 @@ const MessageBubble = React.memo(function MessageBubble({
         <img
           src={message.user_avatar || "/default-avatar.png"}
           alt="Avatar"
-          className="w-6 h-6 md:w-8 md:h-8 rounded-full"
+          className="w-8 h-8 rounded-full"
           loading="lazy"
         />
       )}
       <div
-        className={`max-w-[85%] md:max-w-[70%] ${
+        className={`max-w-[70%] ${
           message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-        } rounded-lg p-2 md:p-3`}
+        } rounded-lg p-3`}
       >
-        <div className="flex items-center gap-2 mb-1 flex-wrap">
-          <span className="text-xs md:text-sm font-medium text-white/90">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-medium text-white/90">
             {message.user_name}
           </span>
-          <span className="text-[10px] md:text-xs text-white/50">
-            {isMobile
-              ? new Date(message.created_at).toLocaleTimeString()
-              : new Date(message.created_at).toLocaleString()}
+          <span className="text-xs text-white/50">
+            {new Date(message.created_at).toLocaleString()}
           </span>
         </div>
-        <p className="text-sm md:text-base text-white/90 whitespace-pre-wrap break-words">
+        <p className="text-white/90 whitespace-pre-wrap break-words">
           {message.content}
         </p>
       </div>
@@ -108,14 +88,14 @@ const MessageBubble = React.memo(function MessageBubble({
         <img
           src={message.user_avatar || "/default-avatar.png"}
           alt="Avatar"
-          className="w-6 h-6 md:w-8 md:h-8 rounded-full"
+          className="w-8 h-8 rounded-full"
           loading="lazy"
         />
       )}
       {isPending && (
         <button
           onClick={onRetry}
-          className="absolute -bottom-4 right-0 text-xs text-red-400 hover:text-red-300 transition-colors bg-black/50 px-2 py-1 rounded"
+          className="text-xs text-red-400 hover:text-red-300 transition-colors"
         >
           Retry
         </button>
@@ -155,70 +135,6 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
-// Add virtualization for better performance with large message lists
-const VirtualizedMessages = React.memo(function VirtualizedMessages({
-  messages,
-  messageQueue,
-  pendingMessages,
-  unreadMessages,
-  onRetry,
-}: {
-  messages: Message[];
-  messageQueue: Set<string>;
-  pendingMessages: Map<string, Message>;
-  unreadMessages: Set<string>;
-  onRetry: (id: string) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
-
-  useEffect(() => {
-    const updateVisibleRange = () => {
-      if (!containerRef.current) return;
-      const { scrollTop, clientHeight } = containerRef.current;
-      const itemHeight = 80; // Approximate height of a message
-      const start = Math.max(0, Math.floor(scrollTop / itemHeight) - 10);
-      const end = Math.min(
-        messages.length,
-        Math.ceil((scrollTop + clientHeight) / itemHeight) + 10
-      );
-      setVisibleRange({ start, end });
-    };
-
-    const container = containerRef.current;
-    if (container) {
-      container.addEventListener("scroll", updateVisibleRange);
-      updateVisibleRange();
-    }
-
-    return () => {
-      container?.removeEventListener("scroll", updateVisibleRange);
-    };
-  }, [messages.length]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="h-full overflow-y-auto"
-      style={{ willChange: "transform" }}
-    >
-      <div className="space-y-4 p-3 md:p-6">
-        {messages.slice(visibleRange.start, visibleRange.end).map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            isLatest={message.id === messages[messages.length - 1].id}
-            sending={messageQueue.has(message.id)}
-            isUnread={unreadMessages.has(message.id)}
-            onRetry={() => onRetry(message.id)}
-            isPending={pendingMessages.has(message.id)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-});
-
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -245,55 +161,9 @@ function ChatPage() {
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
 
-  const isMobile = useIsMobile();
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-
-  // Improved scroll handling for mobile
-  const scrollToBottom = useCallback((smooth = true) => {
-    if (chatContainerRef.current) {
-      const scrollOptions: ScrollIntoViewOptions = {
-        behavior: smooth ? "smooth" : "auto",
-        block: "end",
-      };
-      requestAnimationFrame(() => {
-        chatContainerRef.current?.scrollIntoView(scrollOptions);
-      });
-    }
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
-
-  // Add touch handling for mobile
-  useEffect(() => {
-    if (!isMobile) return;
-
-    let touchStartX = 0;
-    const handleTouchStart = (e: TouchEvent) => {
-      touchStartX = e.touches[0].clientX;
-    };
-
-    const handleTouchEnd = (e: TouchEvent) => {
-      const touchEndX = e.changedTouches[0].clientX;
-      const diff = touchStartX - touchEndX;
-
-      if (Math.abs(diff) > 50) {
-        // Minimum swipe distance
-        if (diff > 0) {
-          // Swipe left
-          setShowSidebar(false);
-        } else {
-          // Swipe right
-          setShowSidebar(true);
-        }
-      }
-    };
-
-    document.addEventListener("touchstart", handleTouchStart);
-    document.addEventListener("touchend", handleTouchEnd);
-
-    return () => {
-      document.removeEventListener("touchstart", handleTouchStart);
-      document.removeEventListener("touchend", handleTouchEnd);
-    };
-  }, [isMobile]);
 
   // Memoize orders list
   const ordersList = useMemo(() => {
@@ -330,76 +200,7 @@ function ChatPage() {
     []
   );
 
-  // Add intersection observer for lazy loading messages
-  const observerRef = useRef<IntersectionObserver | null>(null);
-  const [hasMoreMessages, setHasMoreMessages] = useState(true);
-  const [page, setPage] = useState(1);
-  const MESSAGES_PER_PAGE = 50;
-
-  // Update fetchMessages to support pagination
-  const fetchMessages = useCallback(async (orderId: string, page = 1) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select(
-          `
-          *,
-          orders!inner(
-            user_id,
-            full_name
-          )
-        `
-        )
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: false })
-        .range((page - 1) * MESSAGES_PER_PAGE, page * MESSAGES_PER_PAGE - 1);
-
-      if (error) throw error;
-
-      const formattedMessages =
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined,
-        })) || [];
-
-      setMessages((prev) =>
-        page === 1
-          ? formattedMessages.reverse()
-          : [...prev, ...formattedMessages.reverse()]
-      );
-      setHasMoreMessages(data?.length === MESSAGES_PER_PAGE);
-
-      if (page === 1) {
-        setTimeout(scrollToBottom, 100);
-      }
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Add lazy loading observer
-  useEffect(() => {
-    if (!hasMoreMessages) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && !loading) {
-          setPage((prev) => prev + 1);
-        }
-      },
-      { threshold: 0.5 }
-    );
-
-    observerRef.current = observer;
-    return () => observer.disconnect();
-  }, [hasMoreMessages, loading]);
-
-  // Update message subscription for better performance
+  // Optimized message subscription with better real-time handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -424,23 +225,18 @@ function ChatPage() {
             return;
           }
 
-          // Use functional update for better performance
           setMessages((prev) => {
             if (prev.some((msg) => msg.id === newMessage.id)) return prev;
+
+            const isFromOther = newMessage.user_id !== user?.id;
+            if (isFromOther) {
+              handleNewMessageNotification(newMessage);
+            }
+
             return [...prev, newMessage];
           });
 
-          // Use requestIdleCallback for non-critical updates
-          requestIdleCallback(() => {
-            if (newMessage.user_id !== user?.id) {
-              handleNewMessageNotification(newMessage);
-            }
-          });
-
-          // Use requestAnimationFrame for smooth scrolling
-          if (document.hasFocus()) {
-            requestAnimationFrame(() => scrollToBottom(true));
-          }
+          requestAnimationFrame(scrollToBottom);
         }
       )
       .subscribe();
@@ -693,6 +489,41 @@ function ChatPage() {
     }
   };
 
+  const fetchMessages = async (orderId: string) => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("messages")
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      setMessages(
+        data?.map((msg) => ({
+          ...msg,
+          is_admin: msg.user_id !== msg.orders.user_id,
+          orders: undefined,
+        })) || []
+      );
+      setTimeout(scrollToBottom, 100);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      setError("Failed to load messages");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (initialLoading) {
     return (
       <PageContainer title="CHAT" user={null}>
@@ -710,18 +541,15 @@ function ChatPage() {
           {notification}
         </div>
       )}
-      <main className="max-w-6xl mx-auto px-2 md:px-4 py-4 md:py-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6 relative">
-          {/* Mobile Order Toggle - Updated for better visibility */}
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
+          {/* Mobile Order Toggle */}
           <button
-            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg flex items-center gap-2"
+            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
             onClick={() => setShowSidebar(!showSidebar)}
           >
-            <span className="text-white text-sm">
-              {showSidebar ? "Hide Orders" : "Show Orders"}
-            </span>
             <svg
-              className="w-5 h-5 text-white"
+              className="w-6 h-6 text-white"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -730,22 +558,18 @@ function ChatPage() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d={
-                  showSidebar
-                    ? "M6 18L18 6M6 6l12 12"
-                    : "M4 6h16M4 12h16m-7 6h7"
-                }
+                d="M4 6h16M4 12h16m-7 6h7"
               />
             </svg>
           </button>
 
-          {/* Orders Sidebar - Updated for better mobile UX */}
+          {/* Orders Sidebar */}
           <div
             className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
               showSidebar ? "translate-x-0" : "-translate-x-full"
             } md:translate-x-0 transition-transform duration-200 ease-in-out`}
           >
-            <div className="backdrop-blur-xl bg-black/95 md:bg-black/30 h-full md:h-auto rounded-2xl p-3 md:p-4">
+            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
               {/* Mobile Close Button */}
               <div className="flex justify-between items-center mb-4 md:hidden">
                 <h2 className="text-lg font-medium text-white">
@@ -778,13 +602,14 @@ function ChatPage() {
             </div>
           </div>
 
-          {/* Chat Area - Updated for better mobile display */}
+          {/* Chat Area */}
           <div className="md:col-span-3">
             <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
               {selectedOrderId ? (
                 <>
-                  <div className="h-[calc(100vh-12rem)] md:h-[600px]">
-                    {loading && messages.length === 0 ? (
+                  {/* Messages Container */}
+                  <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
+                    {loading ? (
                       <div className="flex items-center justify-center h-full">
                         <LoadingSpinner size="lg" light />
                       </div>
@@ -794,20 +619,27 @@ function ChatPage() {
                         <p className="text-sm">Start the conversation!</p>
                       </div>
                     ) : (
-                      <VirtualizedMessages
-                        messages={messages}
-                        messageQueue={messageQueue.current}
-                        pendingMessages={pendingMessages.current}
-                        unreadMessages={unreadMessages}
-                        onRetry={retryMessage}
-                      />
+                      messages.map((message) => (
+                        <MessageBubble
+                          key={message.id}
+                          message={message}
+                          isLatest={
+                            message.id === messages[messages.length - 1].id
+                          }
+                          sending={messageQueue.current.has(message.id)}
+                          isUnread={unreadMessages.has(message.id)}
+                          onRetry={() => retryMessage(message.id)}
+                          isPending={pendingMessages.current.has(message.id)}
+                        />
+                      ))
                     )}
+                    <div ref={messagesEndRef} />
                   </div>
 
-                  {/* Message Input - Updated for mobile */}
+                  {/* Message Input */}
                   <form
                     onSubmit={handleSendMessage}
-                    className="border-t border-white/10 p-2 md:p-4"
+                    className="border-t border-white/10 p-4"
                   >
                     <div className="flex gap-2">
                       <input
@@ -815,26 +647,26 @@ function ChatPage() {
                         value={newMessage}
                         onChange={(e) => debouncedSetNewMessage(e.target.value)}
                         placeholder="Type your message..."
-                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm md:text-base text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                       />
                       <button
                         type="submit"
                         disabled={!newMessage.trim() || sending}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 md:px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {sending ? (
-                          <RefreshCw className="w-4 h-4 md:w-5 md:h-5 animate-spin" />
+                          <RefreshCw className="w-5 h-5 animate-spin" />
                         ) : (
-                          <Send className="w-4 h-4 md:w-5 md:h-5" />
+                          <Send className="w-5 h-5" />
                         )}
                       </button>
                     </div>
                   </form>
                 </>
               ) : (
-                <div className="h-[calc(100vh-12rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2 p-4 text-center">
-                  <p>{isMobile ? "Tap the button below" : "Select an order"}</p>
-                  <p className="text-sm">to start chatting</p>
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                  <p>Select an order to start chatting</p>
+                  <p className="text-sm">Your conversations will appear here</p>
                 </div>
               )}
             </div>
