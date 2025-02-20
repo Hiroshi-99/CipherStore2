@@ -1,23 +1,10 @@
-import React, {
-  useState,
-  useEffect,
-  useRef,
-  useCallback,
-  useMemo,
-} from "react";
-import { supabase } from "../lib/supabase";
-import Header from "../components/Header";
+import React, { useCallback } from "react";
 import { Send, RefreshCw } from "lucide-react";
-import type { User } from "@supabase/supabase-js";
-import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { Toaster } from "sonner";
 import { useAuth } from "../hooks/useAuth";
-import { useMessages } from "../hooks/useMessages";
-import { useOrders } from "../hooks/useOrders";
 import { usePageTitle } from "../hooks/usePageTitle";
-import { useRealtimeSubscription } from "../hooks/useRealtimeSubscription";
+import { useChat } from "../hooks/useChat";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 
 interface Message {
@@ -37,11 +24,7 @@ interface Order {
   messages?: { id: string; created_at: string }[];
 }
 
-interface ChatProps {
-  orderId: string;
-}
-
-// Create separate components for better performance
+// Separate components for better performance
 const MessageBubble = React.memo(function MessageBubble({
   message,
   isLatest,
@@ -141,148 +124,36 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
-// Separate components for better performance
-const MessageList = React.memo(function MessageList({
-  messages,
-  messageQueue,
-  pendingMessages,
-  unreadMessages,
-  onRetry,
-}: {
-  messages: Message[];
-  messageQueue: React.RefObject<Set<string>>;
-  pendingMessages: React.RefObject<Map<string, Message>>;
-  unreadMessages: Set<string>;
-  onRetry: (id: string) => void;
-}) {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  if (!messages.length) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-        <p>No messages yet.</p>
-        <p className="text-sm">Start the conversation!</p>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      {messages.map((message) => (
-        <MessageBubble
-          key={message.id}
-          message={message}
-          isLatest={message.id === messages[messages.length - 1].id}
-          sending={messageQueue.current.has(message.id)}
-          isUnread={unreadMessages.has(message.id)}
-          onRetry={() => onRetry(message.id)}
-          isPending={pendingMessages.current.has(message.id)}
-        />
-      ))}
-      <div ref={messagesEndRef} />
-    </>
-  );
-});
-
 function ChatPage() {
   usePageTitle("Chat");
   const { user, isAdmin, loading: authLoading } = useAuth();
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [showSidebar, setShowSidebar] = useState(false);
-  const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
-  const [isTabFocused, setIsTabFocused] = useState(true);
-  const [notification, setNotification] = useState<string | null>(null);
-
   const {
+    selectedOrderId,
+    setSelectedOrderId,
+    showSidebar,
+    setShowSidebar,
+    unreadMessages,
+    notification,
+    newMessage,
+    setNewMessage,
     messages,
-    loading: messagesLoading,
+    messagesLoading,
     sending,
-    error: messageError,
-    sendMessage,
     messageQueue,
     pendingMessages,
-  } = useMessages(user);
-
-  const {
     orders,
-    loading: ordersLoading,
-    error: ordersError,
-    fetchUserOrders,
-    fetchAdminOrders,
-  } = useOrders(isAdmin);
+    handleSendMessage,
+  } = useChat(user, isAdmin);
 
-  // Subscribe to real-time updates
-  useRealtimeSubscription(
-    "messages",
-    useCallback(
-      (payload) => {
-        if (
-          payload.eventType === "INSERT" &&
-          payload.new.order_id === selectedOrderId
-        ) {
-          const isFromOther = payload.new.user_id !== user?.id;
-          if (isFromOther) {
-            handleNewMessageNotification(payload.new);
-          }
-        }
-      },
-      [selectedOrderId, user?.id]
-    ),
-    { event: "INSERT", filter: `order_id=eq.${selectedOrderId}` }
-  );
+  const handleRetry = useCallback(
+    (messageId: string) => {
+      const message = pendingMessages.current.get(messageId);
+      if (!message) return;
 
-  // Handle visibility changes
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      setIsTabFocused(document.visibilityState === "visible");
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []);
-
-  // Clear unread messages when tab gains focus
-  useEffect(() => {
-    if (isTabFocused) {
-      setUnreadMessages(new Set());
-    }
-  }, [isTabFocused]);
-
-  // Load initial data
-  useEffect(() => {
-    if (user) {
-      if (isAdmin) {
-        fetchAdminOrders();
-      } else {
-        fetchUserOrders(user.id);
-      }
-    }
-  }, [user, isAdmin, fetchUserOrders, fetchAdminOrders]);
-
-  const handleNewMessageNotification = useCallback(
-    (message: Message) => {
-      if (!isTabFocused) {
-        const audio = new Audio("/notification.mp3");
-        audio.volume = 0.5;
-        audio.play().catch(() => {});
-
-        setNotification(
-          `${message.user_name}: ${message.content.slice(0, 60)}${
-            message.content.length > 60 ? "..." : ""
-          }`
-        );
-        setTimeout(() => setNotification(null), 4000);
-
-        setUnreadMessages((prev) => new Set(prev).add(message.id));
-      }
+      setNewMessage(message.content);
+      handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
     },
-    [isTabFocused]
+    [handleSendMessage, pendingMessages, setNewMessage]
   );
 
   if (authLoading) {
@@ -307,6 +178,7 @@ function ChatPage() {
             <button
               className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
               onClick={() => setShowSidebar(!showSidebar)}
+              aria-label="Toggle orders sidebar"
             >
               <svg
                 className="w-6 h-6 text-white"
@@ -324,13 +196,12 @@ function ChatPage() {
             </button>
 
             {/* Orders Sidebar */}
-            <div
+            <aside
               className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
                 showSidebar ? "translate-x-0" : "-translate-x-full"
               } md:translate-x-0 transition-transform duration-200 ease-in-out`}
             >
               <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
-                {/* Mobile Close Button */}
                 <div className="flex justify-between items-center mb-4 md:hidden">
                   <h2 className="text-lg font-medium text-white">
                     {isAdmin ? "All Orders" : "Your Orders"}
@@ -338,6 +209,7 @@ function ChatPage() {
                   <button
                     onClick={() => setShowSidebar(false)}
                     className="p-2 hover:bg-white/10 rounded-lg"
+                    aria-label="Close sidebar"
                   >
                     <svg
                       className="w-6 h-6 text-white"
@@ -355,7 +227,6 @@ function ChatPage() {
                   </button>
                 </div>
 
-                {/* Orders List */}
                 <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
                   {orders.map((order) => (
                     <OrderButton
@@ -371,49 +242,50 @@ function ChatPage() {
                   ))}
                 </div>
               </div>
-            </div>
+            </aside>
 
             {/* Chat Area */}
             <div className="md:col-span-3">
               <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
                 {selectedOrderId ? (
                   <>
-                    {/* Messages Container */}
                     <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
                       {messagesLoading ? (
                         <div className="flex items-center justify-center h-full">
                           <LoadingSpinner size="lg" light />
                         </div>
                       ) : (
-                        <MessageList
-                          messages={messages}
-                          messageQueue={messageQueue}
-                          pendingMessages={pendingMessages}
-                          unreadMessages={unreadMessages}
-                          onRetry={(id) => {
-                            // Implement retry logic here
-                          }}
-                        />
+                        messages.map((message) => (
+                          <MessageBubble
+                            key={message.id}
+                            message={message}
+                            isLatest={
+                              message.id === messages[messages.length - 1].id
+                            }
+                            sending={messageQueue.current.has(message.id)}
+                            isUnread={unreadMessages.has(message.id)}
+                            onRetry={() => handleRetry(message.id)}
+                            isPending={pendingMessages.current.has(message.id)}
+                          />
+                        ))
                       )}
                     </div>
 
-                    {/* Message Input */}
                     <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        // Implement sendMessage logic here
-                      }}
+                      onSubmit={handleSendMessage}
                       className="border-t border-white/10 p-4"
                     >
                       <div className="flex gap-2">
                         <input
                           type="text"
+                          value={newMessage}
+                          onChange={(e) => setNewMessage(e.target.value)}
                           placeholder="Type your message..."
                           className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                         />
                         <button
                           type="submit"
-                          disabled={!selectedOrderId || sending}
+                          disabled={!newMessage.trim() || sending}
                           className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {sending ? (
