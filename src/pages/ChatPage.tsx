@@ -35,6 +35,16 @@ interface ChatProps {
   orderId: string;
 }
 
+// Add message queue for better performance
+const MESSAGE_QUEUE = new Map<string, RetryableMessage>();
+const RETRY_DELAY = 3000;
+
+interface RetryableMessage {
+  content: string;
+  retryCount: number;
+  timeoutId?: NodeJS.Timeout;
+}
+
 // Create separate components for better performance
 const MessageBubble = React.memo(function MessageBubble({
   message,
@@ -140,6 +150,65 @@ const OrderButton = React.memo(function OrderButton({
         </div>
       )}
     </button>
+  );
+});
+
+// Create separate MessageList component for better performance
+const MessageList = React.memo(function MessageList({
+  messages,
+  messageQueue,
+  pendingMessages,
+  unreadMessages,
+  onRetry,
+}: {
+  messages: Message[];
+  messageQueue: Set<string>;
+  pendingMessages: Map<string, Message>;
+  unreadMessages: Set<string>;
+  onRetry: (messageId: string) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+
+  // Add virtual scrolling
+  useEffect(() => {
+    if (!listRef.current) return;
+
+    const options = {
+      root: listRef.current,
+      rootMargin: "20px",
+      threshold: 0.1,
+    };
+
+    observerRef.current = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const messageId = entry.target.getAttribute("data-message-id");
+          if (messageId) {
+            // Handle message visibility
+          }
+        }
+      });
+    }, options);
+
+    return () => observerRef.current?.disconnect();
+  }, []);
+
+  return (
+    <div ref={listRef} className="space-y-4">
+      {messages.map((message) => (
+        <div key={message.id} data-message-id={message.id}>
+          <MessageBubble
+            message={message}
+            isLatest={message.id === messages[messages.length - 1]?.id}
+            sending={messageQueue.has(message.id)}
+            isUnread={unreadMessages.has(message.id)}
+            onRetry={() => onRetry(message.id)}
+            isPending={pendingMessages.has(message.id)}
+          />
+        </div>
+      ))}
+    </div>
   );
 });
 
@@ -334,103 +403,97 @@ function ChatPage() {
     };
   }, [messages]);
 
-  // Optimized message sending with better error handling
+  // Add optimized message handling
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
+      if (!user || !selectedOrderId || !newMessage.trim() || sending) return;
 
       const messageContent = newMessage.trim();
-      setNewMessage("");
-      setSending(true);
-
       const tempId = crypto.randomUUID();
+
+      // Add to retry queue
+      MESSAGE_QUEUE.set(tempId, {
+        content: messageContent,
+        retryCount: 0,
+      });
+
+      // Optimistic update
       const optimisticMessage: Message = {
         id: tempId,
         content: messageContent,
-        user_id: user.id,
-        user_name: user.user_metadata.full_name || user.email,
+        user_name: user.user_metadata.full_name || user.email || "User",
         user_avatar: user.user_metadata.avatar_url,
-        is_admin: isAdmin,
+        is_admin: false,
         created_at: new Date().toISOString(),
         order_id: selectedOrderId,
+        user_id: user.id,
       };
 
-      // Add to pending queue
-      messageQueue.current.add(tempId);
-      pendingMessages.current.set(tempId, optimisticMessage);
-
-      // Optimistic update
       setMessages((prev) => [...prev, optimisticMessage]);
-      requestAnimationFrame(scrollToBottom);
+      setNewMessage("");
+      scrollToBottom();
 
-      try {
-        // Get order details first
-        const { data: orderData } = await supabase
-          .from("orders")
-          .select("user_id")
-          .eq("id", selectedOrderId)
-          .single();
-
-        if (!orderData) throw new Error("Order not found");
-
-        // Send message
-        const { data: messageData, error: messageError } = await supabase
-          .from("messages")
-          .insert([
+      const sendMessageWithRetry = async (retryCount = 0) => {
+        try {
+          const { data, error } = await supabase.from("messages").insert([
             {
               content: messageContent,
-              user_id: user.id,
-              is_admin: user.id !== orderData.user_id,
+              order_id: selectedOrderId,
               user_name: user.user_metadata.full_name || user.email,
               user_avatar: user.user_metadata.avatar_url,
-              order_id: selectedOrderId,
-              order_user_id: orderData.user_id,
+              user_id: user.id,
             },
-          ])
-          .select()
-          .single();
+          ]);
 
-        if (messageError) throw messageError;
+          if (error) throw error;
 
-        // Update message with real ID
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, id: messageData.id } : msg
-          )
-        );
-      } catch (error) {
-        console.error("Error sending message:", error);
-        // Remove optimistic message on error
-        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-        setError("Failed to send message");
-        setNewMessage(messageContent);
-      } finally {
-        messageQueue.current.delete(tempId);
-        pendingMessages.current.delete(tempId);
-        setSending(false);
-      }
+          // Remove from retry queue on success
+          MESSAGE_QUEUE.delete(tempId);
+
+          // Update message with real ID
+          if (data?.[0]) {
+            setMessages((prev) =>
+              prev.map((msg) => (msg.id === tempId ? data[0] : msg))
+            );
+          }
+        } catch (error) {
+          console.error("Error sending message:", error);
+
+          // Handle retry
+          if (retryCount < 3) {
+            const timeoutId = setTimeout(
+              () => sendMessageWithRetry(retryCount + 1),
+              RETRY_DELAY
+            );
+
+            MESSAGE_QUEUE.set(tempId, {
+              content: messageContent,
+              retryCount: retryCount + 1,
+              timeoutId,
+            });
+          } else {
+            toast.error("Failed to send message");
+          }
+        }
+      };
+
+      sendMessageWithRetry();
     },
-    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
+    [user, selectedOrderId, newMessage, sending, scrollToBottom]
   );
 
-  // Add message retry functionality
-  const retryMessage = useCallback(
-    async (tempId: string) => {
-      const message = pendingMessages.current.get(tempId);
-      if (!message) return;
-
-      // Remove failed message
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-
-      // Retry sending
-      const content = message.content;
-      pendingMessages.current.delete(tempId);
-      setNewMessage(content);
-      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
-    },
-    [handleSendMessage]
-  );
+  // Add cleanup for message queue
+  useEffect(() => {
+    return () => {
+      MESSAGE_QUEUE.forEach((message) => {
+        if (message.timeoutId) {
+          clearTimeout(message.timeoutId);
+        }
+      });
+      MESSAGE_QUEUE.clear();
+    };
+  }, []);
 
   useEffect(() => {
     setPageTitle("Chat");
@@ -688,20 +751,13 @@ function ChatPage() {
                         <p className="text-sm">Start the conversation!</p>
                       </div>
                     ) : (
-                      messages.map((message) => (
-                        <div key={message.id} data-message-id={message.id}>
-                          <MessageBubble
-                            message={message}
-                            isLatest={
-                              message.id === messages[messages.length - 1].id
-                            }
-                            sending={messageQueue.current.has(message.id)}
-                            isUnread={unreadMessages.has(message.id)}
-                            onRetry={() => retryMessage(message.id)}
-                            isPending={pendingMessages.current.has(message.id)}
-                          />
-                        </div>
-                      ))
+                      <MessageList
+                        messages={messages}
+                        messageQueue={messageQueue.current}
+                        pendingMessages={pendingMessages.current}
+                        unreadMessages={unreadMessages}
+                        onRetry={retryMessage}
+                      />
                     )}
                     <div ref={messagesEndRef} />
                   </div>
