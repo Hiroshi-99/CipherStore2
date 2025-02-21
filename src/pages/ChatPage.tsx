@@ -1,20 +1,19 @@
-import React, { useCallback, useRef, useState } from "react";
-import { Send, RefreshCw, ChevronDown, Paperclip, X } from "lucide-react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
+import { supabase } from "../lib/supabase";
+import Header from "../components/Header";
+import { Send, RefreshCw } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { useAuth } from "../hooks/useAuth";
-import { usePageTitle } from "../hooks/usePageTitle";
+import { Toaster } from "sonner";
 import { useChat } from "../hooks/useChat";
-import { ErrorBoundary } from "../components/ErrorBoundary";
-import { useScrollToBottom } from "../hooks/useScrollToBottom";
-import { useTypingStatus } from "../hooks/useTypingStatus";
-import { useReadReceipts } from "../hooks/useReadReceipts";
-import { MessageAttachment } from "../components/MessageAttachment";
-import { useFileAttachments } from "../hooks/useFileAttachments";
-import { useDragAndDrop } from "../hooks/useDragAndDrop";
-import { FilePreview } from "../components/FilePreview";
-import { ALLOWED_TYPES } from "../constants/files";
-import { Toast } from "../components/Toast";
 
 interface Message {
   id: string;
@@ -25,8 +24,6 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
-  is_read: boolean;
-  attachments?: { id: string; url: string }[];
 }
 
 interface Order {
@@ -35,17 +32,11 @@ interface Order {
   messages?: { id: string; created_at: string }[];
 }
 
-interface MessageBubbleProps {
-  message: Message;
-  isLatest: boolean;
-  sending: boolean;
-  isUnread: boolean;
-  onRetry: () => void;
-  isPending: boolean;
-  isRead: boolean;
+interface ChatProps {
+  orderId: string;
 }
 
-// Separate components for better performance
+// Create separate components for better performance
 const MessageBubble = React.memo(function MessageBubble({
   message,
   isLatest,
@@ -53,11 +44,16 @@ const MessageBubble = React.memo(function MessageBubble({
   isUnread,
   onRetry,
   isPending,
-  isRead,
-}: MessageBubbleProps) {
+}: {
+  message: Message;
+  isLatest: boolean;
+  sending: boolean;
+  isUnread: boolean;
+  onRetry: () => void;
+  isPending: boolean;
+}) {
   return (
     <div
-      data-message-id={message.id}
       className={`flex items-start gap-3 ${
         message.is_admin ? "justify-start" : "justify-end"
       } ${isLatest && sending ? "opacity-50" : ""} ${
@@ -72,62 +68,38 @@ const MessageBubble = React.memo(function MessageBubble({
           loading="lazy"
         />
       )}
-      <div className="space-y-2">
-        <div
-          className={`max-w-[70%] ${
-            message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-          } rounded-lg p-3`}
-        >
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-medium text-white/90">
-              {message.user_name}
-            </span>
-            <span className="text-xs text-white/50">
-              {new Date(message.created_at).toLocaleString()}
-            </span>
-          </div>
-          <p className="text-white/90 whitespace-pre-wrap break-words">
-            {message.content}
-          </p>
+      <div
+        className={`max-w-[70%] ${
+          message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
+        } rounded-lg p-3`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-medium text-white/90">
+            {message.user_name}
+          </span>
+          <span className="text-xs text-white/50">
+            {new Date(message.created_at).toLocaleString()}
+          </span>
         </div>
-        {message.attachments?.map((attachment) => (
-          <MessageAttachment key={attachment.id} attachment={attachment} />
-        ))}
+        <p className="text-white/90 whitespace-pre-wrap break-words">
+          {message.content}
+        </p>
       </div>
       {!message.is_admin && (
-        <div className="flex flex-col items-end gap-1">
-          <div className="flex items-center gap-2">
-            {isPending && (
-              <button
-                onClick={onRetry}
-                className="text-xs text-red-400 hover:text-red-300 transition-colors"
-              >
-                Retry
-              </button>
-            )}
-            {isRead && (
-              <svg
-                className="w-4 h-4 text-emerald-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            )}
-          </div>
-          <img
-            src={message.user_avatar || "/default-avatar.png"}
-            alt="Avatar"
-            className="w-8 h-8 rounded-full"
-            loading="lazy"
-          />
-        </div>
+        <img
+          src={message.user_avatar || "/default-avatar.png"}
+          alt="Avatar"
+          className="w-8 h-8 rounded-full"
+          loading="lazy"
+        />
+      )}
+      {isPending && (
+        <button
+          onClick={onRetry}
+          className="text-xs text-red-400 hover:text-red-300 transition-colors"
+        >
+          Retry
+        </button>
       )}
     </div>
   );
@@ -164,428 +136,427 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
-function ChatArea({
-  messages,
-  messageQueue,
-  pendingMessages,
-  unreadMessages,
-  onRetry,
-  typingUsers,
-}: {
-  messages: Message[];
-  messageQueue: React.RefObject<Set<string>>;
-  pendingMessages: React.RefObject<Map<string, Message>>;
-  unreadMessages: Set<string>;
-  onRetry: (id: string) => void;
-  typingUsers: Set<string>;
-}) {
-  const { containerRef, showScrollButton, scrollToBottom } = useScrollToBottom([
-    messages.length,
-  ]);
+function ChatPage() {
+  const [user, setUser] = useState<User | null>(null);
+  const [newMessage, setNewMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [userOrders, setUserOrders] = useState<
+    { id: string; full_name: string }[]
+  >([]);
+  const [adminOrders, setAdminOrders] = useState<
+    { id: string; full_name: string }[]
+  >([]);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
+  const [isTabFocused, setIsTabFocused] = useState(true);
+  const [notification, setNotification] = useState<string | null>(null);
 
-  if (!messages.length) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-        <p>No messages yet</p>
-        <p className="text-sm">Start the conversation!</p>
-      </div>
-    );
-  }
+  const {
+    messages,
+    loading: messagesLoading,
+    error: chatError,
+    sendMessage,
+    messageQueue,
+    pendingMessages,
+  } = useChat(user, selectedOrderId);
 
-  return (
-    <div className="relative h-full">
-      <div
-        ref={containerRef}
-        className="h-full overflow-y-auto p-4 md:p-6 space-y-4 scroll-smooth"
-      >
-        {messages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            isLatest={message.id === messages[messages.length - 1].id}
-            sending={messageQueue.current.has(message.id)}
-            isUnread={unreadMessages.has(message.id)}
-            onRetry={() => onRetry(message.id)}
-            isPending={pendingMessages.current.has(message.id)}
-            isRead={message.is_read}
-          />
-        ))}
-
-        {typingUsers.size > 0 && (
-          <div className="flex items-center gap-2 text-white/50 text-sm animate-fade-in">
-            <div className="flex items-center gap-1">
-              {Array.from(typingUsers).join(", ")}
-              <span>{typingUsers.size === 1 ? "is" : "are"} typing</span>
-            </div>
-            <div className="flex gap-1">
-              <span className="animate-bounce">•</span>
-              <span
-                className="animate-bounce"
-                style={{ animationDelay: "0.2s" }}
-              >
-                •
-              </span>
-              <span
-                className="animate-bounce"
-                style={{ animationDelay: "0.4s" }}
-              >
-                •
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {showScrollButton && (
-        <button
-          onClick={() => scrollToBottom()}
-          className="absolute bottom-4 right-4 bg-emerald-500 p-2 rounded-full shadow-lg hover:bg-emerald-600 transition-colors"
-          aria-label="Scroll to bottom"
-        >
-          <ChevronDown className="w-5 h-5 text-white" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-interface ChatInputProps {
-  onSubmit: (content: string, attachments: FileAttachment[]) => void;
-  disabled: boolean;
-  value: string;
-  onChange: (value: string) => void;
-  onTyping: () => void;
-}
-
-function ChatInput({
-  onSubmit,
-  disabled,
-  value,
-  onChange,
-  onTyping,
-}: ChatInputProps) {
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const { uploadFile, uploading, progress, error, clearError } =
-    useFileAttachments();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isDragging, handleDragOver, handleDragLeave, handleDrop } =
-    useDragAndDrop((files) => setPendingFiles((prev) => [...prev, ...files]));
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (disabled || !value.trim()) return;
-
-    try {
-      const uploadedFiles = await Promise.all(
-        pendingFiles.map(async (file) => {
-          try {
-            return await uploadFile(file);
-          } catch (error) {
-            console.error(`Failed to upload ${file.name}:`, error);
-            return null;
-          }
-        })
-      );
-
-      const attachments = uploadedFiles.filter(Boolean) as FileAttachment[];
-      onSubmit(value.trim(), attachments);
-      setPendingFiles([]);
-      onChange("");
-    } catch (error) {
-      console.error("Error sending message:", error);
-    }
-  };
-
-  const removeFile = useCallback((index: number) => {
-    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  const handleFileSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files || []);
-      setPendingFiles((prev) => [...prev, ...files]);
-      e.target.value = ""; // Reset input
-    },
+  // Memoize orders list
+  const ordersList = useMemo(() => {
+    return (isAdmin ? adminOrders : userOrders).map((order) => (
+      <OrderButton
+        key={order.id}
+        order={order}
+        isSelected={selectedOrderId === order.id}
+        isAdmin={isAdmin}
+        onClick={() => {
+          setSelectedOrderId(order.id);
+          setShowSidebar(false);
+        }}
+      />
+    ));
+  }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
+
+  // Memoize messages list
+  const messagesList = useMemo(() => {
+    return messages.map((message, index) => (
+      <MessageBubble
+        key={message.id}
+        message={message}
+        isLatest={index === messages.length - 1}
+        sending={sending}
+        isUnread={unreadMessages.has(message.id)}
+      />
+    ));
+  }, [messages, sending, unreadMessages]);
+
+  // Debounced message input handler
+  const debouncedSetNewMessage = useCallback(
+    debounce((value: string) => setNewMessage(value), 100),
     []
   );
 
-  return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className="relative"
-    >
-      {isDragging && (
-        <div className="absolute inset-0 z-10 backdrop-blur-sm bg-black/50 border-2 border-dashed border-emerald-500 rounded-lg flex items-center justify-center">
-          <div className="text-emerald-400 text-lg font-medium">
-            Drop files to upload
-          </div>
-        </div>
-      )}
+  // Optimized message sending handler
+  const handleSendMessage = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newMessage.trim() || sending) return;
 
-      <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
-        {pendingFiles.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
-            {pendingFiles.map((file, index) => (
-              <FilePreview
-                key={index}
-                file={file}
-                onRemove={() => removeFile(index)}
-              />
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-end gap-2">
-          <div className="flex-1">
-            <textarea
-              value={value}
-              onChange={(e) => {
-                onChange(e.target.value);
-                onTyping();
-              }}
-              placeholder="Type a message..."
-              className="w-full bg-white/5 rounded-lg px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
-              rows={1}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-            />
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="p-3 hover:bg-white/10 rounded-lg transition-colors"
-              disabled={disabled}
-            >
-              <Paperclip className="w-5 h-5 text-white/70" />
-            </button>
-            <button
-              type="submit"
-              className="p-3 bg-emerald-500 hover:bg-emerald-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={disabled || !value.trim()}
-            >
-              <Send className="w-5 h-5 text-white" />
-            </button>
-          </div>
-        </div>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          onChange={handleFileSelect}
-          className="hidden"
-          multiple
-          accept={ALLOWED_TYPES.join(",")}
-        />
-      </form>
-
-      {error && (
-        <Toast message={error.message} type="error" onClose={clearError} />
-      )}
-    </div>
-  );
-}
-
-function ChatPage() {
-  usePageTitle("Chat");
-  const { user, isAdmin, loading: authLoading } = useAuth();
-  const {
-    selectedOrderId,
-    setSelectedOrderId,
-    showSidebar,
-    setShowSidebar,
-    unreadMessages,
-    notification,
-    newMessage,
-    setNewMessage,
-    messages,
-    messagesLoading,
-    sending,
-    messageQueue,
-    pendingMessages,
-    orders,
-    ordersLoading,
-    handleSendMessage,
-  } = useChat(user, isAdmin);
-
-  const { typingUsers, handleTyping } = useTypingStatus(
-    selectedOrderId,
-    user?.id ?? null,
-    user?.user_metadata?.full_name ?? user?.email ?? null
-  );
-
-  useReadReceipts(selectedOrderId, user?.id ?? null, isAdmin);
-
-  const sendMessage = useCallback(
-    async (content: string, attachments: FileAttachment[] = []) => {
-      if (!selectedOrderId || !user) return;
+      const messageContent = newMessage.trim();
+      setNewMessage("");
+      setSending(true);
 
       try {
-        await handleSendMessage(content, attachments);
+        await sendMessage(messageContent);
+        requestAnimationFrame(scrollToBottom);
       } catch (error) {
-        console.error("Error sending message:", error);
+        setError("Failed to send message");
+        setNewMessage(messageContent);
+      } finally {
+        setSending(false);
       }
     },
-    [selectedOrderId, user, handleSendMessage]
+    [newMessage, sending, sendMessage, scrollToBottom]
   );
 
-  const handleRetry = useCallback(
-    (messageId: string) => {
-      const message = pendingMessages.current.get(messageId);
+  // Add message retry functionality
+  const retryMessage = useCallback(
+    async (tempId: string) => {
+      const message = pendingMessages.get(tempId);
       if (!message) return;
 
-      setNewMessage(message.content);
-      sendMessage(message.content, message.attachments || []);
+      // Remove failed message
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+
+      // Retry sending
+      const content = message.content;
+      setNewMessage(content);
+      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
     },
-    [sendMessage, pendingMessages, setNewMessage]
+    [handleSendMessage]
   );
 
-  if (authLoading) {
+  useEffect(() => {
+    setPageTitle("Chat");
+    checkUser();
+  }, []);
+
+  useEffect(() => {
+    if (selectedOrderId) {
+      // Fetch messages first
+      fetchMessages(selectedOrderId);
+
+      // Then set up subscription
+      const cleanup = subscribeToMessages();
+      return () => {
+        if (cleanup && typeof cleanup === "function") {
+          cleanup();
+        }
+      };
+    }
+  }, [selectedOrderId, subscribeToMessages]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsTabFocused(document.visibilityState === "visible");
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isTabFocused) {
+      setUnreadMessages(new Set());
+    }
+  }, [isTabFocused]);
+
+  const checkUser = async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) {
+        setInitialLoading(false);
+        return;
+      }
+
+      setUser(session.user);
+
+      // Fix admin check query with proper UUID casting
+      const { data: adminData, error: adminError } = await supabase
+        .from("admin_users")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+
+      if (adminError) {
+        console.error("Error checking admin status:", adminError);
+      }
+
+      setIsAdmin(!!adminData);
+
+      // Fetch orders based on user role
+      if (adminData) {
+        await fetchAdminOrders();
+      } else {
+        await fetchUserOrders(session.user.id);
+      }
+
+      setInitialLoading(false);
+    } catch (error) {
+      console.error("Error checking user:", error);
+      setInitialLoading(false);
+    }
+  };
+
+  const fetchUserOrders = async (userId: string) => {
+    try {
+      const { data: ordersData, error } = await supabase
+        .from("orders")
+        .select("id, full_name")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setUserOrders(ordersData || []);
+      if (ordersData?.length > 0) {
+        setSelectedOrderId(ordersData[0].id);
+      }
+    } catch (error) {
+      console.error("Error fetching user orders:", error);
+      setError("Failed to load orders");
+    }
+  };
+
+  const fetchAdminOrders = async () => {
+    try {
+      const { data: ordersData, error } = await supabase
+        .from("orders")
+        .select(
+          `
+          id,
+          full_name,
+          messages (
+            id,
+            created_at
+          )
+        `
+        )
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setAdminOrders(ordersData || []);
+      if (ordersData?.length > 0) {
+        setSelectedOrderId(ordersData[0].id);
+      }
+    } catch (error) {
+      console.error("Error fetching admin orders:", error);
+      setError("Failed to load orders");
+    }
+  };
+
+  const fetchMessages = async (orderId: string) => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("messages")
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      setMessages(
+        data?.map((msg) => ({
+          ...msg,
+          is_admin: msg.user_id !== msg.orders.user_id,
+          orders: undefined,
+        })) || []
+      );
+      setTimeout(scrollToBottom, 100);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      setError("Failed to load messages");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (initialLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <LoadingSpinner size="lg" light />
-      </div>
+      <PageContainer title="CHAT" user={null}>
+        <div className="h-screen flex items-center justify-center">
+          <LoadingSpinner size="lg" light />
+        </div>
+      </PageContainer>
     );
   }
 
   return (
-    <ErrorBoundary>
-      <PageContainer title="CHAT" showBack user={user}>
-        {notification && (
-          <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
-            {notification}
-          </div>
-        )}
-        <main className="max-w-6xl mx-auto px-4 py-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
-            {/* Mobile Order Toggle */}
-            <button
-              className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
-              onClick={() => setShowSidebar(!showSidebar)}
-              aria-label="Toggle orders sidebar"
+    <PageContainer title="CHAT" showBack user={user}>
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
+          {notification}
+        </div>
+      )}
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
+          {/* Mobile Order Toggle */}
+          <button
+            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
+            onClick={() => setShowSidebar(!showSidebar)}
+          >
+            <svg
+              className="w-6 h-6 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              <svg
-                className="w-6 h-6 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 6h16M4 12h16m-7 6h7"
-                />
-              </svg>
-            </button>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 6h16M4 12h16m-7 6h7"
+              />
+            </svg>
+          </button>
 
-            {/* Orders Sidebar */}
-            <aside
-              className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
-                showSidebar ? "translate-x-0" : "-translate-x-full"
-              } md:translate-x-0 transition-transform duration-200 ease-in-out`}
-            >
-              <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
-                <div className="flex justify-between items-center mb-4 md:hidden">
-                  <h2 className="text-lg font-medium text-white">
-                    {isAdmin ? "All Orders" : "Your Orders"}
-                  </h2>
-                  <button
-                    onClick={() => setShowSidebar(false)}
-                    className="p-2 hover:bg-white/10 rounded-lg"
-                    aria-label="Close sidebar"
+          {/* Orders Sidebar */}
+          <div
+            className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
+              showSidebar ? "translate-x-0" : "-translate-x-full"
+            } md:translate-x-0 transition-transform duration-200 ease-in-out`}
+          >
+            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
+              {/* Mobile Close Button */}
+              <div className="flex justify-between items-center mb-4 md:hidden">
+                <h2 className="text-lg font-medium text-white">
+                  {isAdmin ? "All Orders" : "Your Orders"}
+                </h2>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-2 hover:bg-white/10 rounded-lg"
+                >
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    <svg
-                      className="w-6 h-6 text-white"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                {ordersLoading ? (
-                  <div className="flex items-center justify-center h-32">
-                    <LoadingSpinner size="lg" light />
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                    {orders.map((order) => (
-                      <OrderButton
-                        key={order.id}
-                        order={order}
-                        isSelected={selectedOrderId === order.id}
-                        isAdmin={isAdmin}
-                        onClick={() => {
-                          setSelectedOrderId(order.id);
-                          setShowSidebar(false);
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </aside>
-
-            {/* Chat Area */}
-            <div className="md:col-span-3">
-              <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
-                {selectedOrderId ? (
-                  <>
-                    <div className="h-[calc(100vh-16rem)] md:h-[600px]">
-                      {messagesLoading ? (
-                        <div className="flex items-center justify-center h-full">
-                          <LoadingSpinner size="lg" light />
-                        </div>
-                      ) : (
-                        <ChatArea
-                          messages={messages}
-                          messageQueue={messageQueue}
-                          pendingMessages={pendingMessages}
-                          unreadMessages={unreadMessages}
-                          onRetry={handleRetry}
-                          typingUsers={typingUsers}
-                        />
-                      )}
-                    </div>
-
-                    <ChatInput
-                      onSubmit={sendMessage}
-                      disabled={!selectedOrderId || sending}
-                      value={newMessage}
-                      onChange={setNewMessage}
-                      onTyping={handleTyping}
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
                     />
-                  </>
-                ) : (
-                  <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
-                    <p>Select an order to start chatting</p>
-                    <p className="text-sm">
-                      Your conversations will appear here
-                    </p>
-                  </div>
-                )}
+                  </svg>
+                </button>
+              </div>
+
+              {/* Orders List */}
+              <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
+                {ordersList}
               </div>
             </div>
           </div>
-        </main>
-      </PageContainer>
-    </ErrorBoundary>
+
+          {/* Chat Area */}
+          <div className="md:col-span-3">
+            <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+              {selectedOrderId ? (
+                <>
+                  {/* Messages Container */}
+                  <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
+                    {messagesLoading ? (
+                      <LoadingSpinner size="lg" light />
+                    ) : messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+                        <p>No messages yet.</p>
+                        <p className="text-sm">Start the conversation!</p>
+                      </div>
+                    ) : (
+                      <MessageList
+                        messages={messages}
+                        messageQueue={messageQueue}
+                        pendingMessages={pendingMessages}
+                        unreadMessages={unreadMessages}
+                        onRetry={retryMessage}
+                      />
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  {/* Message Input */}
+                  <form
+                    onSubmit={handleSendMessage}
+                    className="border-t border-white/10 p-4"
+                  >
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newMessage}
+                        onChange={(e) => debouncedSetNewMessage(e.target.value)}
+                        placeholder="Type your message..."
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!newMessage.trim() || sending}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {sending ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Send className="w-5 h-5" />
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                  <p>Select an order to start chatting</p>
+                  <p className="text-sm">Your conversations will appear here</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+    </PageContainer>
   );
+}
+
+// Debounce utility
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
 }
 
 export default React.memo(ChatPage);

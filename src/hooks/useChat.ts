@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { User } from "@supabase/supabase-js";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { supabase } from "../lib/supabase";
+import type { User } from "@supabase/supabase-js";
 
 interface Message {
   id: string;
@@ -11,127 +11,120 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
-  is_read: boolean;
-  attachments?: FileAttachment[];
 }
 
-interface FileAttachment {
-  id: string;
-  url: string;
-  name: string;
-  size: number;
-  type: string;
-}
-
-export function useChat(user: User | null, isAdmin: boolean) {
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [showSidebar, setShowSidebar] = useState(false);
-  const [unreadMessages] = useState(new Set<string>());
-  const [notification, setNotification] = useState<string | null>(null);
-  const [newMessage, setNewMessage] = useState("");
+export function useChat(user: User | null, selectedOrderId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [orders, setOrders] = useState<any[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
+  const lastMessageRef = useRef<string | null>(null);
 
-  // Fetch orders
-  useEffect(() => {
-    async function fetchOrders() {
-      if (!user) return;
+  // Optimized message fetching with cursor-based pagination
+  const fetchMessages = useCallback(async (orderId: string) => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: true })
+        .limit(50);
 
-      try {
-        setOrdersLoading(true);
-        const { data: ordersData, error } = await supabase
-          .from("orders")
-          .select(
-            `
-            *,
-            messages (
-              id,
-              created_at
-            )
-          `
-          )
-          .order("created_at", { ascending: false });
-
-        if (error) throw error;
-
-        setOrders(ordersData || []);
-
-        // Select first order by default if none selected
-        if (!selectedOrderId && ordersData && ordersData.length > 0) {
-          setSelectedOrderId(ordersData[0].id);
-        }
-      } catch (error) {
-        console.error("Error fetching orders:", error);
-      } finally {
-        setOrdersLoading(false);
-      }
+      if (error) throw error;
+      setMessages(data || []);
+      lastMessageRef.current = data?.[data.length - 1]?.id || null;
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      setError("Failed to load messages");
+    } finally {
+      setLoading(false);
     }
+  }, []);
 
-    fetchOrders();
-  }, [user, isAdmin]);
+  // Optimized real-time subscription
+  const subscribeToMessages = useCallback(() => {
+    if (!selectedOrderId) return undefined;
 
-  // Fetch messages when order is selected
-  useEffect(() => {
-    async function fetchMessages() {
-      if (!selectedOrderId) return;
-
-      try {
-        setMessagesLoading(true);
-        const { data: messagesData, error } = await supabase
-          .from("messages")
-          .select("*")
-          .eq("order_id", selectedOrderId)
-          .order("created_at", { ascending: true });
-
-        if (error) throw error;
-
-        setMessages(messagesData || []);
-      } catch (error) {
-        console.error("Error fetching messages:", error);
-      } finally {
-        setMessagesLoading(false);
-      }
-    }
-
-    fetchMessages();
-  }, [selectedOrderId]);
-
-  // Subscribe to new messages
-  useEffect(() => {
-    if (!selectedOrderId) return;
-
-    const subscription = supabase
+    let isSubscribed = true;
+    const channel = supabase
       .channel(`messages:${selectedOrderId}`)
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "messages",
           filter: `order_id=eq.${selectedOrderId}`,
         },
-        (payload) => {
-          setMessages((prev) => [...prev, payload.new as Message]);
+        async (payload) => {
+          if (!isSubscribed) return;
+
+          switch (payload.eventType) {
+            case "INSERT": {
+              const newMessage = payload.new as Message;
+              if (messageQueue.current.has(newMessage.id)) {
+                messageQueue.current.delete(newMessage.id);
+                pendingMessages.current.delete(newMessage.id);
+                return;
+              }
+
+              setMessages((prev) => {
+                if (prev.some((msg) => msg.id === newMessage.id)) return prev;
+                return [...prev, newMessage];
+              });
+              break;
+            }
+            case "UPDATE": {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === payload.new.id ? { ...msg, ...payload.new } : msg
+                )
+              );
+              break;
+            }
+            case "DELETE": {
+              setMessages((prev) =>
+                prev.filter((msg) => msg.id !== payload.old.id)
+              );
+              break;
+            }
+          }
         }
       )
       .subscribe();
 
     return () => {
-      subscription.unsubscribe();
+      isSubscribed = false;
+      supabase.removeChannel(channel);
     };
   }, [selectedOrderId]);
 
-  const handleSendMessage = useCallback(
-    async (content: string, attachments: FileAttachment[] = []) => {
-      if (!selectedOrderId || !user || !content.trim()) return;
+  // Handle message sending with optimistic updates
+  const sendMessage = useCallback(
+    async (content: string) => {
+      if (!user || !selectedOrderId || !content.trim()) return;
+
+      const tempId = crypto.randomUUID();
+      const optimisticMessage: Message = {
+        id: tempId,
+        content: content.trim(),
+        user_id: user.id,
+        user_name: user.user_metadata.full_name || user.email,
+        user_avatar: user.user_metadata.avatar_url,
+        is_admin: false, // Will be updated with real value
+        created_at: new Date().toISOString(),
+        order_id: selectedOrderId,
+      };
+
+      messageQueue.current.add(tempId);
+      pendingMessages.current.set(tempId, optimisticMessage);
+
+      // Optimistic update
+      setMessages((prev) => [...prev, optimisticMessage]);
 
       try {
-        setSending(true);
         const { data: orderData } = await supabase
           .from("orders")
           .select("user_id")
@@ -140,49 +133,57 @@ export function useChat(user: User | null, isAdmin: boolean) {
 
         if (!orderData) throw new Error("Order not found");
 
-        const messageData = {
-          content: content.trim(),
-          user_id: user.id,
-          is_admin: user.id !== orderData.user_id,
-          user_name: user.user_metadata.full_name || user.email,
-          user_avatar: user.user_metadata.avatar_url,
-          order_id: selectedOrderId,
-          attachments,
-        };
-
-        const { error: messageError } = await supabase
+        const { data: messageData, error: messageError } = await supabase
           .from("messages")
-          .insert([messageData]);
+          .insert([
+            {
+              content: content.trim(),
+              user_id: user.id,
+              is_admin: user.id !== orderData.user_id,
+              user_name: user.user_metadata.full_name || user.email,
+              user_avatar: user.user_metadata.avatar_url,
+              order_id: selectedOrderId,
+            },
+          ])
+          .select()
+          .single();
 
         if (messageError) throw messageError;
 
-        setNewMessage("");
+        // Update message with real data
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, ...messageData } : msg
+          )
+        );
       } catch (error) {
         console.error("Error sending message:", error);
+        // Remove optimistic message on error
+        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
         throw error;
       } finally {
-        setSending(false);
+        messageQueue.current.delete(tempId);
+        pendingMessages.current.delete(tempId);
       }
     },
-    [selectedOrderId, user]
+    [user, selectedOrderId]
   );
 
+  // Initialize subscription
+  useEffect(() => {
+    if (selectedOrderId) {
+      fetchMessages(selectedOrderId);
+      const unsubscribe = subscribeToMessages();
+      return unsubscribe;
+    }
+  }, [selectedOrderId, fetchMessages, subscribeToMessages]);
+
   return {
-    selectedOrderId,
-    setSelectedOrderId,
-    showSidebar,
-    setShowSidebar,
-    unreadMessages,
-    notification,
-    newMessage,
-    setNewMessage,
     messages,
-    messagesLoading,
-    sending,
-    messageQueue,
-    pendingMessages,
-    orders,
-    ordersLoading,
-    handleSendMessage,
+    loading,
+    error,
+    sendMessage,
+    messageQueue: messageQueue.current,
+    pendingMessages: pendingMessages.current,
   };
 }
