@@ -125,6 +125,9 @@ function AdminPage() {
 
       if (ordersError) throw ordersError;
       setOrders(ordersData || []);
+
+      // Update stats
+      setStats(calculateStats(ordersData || []));
     } catch (error) {
       console.error("Error fetching orders:", error);
       setError("Failed to load orders");
@@ -195,6 +198,7 @@ function AdminPage() {
         if (!response.ok) throw new Error("Failed to update payment status");
 
         toast.success(`Payment ${status} successfully`);
+        await fetchOrders();
       } catch (error) {
         console.error("Error updating payment status:", error);
         await fetchOrders();
@@ -230,7 +234,7 @@ function AdminPage() {
     [fetchOrders]
   );
 
-  // Add stats calculation
+  // Calculate stats
   const calculateStats = useCallback((orders: Order[]) => {
     return orders.reduce(
       (acc, order) => ({
@@ -248,7 +252,7 @@ function AdminPage() {
     );
   }, []);
 
-  // Update filtered orders with date range and status filters
+  // Filter and sort orders
   const filteredOrders = useMemo(() => {
     return orders
       .filter((order) => {
@@ -269,19 +273,19 @@ function AdminPage() {
       .sort((a, b) => {
         switch (sortBy) {
           case "date":
-            return sortOrder === "desc"
-              ? new Date(b.created_at).getTime() -
-                  new Date(a.created_at).getTime()
-              : new Date(a.created_at).getTime() -
-                  new Date(b.created_at).getTime();
+            return sortOrder === "asc"
+              ? new Date(a.created_at).getTime() -
+                  new Date(b.created_at).getTime()
+              : new Date(b.created_at).getTime() -
+                  new Date(a.created_at).getTime();
           case "status":
-            return sortOrder === "desc"
-              ? b.status.localeCompare(a.status)
-              : a.status.localeCompare(b.status);
+            return sortOrder === "asc"
+              ? a.status.localeCompare(b.status)
+              : b.status.localeCompare(a.status);
           case "name":
-            return sortOrder === "desc"
-              ? b.full_name.localeCompare(a.full_name)
-              : a.full_name.localeCompare(b.full_name);
+            return sortOrder === "asc"
+              ? a.full_name.localeCompare(b.full_name)
+              : b.full_name.localeCompare(a.full_name);
           default:
             return 0;
         }
@@ -333,11 +337,6 @@ function AdminPage() {
       ))}
     </div>
   );
-
-  // Update useEffect to calculate stats
-  useEffect(() => {
-    setStats(calculateStats(orders));
-  }, [orders, calculateStats]);
 
   // Add batch action handler
   const handleBatchAction = async (action: BatchAction) => {
