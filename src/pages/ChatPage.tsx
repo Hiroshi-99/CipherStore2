@@ -7,12 +7,13 @@ import React, {
 } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import { Send, RefreshCw } from "lucide-react";
+import { Send, RefreshCw, Trash2 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster } from "sonner";
+import { toast } from "react-hot-toast";
 
 interface Message {
   id: string;
@@ -23,6 +24,7 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
+  deleted_at?: string;
 }
 
 interface Order {
@@ -43,6 +45,8 @@ const MessageBubble = React.memo(function MessageBubble({
   isUnread,
   onRetry,
   isPending,
+  onDelete,
+  isAdmin,
 }: {
   message: Message;
   isLatest: boolean;
@@ -50,10 +54,20 @@ const MessageBubble = React.memo(function MessageBubble({
   isUnread: boolean;
   onRetry: () => void;
   isPending: boolean;
+  onDelete?: (id: string) => void;
+  isAdmin: boolean;
 }) {
+  if (message.deleted_at) {
+    return (
+      <div className="flex items-center justify-center py-2">
+        <span className="text-sm text-white/30 italic">Message deleted</span>
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`flex items-start gap-3 ${
+      className={`group flex items-start gap-3 ${
         message.is_admin ? "justify-start" : "justify-end"
       } ${isLatest && sending ? "opacity-50" : ""} ${
         isUnread ? "animate-highlight-fade" : ""
@@ -100,6 +114,17 @@ const MessageBubble = React.memo(function MessageBubble({
           Retry
         </button>
       )}
+      <div className="relative">
+        {isAdmin && onDelete && (
+          <button
+            onClick={() => onDelete(message.id)}
+            className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Delete message"
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
     </div>
   );
 });
@@ -142,12 +167,16 @@ const VirtualizedMessageList = React.memo(function VirtualizedMessageList({
   unreadMessages,
   pendingMessages,
   onRetry,
+  onDelete,
+  isAdmin,
 }: {
   messages: Message[];
   messageQueue: Set<string>;
   unreadMessages: Set<string>;
   pendingMessages: Map<string, Message>;
   onRetry: (id: string) => void;
+  onDelete?: (id: string) => Promise<void>;
+  isAdmin: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
@@ -186,6 +215,8 @@ const VirtualizedMessageList = React.memo(function VirtualizedMessageList({
           isUnread={unreadMessages.has(message.id)}
           onRetry={() => onRetry(message.id)}
           isPending={pendingMessages.has(message.id)}
+          onDelete={onDelete}
+          isAdmin={isAdmin}
         />
       ))}
     </div>
@@ -441,6 +472,82 @@ function ChatPage() {
     [handleSendMessage]
   );
 
+  // Add message deletion handler
+  const handleDeleteMessage = useCallback(
+    async (messageId: string) => {
+      if (!isAdmin) return;
+
+      try {
+        // Optimistic update
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === messageId
+              ? { ...msg, deleted_at: new Date().toISOString() }
+              : msg
+          )
+        );
+
+        const { error } = await supabase
+          .from("messages")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("id", messageId);
+
+        if (error) {
+          // Revert on error
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === messageId ? { ...msg, deleted_at: undefined } : msg
+            )
+          );
+          throw error;
+        }
+
+        // Show success toast
+        toast.success("Message deleted");
+      } catch (error) {
+        console.error("Error deleting message:", error);
+        toast.error("Failed to delete message");
+      }
+    },
+    [isAdmin]
+  );
+
+  // Update message fetching to handle deleted messages
+  const fetchMessages = useCallback(async (orderId: string) => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("messages")
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
+        .eq("order_id", orderId)
+        .is("deleted_at", null) // Only fetch non-deleted messages
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      setMessages(
+        data?.map((msg) => ({
+          ...msg,
+          is_admin: msg.user_id !== msg.orders.user_id,
+          orders: undefined,
+        })) || []
+      );
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      toast.error("Failed to load messages");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     setPageTitle("Chat");
     checkUser();
@@ -564,41 +671,6 @@ function ChatPage() {
     }
   };
 
-  const fetchMessages = async (orderId: string) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select(
-          `
-          *,
-          orders!inner(
-            user_id,
-            full_name
-          )
-        `
-        )
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-
-      setMessages(
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined,
-        })) || []
-      );
-      setTimeout(scrollToBottom, 100);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   if (initialLoading) {
     return (
       <PageContainer title="CHAT" user={null}>
@@ -693,6 +765,8 @@ function ChatPage() {
                       unreadMessages={unreadMessages}
                       pendingMessages={pendingMessages.current}
                       onRetry={retryMessage}
+                      onDelete={isAdmin ? handleDeleteMessage : undefined}
+                      isAdmin={isAdmin}
                     />
                   )}
                   {/* Message Input */}
