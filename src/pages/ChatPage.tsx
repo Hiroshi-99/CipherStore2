@@ -319,45 +319,74 @@ function ChatPage() {
         async (payload) => {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
-          const newMessage = payload.new as Message;
-          if (!newMessage) return;
+          try {
+            // Fetch the complete message with order data
+            const { data, error } = await supabase
+              .from("messages")
+              .select(
+                `
+                *,
+                orders!inner(
+                  user_id,
+                  full_name
+                )
+              `
+              )
+              .eq("id", payload.new.id)
+              .single();
 
-          // Check for duplicates using multiple criteria
-          const isDuplicate =
-            processedMessages.current.has(newMessage.id) || // Check processed messages
-            messageQueue.current.has(newMessage.id) || // Check message queue
-            messages.some(
-              (msg) =>
-                msg.id === newMessage.id || // Check by ID
-                (msg.content === newMessage.content && // Check by content and timestamp
-                  Math.abs(
-                    new Date(msg.created_at).getTime() -
-                      new Date(newMessage.created_at).getTime()
-                  ) < 1000)
-            );
+            if (error) throw error;
+            if (!data) return;
 
-          if (isDuplicate) {
-            messageQueue.current.delete(newMessage.id);
-            pendingMessages.current.delete(newMessage.id);
-            return;
-          }
+            const newMessage = {
+              id: data.id,
+              content: data.content,
+              user_name: data.user_name,
+              user_avatar: data.user_avatar,
+              is_admin: data.user_id !== data.orders.user_id,
+              created_at: data.created_at,
+              order_id: data.order_id,
+              user_id: data.user_id,
+            };
 
-          // Add to processed messages
-          processedMessages.current.add(newMessage.id);
+            // Check for duplicates
+            const isDuplicate =
+              processedMessages.current.has(newMessage.id) ||
+              messageQueue.current.has(newMessage.id) ||
+              messages.some(
+                (msg) =>
+                  msg.id === newMessage.id ||
+                  (msg.content === newMessage.content &&
+                    Math.abs(
+                      new Date(msg.created_at).getTime() -
+                        new Date(newMessage.created_at).getTime()
+                    ) < 1000)
+              );
 
-          setMessages((prev) => {
-            const isFromOther = newMessage.user_id !== user?.id;
-            if (isFromOther && !isTabFocused) {
-              setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-              if (notificationSound.current) {
-                notificationSound.current.currentTime = 0;
-                notificationSound.current.play().catch(() => {});
-              }
+            if (isDuplicate) {
+              messageQueue.current.delete(newMessage.id);
+              pendingMessages.current.delete(newMessage.id);
+              return;
             }
-            return [...prev, newMessage];
-          });
 
-          requestAnimationFrame(scrollToBottom);
+            processedMessages.current.add(newMessage.id);
+
+            setMessages((prev) => {
+              const isFromOther = newMessage.user_id !== user?.id;
+              if (isFromOther && !isTabFocused) {
+                setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
+                if (notificationSound.current) {
+                  notificationSound.current.currentTime = 0;
+                  notificationSound.current.play().catch(() => {});
+                }
+              }
+              return [...prev, newMessage];
+            });
+
+            requestAnimationFrame(scrollToBottom);
+          } catch (error) {
+            console.error("Error processing new message:", error);
+          }
         }
       )
       .subscribe();
@@ -650,7 +679,7 @@ function ChatPage() {
     }
   };
 
-  // Update fetchMessages to handle duplicates
+  // Update fetchMessages function with better error handling and typing
   const fetchMessages = async (orderId: string) => {
     try {
       setLoading(true);
@@ -658,7 +687,15 @@ function ChatPage() {
 
       const { data, error } = await supabase
         .from("messages")
-        .select("*")
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
@@ -667,14 +704,30 @@ function ChatPage() {
       // Clear processed messages before setting new ones
       processedMessages.current.clear();
 
-      // Add fetched messages to processed set
-      data?.forEach((msg) => processedMessages.current.add(msg.id));
+      // Transform and type the data properly
+      const transformedMessages =
+        data?.map((msg) => ({
+          id: msg.id,
+          content: msg.content,
+          user_name: msg.user_name,
+          user_avatar: msg.user_avatar,
+          is_admin: msg.user_id !== msg.orders.user_id,
+          created_at: msg.created_at,
+          order_id: msg.order_id,
+          user_id: msg.user_id,
+        })) || [];
 
-      setMessages(data || []);
+      // Add fetched messages to processed set
+      transformedMessages.forEach((msg) =>
+        processedMessages.current.add(msg.id)
+      );
+
+      setMessages(transformedMessages);
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
       setError("Failed to load messages");
+      toast.error("Failed to load messages. Please try again.");
     } finally {
       setLoading(false);
     }
