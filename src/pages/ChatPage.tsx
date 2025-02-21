@@ -7,7 +7,7 @@ import React, {
 } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import { Send, RefreshCw, Bell, MessageCircle, X } from "lucide-react";
+import { Send, RefreshCw } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
@@ -117,18 +117,16 @@ const OrderButton = React.memo(function OrderButton({
   isSelected,
   isAdmin,
   onClick,
-  unreadCount = 0,
 }: {
   order: Order;
   isSelected: boolean;
   isAdmin: boolean;
   onClick: () => void;
-  unreadCount?: number;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left px-4 py-3 rounded-lg transition-colors relative ${
+      className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
         isSelected
           ? "bg-emerald-500/20 text-emerald-400"
           : "text-white/70 hover:bg-white/10"
@@ -136,10 +134,10 @@ const OrderButton = React.memo(function OrderButton({
     >
       <div className="font-medium">{order.full_name}</div>
       <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {unreadCount > 0 && (
-        <span className="absolute top-2 right-2 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">
-          {unreadCount}
-        </span>
+      {isAdmin && order.messages?.length > 0 && (
+        <div className="text-xs text-emerald-400 mt-1">
+          {order.messages.length} messages
+        </div>
       )}
     </button>
   );
@@ -166,7 +164,6 @@ function ChatPage() {
   const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
-  const [unreadCount, setUnreadCount] = useState(0);
 
   // Add message queue for optimistic updates
   const messageQueue = useRef<Set<string>>(new Set());
@@ -196,10 +193,9 @@ function ChatPage() {
           setSelectedOrderId(order.id);
           setShowSidebar(false);
         }}
-        unreadCount={unreadMessages.size}
       />
     ));
-  }, [isAdmin, adminOrders, userOrders, selectedOrderId, unreadMessages.size]);
+  }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
 
   // Memoize messages list
   const messagesList = useMemo(() => {
@@ -222,8 +218,9 @@ function ChatPage() {
 
   // Initialize audio on mount
   useEffect(() => {
-    notificationSound.current = new Audio("./public/sounds/gg.mp3");
+    notificationSound.current = new Audio("/sounds/gg.mp3");
     notificationSound.current.volume = 0.5;
+
     return () => {
       if (notificationSound.current) {
         notificationSound.current.pause();
@@ -232,7 +229,7 @@ function ChatPage() {
     };
   }, []);
 
-  // Update subscription with better sound handling
+  // Update message subscription with better sound handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -257,30 +254,17 @@ function ChatPage() {
             return;
           }
 
-          const isFromOther = newMessage.user_id !== user?.id;
-          if (isFromOther && !isTabFocused) {
-            // Update document title with unread count
-            document.title = `(${unreadCount + 1}) Cipher - CHAT`;
-          }
-
           setMessages((prev) => {
             if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
+            const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther) {
               // Play notification sound
               if (notificationSound.current) {
-                try {
-                  // Reset and play
-                  notificationSound.current.currentTime = 0;
-                  const playPromise = notificationSound.current.play();
-                  if (playPromise) {
-                    playPromise.catch((error) => {
-                      console.warn("Audio playback failed:", error);
-                    });
-                  }
-                } catch (error) {
-                  console.warn("Audio playback error:", error);
-                }
+                notificationSound.current.currentTime = 0; // Reset audio
+                notificationSound.current.play().catch((error) => {
+                  console.warn("Failed to play notification sound:", error);
+                });
               }
 
               // Show toast notification
@@ -309,7 +293,7 @@ function ChatPage() {
       isSubscribed = false;
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused, unreadCount]);
+  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
 
   // Add virtual scrolling
   useEffect(() => {
@@ -448,11 +432,6 @@ function ChatPage() {
     [handleSendMessage]
   );
 
-  // Update unread count when messages change
-  useEffect(() => {
-    setUnreadCount(unreadMessages.size);
-  }, [unreadMessages]);
-
   useEffect(() => {
     setPageTitle("Chat");
     checkUser();
@@ -487,7 +466,6 @@ function ChatPage() {
   useEffect(() => {
     if (isTabFocused) {
       setUnreadMessages(new Set());
-      document.title = "Cipher - CHAT";
     }
   }, [isTabFocused]);
 
@@ -660,13 +638,8 @@ function ChatPage() {
             <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
               {/* Mobile Close Button */}
               <div className="flex justify-between items-center mb-4 md:hidden">
-                <h2 className="text-lg font-medium text-white flex items-center gap-2">
+                <h2 className="text-lg font-medium text-white">
                   {isAdmin ? "All Orders" : "Your Orders"}
-                  {unreadCount > 0 && (
-                    <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full">
-                      {unreadCount}
-                    </span>
-                  )}
                 </h2>
                 <button
                   onClick={() => setShowSidebar(false)}
