@@ -7,7 +7,7 @@ import React, {
 } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import { Send, RefreshCw } from "lucide-react";
+import { Send, RefreshCw, Bell, MessageCircle, X } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
@@ -117,16 +117,18 @@ const OrderButton = React.memo(function OrderButton({
   isSelected,
   isAdmin,
   onClick,
+  unreadCount = 0,
 }: {
   order: Order;
   isSelected: boolean;
   isAdmin: boolean;
   onClick: () => void;
+  unreadCount?: number;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+      className={`w-full text-left px-4 py-3 rounded-lg transition-colors relative ${
         isSelected
           ? "bg-emerald-500/20 text-emerald-400"
           : "text-white/70 hover:bg-white/10"
@@ -134,10 +136,10 @@ const OrderButton = React.memo(function OrderButton({
     >
       <div className="font-medium">{order.full_name}</div>
       <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {isAdmin && order.messages?.length > 0 && (
-        <div className="text-xs text-emerald-400 mt-1">
-          {order.messages.length} messages
-        </div>
+      {unreadCount > 0 && (
+        <span className="absolute top-2 right-2 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">
+          {unreadCount}
+        </span>
       )}
     </button>
   );
@@ -164,6 +166,7 @@ function ChatPage() {
   const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Add message queue for optimistic updates
   const messageQueue = useRef<Set<string>>(new Set());
@@ -193,9 +196,10 @@ function ChatPage() {
           setSelectedOrderId(order.id);
           setShowSidebar(false);
         }}
+        unreadCount={unreadMessages.size}
       />
     ));
-  }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
+  }, [isAdmin, adminOrders, userOrders, selectedOrderId, unreadMessages.size]);
 
   // Memoize messages list
   const messagesList = useMemo(() => {
@@ -228,7 +232,7 @@ function ChatPage() {
     };
   }, []);
 
-  // Update subscription with better toast handling
+  // Update subscription with better sound handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -253,30 +257,39 @@ function ChatPage() {
             return;
           }
 
+          const isFromOther = newMessage.user_id !== user?.id;
+          if (isFromOther && !isTabFocused) {
+            // Update document title with unread count
+            document.title = `(${unreadCount + 1}) Cipher - CHAT`;
+          }
+
           setMessages((prev) => {
             if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
-            const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther) {
               // Play notification sound
               if (notificationSound.current) {
                 try {
+                  // Reset and play
                   notificationSound.current.currentTime = 0;
-                  notificationSound.current.play().catch(console.warn);
+                  const playPromise = notificationSound.current.play();
+                  if (playPromise) {
+                    playPromise.catch((error) => {
+                      console.warn("Audio playback failed:", error);
+                    });
+                  }
                 } catch (error) {
                   console.warn("Audio playback error:", error);
                 }
               }
 
               // Show toast notification
-              toast("New Message", {
+              toast.message("New message", {
                 description: `${
                   newMessage.user_name
                 }: ${newMessage.content.slice(0, 60)}${
                   newMessage.content.length > 60 ? "..." : ""
                 }`,
-                duration: 4000,
-                position: "top-right",
               });
 
               if (!isTabFocused) {
@@ -296,7 +309,7 @@ function ChatPage() {
       isSubscribed = false;
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
+  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused, unreadCount]);
 
   // Add virtual scrolling
   useEffect(() => {
@@ -435,6 +448,11 @@ function ChatPage() {
     [handleSendMessage]
   );
 
+  // Update unread count when messages change
+  useEffect(() => {
+    setUnreadCount(unreadMessages.size);
+  }, [unreadMessages]);
+
   useEffect(() => {
     setPageTitle("Chat");
     checkUser();
@@ -469,6 +487,7 @@ function ChatPage() {
   useEffect(() => {
     if (isTabFocused) {
       setUnreadMessages(new Set());
+      document.title = "Cipher - CHAT";
     }
   }, [isTabFocused]);
 
@@ -604,171 +623,154 @@ function ChatPage() {
   }
 
   return (
-    <>
-      <Toaster
-        theme="dark"
-        position="top-right"
-        closeButton
-        richColors
-        expand={false}
-        toastOptions={{
-          style: {
-            background: "rgba(0, 0, 0, 0.8)",
-            backdropFilter: "blur(8px)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          },
-        }}
-      />
-      <PageContainer title="CHAT" showBack user={user}>
-        {notification && (
-          <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
-            {notification}
-          </div>
-        )}
-        <main className="max-w-6xl mx-auto px-4 py-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
-            {/* Mobile Order Toggle */}
-            <button
-              className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
-              onClick={() => setShowSidebar(!showSidebar)}
+    <PageContainer title="CHAT" showBack user={user}>
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
+          {notification}
+        </div>
+      )}
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
+          {/* Mobile Order Toggle */}
+          <button
+            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
+            onClick={() => setShowSidebar(!showSidebar)}
+          >
+            <svg
+              className="w-6 h-6 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              <svg
-                className="w-6 h-6 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 6h16M4 12h16m-7 6h7"
-                />
-              </svg>
-            </button>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 6h16M4 12h16m-7 6h7"
+              />
+            </svg>
+          </button>
 
-            {/* Orders Sidebar */}
-            <div
-              className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
-                showSidebar ? "translate-x-0" : "-translate-x-full"
-              } md:translate-x-0 transition-transform duration-200 ease-in-out`}
-            >
-              <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
-                {/* Mobile Close Button */}
-                <div className="flex justify-between items-center mb-4 md:hidden">
-                  <h2 className="text-lg font-medium text-white">
-                    {isAdmin ? "All Orders" : "Your Orders"}
-                  </h2>
-                  <button
-                    onClick={() => setShowSidebar(false)}
-                    className="p-2 hover:bg-white/10 rounded-lg"
+          {/* Orders Sidebar */}
+          <div
+            className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
+              showSidebar ? "translate-x-0" : "-translate-x-full"
+            } md:translate-x-0 transition-transform duration-200 ease-in-out`}
+          >
+            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
+              {/* Mobile Close Button */}
+              <div className="flex justify-between items-center mb-4 md:hidden">
+                <h2 className="text-lg font-medium text-white flex items-center gap-2">
+                  {isAdmin ? "All Orders" : "Your Orders"}
+                  {unreadCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full">
+                      {unreadCount}
+                    </span>
+                  )}
+                </h2>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-2 hover:bg-white/10 rounded-lg"
+                >
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    <svg
-                      className="w-6 h-6 text-white"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* Orders List */}
-                <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                  {ordersList}
-                </div>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
               </div>
-            </div>
 
-            {/* Chat Area */}
-            <div className="md:col-span-3">
-              <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
-                {selectedOrderId ? (
-                  <>
-                    {/* Messages Container */}
-                    <div
-                      ref={messageListRef}
-                      className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
-                    >
-                      {loading ? (
-                        <div className="flex items-center justify-center h-full">
-                          <LoadingSpinner size="lg" light />
-                        </div>
-                      ) : messages.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-                          <p>No messages yet.</p>
-                          <p className="text-sm">Start the conversation!</p>
-                        </div>
-                      ) : (
-                        messages.map((message) => (
-                          <div key={message.id} data-message-id={message.id}>
-                            <MessageBubble
-                              message={message}
-                              isLatest={
-                                message.id === messages[messages.length - 1].id
-                              }
-                              sending={messageQueue.current.has(message.id)}
-                              isUnread={unreadMessages.has(message.id)}
-                              onRetry={() => retryMessage(message.id)}
-                              isPending={pendingMessages.current.has(
-                                message.id
-                              )}
-                            />
-                          </div>
-                        ))
-                      )}
-                      <div ref={messagesEndRef} />
-                    </div>
-
-                    {/* Message Input */}
-                    <form
-                      onSubmit={handleSendMessage}
-                      className="border-t border-white/10 p-4"
-                    >
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newMessage}
-                          onChange={(e) =>
-                            debouncedSetNewMessage(e.target.value)
-                          }
-                          placeholder="Type your message..."
-                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newMessage.trim() || sending}
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {sending ? (
-                            <RefreshCw className="w-5 h-5 animate-spin" />
-                          ) : (
-                            <Send className="w-5 h-5" />
-                          )}
-                        </button>
-                      </div>
-                    </form>
-                  </>
-                ) : (
-                  <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
-                    <p>Select an order to start chatting</p>
-                    <p className="text-sm">
-                      Your conversations will appear here
-                    </p>
-                  </div>
-                )}
+              {/* Orders List */}
+              <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
+                {ordersList}
               </div>
             </div>
           </div>
-        </main>
-      </PageContainer>
-    </>
+
+          {/* Chat Area */}
+          <div className="md:col-span-3">
+            <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+              {selectedOrderId ? (
+                <>
+                  {/* Messages Container */}
+                  <div
+                    ref={messageListRef}
+                    className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
+                  >
+                    {loading ? (
+                      <div className="flex items-center justify-center h-full">
+                        <LoadingSpinner size="lg" light />
+                      </div>
+                    ) : messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+                        <p>No messages yet.</p>
+                        <p className="text-sm">Start the conversation!</p>
+                      </div>
+                    ) : (
+                      messages.map((message) => (
+                        <div key={message.id} data-message-id={message.id}>
+                          <MessageBubble
+                            message={message}
+                            isLatest={
+                              message.id === messages[messages.length - 1].id
+                            }
+                            sending={messageQueue.current.has(message.id)}
+                            isUnread={unreadMessages.has(message.id)}
+                            onRetry={() => retryMessage(message.id)}
+                            isPending={pendingMessages.current.has(message.id)}
+                          />
+                        </div>
+                      ))
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  {/* Message Input */}
+                  <form
+                    onSubmit={handleSendMessage}
+                    className="border-t border-white/10 p-4"
+                  >
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newMessage}
+                        onChange={(e) => debouncedSetNewMessage(e.target.value)}
+                        placeholder="Type your message..."
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!newMessage.trim() || sending}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {sending ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Send className="w-5 h-5" />
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                  <p>Select an order to start chatting</p>
+                  <p className="text-sm">Your conversations will appear here</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+    </PageContainer>
   );
 }
 
