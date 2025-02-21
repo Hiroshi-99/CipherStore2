@@ -246,6 +246,9 @@ function ChatPage() {
   // Add audio ref to prevent multiple instances
   const notificationSound = useRef<HTMLAudioElement | null>(null);
 
+  // Add message tracking to prevent duplicates
+  const processedMessages = useRef<Set<string>>(new Set());
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
@@ -317,36 +320,30 @@ function ChatPage() {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
           const newMessage = payload.new as Message;
-          if (!newMessage || messageQueue.current.has(newMessage.id)) {
+          if (!newMessage) return;
+
+          // Check if message is already processed
+          if (processedMessages.current.has(newMessage.id)) return;
+          processedMessages.current.add(newMessage.id);
+
+          // Check if message is from queue
+          if (messageQueue.current.has(newMessage.id)) {
             messageQueue.current.delete(newMessage.id);
             pendingMessages.current.delete(newMessage.id);
             return;
           }
 
           setMessages((prev) => {
+            // Double check for duplicates in current messages
             if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
             const isFromOther = newMessage.user_id !== user?.id;
-            if (isFromOther) {
+            if (isFromOther && !isTabFocused) {
+              setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
               // Play notification sound
               if (notificationSound.current) {
-                notificationSound.current.currentTime = 0; // Reset audio
-                notificationSound.current.play().catch((error) => {
-                  console.warn("Failed to play notification sound:", error);
-                });
-              }
-
-              // Show toast notification
-              toast.message("New message", {
-                description: `${
-                  newMessage.user_name
-                }: ${newMessage.content.slice(0, 60)}${
-                  newMessage.content.length > 60 ? "..." : ""
-                }`,
-              });
-
-              if (!isTabFocused) {
-                setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
+                notificationSound.current.currentTime = 0;
+                notificationSound.current.play().catch(() => {});
               }
             }
 
@@ -361,6 +358,8 @@ function ChatPage() {
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
+      // Clear processed messages on cleanup
+      processedMessages.current.clear();
     };
   }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
 
@@ -642,32 +641,27 @@ function ChatPage() {
     }
   };
 
+  // Update fetchMessages to handle duplicates
   const fetchMessages = async (orderId: string) => {
     try {
       setLoading(true);
+      setError(null);
+
       const { data, error } = await supabase
         .from("messages")
-        .select(
-          `
-          *,
-          orders!inner(
-            user_id,
-            full_name
-          )
-        `
-        )
+        .select("*")
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
       if (error) throw error;
 
-      setMessages(
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined,
-        })) || []
-      );
+      // Clear processed messages before setting new ones
+      processedMessages.current.clear();
+
+      // Add fetched messages to processed set
+      data?.forEach((msg) => processedMessages.current.add(msg.id));
+
+      setMessages(data || []);
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
