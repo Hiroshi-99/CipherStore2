@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "../lib/supabase";
+import { Link } from "react-router-dom";
 import Header from "../components/Header";
 import {
   CheckCircle,
@@ -16,6 +17,7 @@ import FileUpload from "../components/FileUpload";
 import { getAuthHeaders } from "../lib/auth";
 import { setPageTitle } from "../utils/title";
 import { toast } from "sonner";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 interface Order {
   id: string;
@@ -159,12 +161,6 @@ function AdminPage() {
     },
     [actionInProgress, fetchOrders]
   );
-
-  const handleOrderSelect = (orderId: string) => {
-    setSelectedOrderId(orderId);
-    setUploadedFileUrl(null);
-    setError(null);
-  };
 
   const handleFileUploadSuccess = useCallback(
     async (orderId: string, fileUrl: string) => {
@@ -384,6 +380,8 @@ const OrderCard = React.memo(function OrderCard({
   onFileUpload: (orderId: string, fileUrl: string) => void;
   actionInProgress: string | null;
 }) {
+  const messageCount = order.messages?.length || 0;
+
   return (
     <div className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -402,9 +400,9 @@ const OrderCard = React.memo(function OrderCard({
                 HAS ACCOUNT FILE
               </span>
             )}
-            {order.messages && (
+            {messageCount > 0 && (
               <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
-                {order.messages.length} MESSAGES
+                {messageCount} MESSAGES
               </span>
             )}
           </div>
