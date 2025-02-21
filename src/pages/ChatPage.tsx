@@ -320,6 +320,16 @@ function ChatPage() {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
           try {
+            // Check if message is already in the queue or processed
+            if (
+              messageQueue.current.has(payload.new.id) ||
+              processedMessages.current.has(payload.new.id)
+            ) {
+              messageQueue.current.delete(payload.new.id);
+              pendingMessages.current.delete(payload.new.id);
+              return;
+            }
+
             // Fetch the complete message with order data
             const { data, error } = await supabase
               .from("messages")
@@ -349,20 +359,11 @@ function ChatPage() {
               user_id: data.user_id,
             };
 
-            // Check for duplicates using messageId only
-            if (
-              processedMessages.current.has(newMessage.id) ||
-              messageQueue.current.has(newMessage.id)
-            ) {
-              messageQueue.current.delete(newMessage.id);
-              pendingMessages.current.delete(newMessage.id);
-              return;
-            }
-
+            // Add to processed messages
             processedMessages.current.add(newMessage.id);
 
             setMessages((prev) => {
-              // Only check for exact ID matches
+              // Check for duplicates in current messages
               if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
               const isFromOther = newMessage.user_id !== user?.id;
@@ -472,7 +473,7 @@ function ChatPage() {
     [selectedOrderId, user]
   );
 
-  // Update handleSendMessage to avoid duplicate checks
+  // Update handleSendMessage function
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -482,11 +483,8 @@ function ChatPage() {
       const tempId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
-      // Add to retry queue
-      MESSAGE_QUEUE.set(tempId, {
-        content: messageContent,
-        retryCount: 0,
-      });
+      // Add to message queue first
+      messageQueue.current.add(tempId);
 
       // Optimistic update
       const optimisticMessage: Message = {
@@ -519,19 +517,21 @@ function ChatPage() {
 
         if (error) throw error;
 
-        // Remove from retry queue on success
-        MESSAGE_QUEUE.delete(tempId);
-
-        // Update message with real ID
         if (data?.[0]) {
+          // Add to processed messages
           processedMessages.current.add(data[0].id);
+          // Update message with real ID
           setMessages((prev) =>
             prev.map((msg) => (msg.id === tempId ? data[0] : msg))
           );
         }
+
+        // Remove from message queue
+        messageQueue.current.delete(tempId);
       } catch (error) {
         console.error("Error sending message:", error);
         toast.error("Failed to send message. Click retry to try again.");
+        pendingMessages.current.set(tempId, optimisticMessage);
       }
     },
     [user, selectedOrderId, newMessage, sending, scrollToBottom, isAdmin]
