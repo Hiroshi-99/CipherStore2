@@ -403,7 +403,49 @@ function ChatPage() {
     };
   }, [messages]);
 
-  // Add optimized message handling
+  // Add retryMessage function
+  const retryMessage = useCallback(
+    async (messageId: string) => {
+      const queuedMessage = MESSAGE_QUEUE.get(messageId);
+      if (!queuedMessage) return;
+
+      // Clear existing timeout if any
+      if (queuedMessage.timeoutId) {
+        clearTimeout(queuedMessage.timeoutId);
+      }
+
+      try {
+        const { data, error } = await supabase.from("messages").insert([
+          {
+            content: queuedMessage.content,
+            order_id: selectedOrderId,
+            user_name: user?.user_metadata.full_name || user?.email,
+            user_avatar: user?.user_metadata.avatar_url,
+            user_id: user?.id,
+          },
+        ]);
+
+        if (error) throw error;
+
+        // Remove from retry queue on success
+        MESSAGE_QUEUE.delete(messageId);
+
+        // Update message with real ID
+        if (data?.[0]) {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === messageId ? data[0] : msg))
+          );
+          toast.success("Message sent successfully");
+        }
+      } catch (error) {
+        console.error("Error retrying message:", error);
+        toast.error("Failed to retry message");
+      }
+    },
+    [selectedOrderId, user]
+  );
+
+  // Update handleSendMessage to use MESSAGE_QUEUE
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -424,7 +466,7 @@ function ChatPage() {
         content: messageContent,
         user_name: user.user_metadata.full_name || user.email || "User",
         user_avatar: user.user_metadata.avatar_url,
-        is_admin: false,
+        is_admin: isAdmin,
         created_at: new Date().toISOString(),
         order_id: selectedOrderId,
         user_id: user.id,
@@ -434,53 +476,35 @@ function ChatPage() {
       setNewMessage("");
       scrollToBottom();
 
-      const sendMessageWithRetry = async (retryCount = 0) => {
-        try {
-          const { data, error } = await supabase.from("messages").insert([
-            {
-              content: messageContent,
-              order_id: selectedOrderId,
-              user_name: user.user_metadata.full_name || user.email,
-              user_avatar: user.user_metadata.avatar_url,
-              user_id: user.id,
-            },
-          ]);
+      try {
+        const { data, error } = await supabase.from("messages").insert([
+          {
+            content: messageContent,
+            order_id: selectedOrderId,
+            user_name: user.user_metadata.full_name || user.email,
+            user_avatar: user.user_metadata.avatar_url,
+            user_id: user.id,
+            is_admin: isAdmin,
+          },
+        ]);
 
-          if (error) throw error;
+        if (error) throw error;
 
-          // Remove from retry queue on success
-          MESSAGE_QUEUE.delete(tempId);
+        // Remove from retry queue on success
+        MESSAGE_QUEUE.delete(tempId);
 
-          // Update message with real ID
-          if (data?.[0]) {
-            setMessages((prev) =>
-              prev.map((msg) => (msg.id === tempId ? data[0] : msg))
-            );
-          }
-        } catch (error) {
-          console.error("Error sending message:", error);
-
-          // Handle retry
-          if (retryCount < 3) {
-            const timeoutId = setTimeout(
-              () => sendMessageWithRetry(retryCount + 1),
-              RETRY_DELAY
-            );
-
-            MESSAGE_QUEUE.set(tempId, {
-              content: messageContent,
-              retryCount: retryCount + 1,
-              timeoutId,
-            });
-          } else {
-            toast.error("Failed to send message");
-          }
+        // Update message with real ID
+        if (data?.[0]) {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.id === tempId ? data[0] : msg))
+          );
         }
-      };
-
-      sendMessageWithRetry();
+      } catch (error) {
+        console.error("Error sending message:", error);
+        toast.error("Failed to send message. Click retry to try again.");
+      }
     },
-    [user, selectedOrderId, newMessage, sending, scrollToBottom]
+    [user, selectedOrderId, newMessage, sending, scrollToBottom, isAdmin]
   );
 
   // Add cleanup for message queue
