@@ -322,31 +322,38 @@ function ChatPage() {
           const newMessage = payload.new as Message;
           if (!newMessage) return;
 
-          // Check if message is already processed
-          if (processedMessages.current.has(newMessage.id)) return;
-          processedMessages.current.add(newMessage.id);
+          // Check for duplicates using multiple criteria
+          const isDuplicate =
+            processedMessages.current.has(newMessage.id) || // Check processed messages
+            messageQueue.current.has(newMessage.id) || // Check message queue
+            messages.some(
+              (msg) =>
+                msg.id === newMessage.id || // Check by ID
+                (msg.content === newMessage.content && // Check by content and timestamp
+                  Math.abs(
+                    new Date(msg.created_at).getTime() -
+                      new Date(newMessage.created_at).getTime()
+                  ) < 1000)
+            );
 
-          // Check if message is from queue
-          if (messageQueue.current.has(newMessage.id)) {
+          if (isDuplicate) {
             messageQueue.current.delete(newMessage.id);
             pendingMessages.current.delete(newMessage.id);
             return;
           }
 
-          setMessages((prev) => {
-            // Double check for duplicates in current messages
-            if (prev.some((msg) => msg.id === newMessage.id)) return prev;
+          // Add to processed messages
+          processedMessages.current.add(newMessage.id);
 
+          setMessages((prev) => {
             const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther && !isTabFocused) {
               setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-              // Play notification sound
               if (notificationSound.current) {
                 notificationSound.current.currentTime = 0;
                 notificationSound.current.play().catch(() => {});
               }
             }
-
             return [...prev, newMessage];
           });
 
@@ -358,10 +365,9 @@ function ChatPage() {
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
-      // Clear processed messages on cleanup
       processedMessages.current.clear();
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
+  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused, messages]);
 
   // Add virtual scrolling
   useEffect(() => {
@@ -452,6 +458,7 @@ function ChatPage() {
 
       const messageContent = newMessage.trim();
       const tempId = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
 
       // Add to retry queue
       MESSAGE_QUEUE.set(tempId, {
@@ -466,7 +473,7 @@ function ChatPage() {
         user_name: user.user_metadata.full_name || user.email || "User",
         user_avatar: user.user_metadata.avatar_url,
         is_admin: isAdmin,
-        created_at: new Date().toISOString(),
+        created_at: timestamp,
         order_id: selectedOrderId,
         user_id: user.id,
       };
@@ -484,6 +491,7 @@ function ChatPage() {
             user_avatar: user.user_metadata.avatar_url,
             user_id: user.id,
             is_admin: isAdmin,
+            created_at: timestamp, // Use the same timestamp
           },
         ]);
 
@@ -494,6 +502,7 @@ function ChatPage() {
 
         // Update message with real ID
         if (data?.[0]) {
+          processedMessages.current.add(data[0].id);
           setMessages((prev) =>
             prev.map((msg) => (msg.id === tempId ? data[0] : msg))
           );
