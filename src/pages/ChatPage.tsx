@@ -13,6 +13,9 @@ import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster } from "sonner";
+import { FixedSizeList as List } from "react-window";
+import { useQuery, useMutation, useQueryClient } from "react-query";
+import toast from "react-hot-toast";
 
 interface Message {
   id: string;
@@ -151,46 +154,33 @@ const VirtualizedMessageList = React.memo(function VirtualizedMessageList({
   pendingMessages: Map<string, Message>;
   onRetry: (id: string) => void;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
-
-  const handleScroll = useCallback(() => {
-    if (!containerRef.current) return;
-    const { scrollTop, clientHeight } = containerRef.current;
-    const buffer = clientHeight * 2;
-    const start = Math.max(0, Math.floor((scrollTop - buffer) / 50));
-    const end = Math.min(
-      messages.length,
-      Math.ceil((scrollTop + clientHeight + buffer) / 50)
-    );
-    setVisibleRange({ start, end });
-  }, [messages.length]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (container) {
-      container.addEventListener("scroll", handleScroll);
-      return () => container.removeEventListener("scroll", handleScroll);
-    }
-  }, [handleScroll]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
-    >
-      {messages.slice(visibleRange.start, visibleRange.end).map((message) => (
+  const Row = ({
+    index,
+    style,
+  }: {
+    index: number;
+    style: React.CSSProperties;
+  }) => {
+    const message = messages[index];
+    return (
+      <div style={style}>
         <MessageBubble
           key={message.id}
           message={message}
-          isLatest={message.id === messages[messages.length - 1].id}
+          isLatest={index === messages.length - 1}
           sending={messageQueue.has(message.id)}
           isUnread={unreadMessages.has(message.id)}
           onRetry={() => onRetry(message.id)}
           isPending={pendingMessages.has(message.id)}
         />
-      ))}
-    </div>
+      </div>
+    );
+  };
+
+  return (
+    <List height={600} itemCount={messages.length} itemSize={100} width="100%">
+      {Row}
+    </List>
   );
 });
 
@@ -345,106 +335,96 @@ function ChatPage() {
     [isTabFocused]
   );
 
-  // Optimized message sending with better error handling
-  const handleSendMessage = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!user || !newMessage.trim() || sending || !selectedOrderId) {
-        setError("Cannot send message at this time");
-        return;
-      }
+  const queryClient = useQueryClient();
 
-      const messageContent = newMessage.trim();
-      setNewMessage("");
-      setSending(true);
-
-      const tempId = crypto.randomUUID();
-      const optimisticMessage: Message = {
-        id: tempId,
-        content: messageContent,
-        user_id: user.id,
-        user_name: user.user_metadata.full_name || user.email,
-        user_avatar: user.user_metadata.avatar_url,
-        is_admin: isAdmin,
-        created_at: new Date().toISOString(),
-        order_id: selectedOrderId,
-      };
-
-      // Add to pending queue
-      messageQueue.current.add(tempId);
-      pendingMessages.current.set(tempId, optimisticMessage);
-
-      // Optimistic update
-      setMessages((prev) => [...prev, optimisticMessage]);
-      requestAnimationFrame(scrollToBottom);
-
-      try {
-        // Get order details first
-        const { data: orderData } = await supabase
-          .from("orders")
-          .select("user_id")
-          .eq("id", selectedOrderId)
-          .single();
-
-        if (!orderData) throw new Error("Order not found");
-
-        // Send message
-        const { data: messageData, error: messageError } = await supabase
-          .from("messages")
-          .insert([
-            {
-              content: messageContent,
-              user_id: user.id,
-              is_admin: user.id !== orderData.user_id,
-              user_name: user.user_metadata.full_name || user.email,
-              user_avatar: user.user_metadata.avatar_url,
-              order_id: selectedOrderId,
-              order_user_id: orderData.user_id,
-            },
-          ])
-          .select()
-          .single();
-
-        if (messageError) throw messageError;
-
-        // Update message with real ID
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, id: messageData.id } : msg
-          )
-        );
-      } catch (error) {
-        console.error("Error sending message:", error);
-        // Remove optimistic message on error
-        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-        setError("Failed to send message");
-        setNewMessage(messageContent);
-      } finally {
-        messageQueue.current.delete(tempId);
-        pendingMessages.current.delete(tempId);
-        setSending(false);
-      }
-    },
-    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
+  const {
+    data: messagesData,
+    isLoading,
+    error: queryError,
+  } = useQuery(
+    ["messages", selectedOrderId],
+    () => fetchMessages(selectedOrderId),
+    {
+      enabled: !!selectedOrderId,
+      staleTime: 5 * 60 * 1000, // 5 minutes
+    }
   );
 
-  // Add message retry functionality
-  const retryMessage = useCallback(
-    async (tempId: string) => {
-      const message = pendingMessages.current.get(tempId);
-      if (!message) return;
-
-      // Remove failed message
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-
-      // Retry sending
-      const content = message.content;
-      pendingMessages.current.delete(tempId);
-      setNewMessage(content);
-      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
-    },
-    [handleSendMessage]
+  const sendMessageMutation = useMutation(
+    (message: Message) => sendMessage(message),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(["messages", selectedOrderId]);
+      },
+    }
   );
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !newMessage.trim() || sending || !selectedOrderId) {
+      toast.error("Cannot send message at this time");
+      return;
+    }
+
+    const messageContent = newMessage.trim();
+    setNewMessage("");
+    setSending(true);
+
+    const optimisticMessage: Message = {
+      id: crypto.randomUUID(),
+      content: messageContent,
+      user_id: user.id,
+      user_name: user.user_metadata.full_name || user.email,
+      user_avatar: user.user_metadata.avatar_url,
+      is_admin: isAdmin,
+      created_at: new Date().toISOString(),
+      order_id: selectedOrderId,
+    };
+
+    try {
+      sendMessageMutation.mutate(optimisticMessage);
+      toast.success("Message sent successfully");
+    } catch (error) {
+      console.error("Error sending message:", error);
+      toast.error("Failed to send message. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const fetchMessages = async (orderId: string, page = 1, pageSize = 50) => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: true })
+        .range((page - 1) * pageSize, page * pageSize - 1);
+
+      if (error) throw error;
+      setMessages((prev) => [...prev, ...data]);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      toast.error("Failed to load messages. Please try again.");
+      setError("Failed to load messages");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedOrderId) {
+      fetchMessages(selectedOrderId);
+    }
+  }, [selectedOrderId]);
+
+  // Add a "Load More" button to fetch the next page of messages
+  const loadMoreMessages = () => {
+    if (selectedOrderId) {
+      fetchMessages(selectedOrderId, Math.floor(messages.length / 50) + 1);
+    }
+  };
 
   useEffect(() => {
     setPageTitle("Chat");
@@ -573,41 +553,6 @@ function ChatPage() {
     } catch (error) {
       console.error("Error fetching admin orders:", error);
       setError("Failed to load orders");
-    }
-  };
-
-  const fetchMessages = async (orderId: string) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select(
-          `
-          *,
-          orders!inner(
-            user_id,
-            full_name
-          )
-        `
-        )
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-
-      setMessages(
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined,
-        })) || []
-      );
-      setTimeout(scrollToBottom, 100);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
     }
   };
 
