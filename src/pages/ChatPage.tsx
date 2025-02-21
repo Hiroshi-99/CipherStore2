@@ -28,47 +28,12 @@ interface Message {
 interface Order {
   id: string;
   full_name: string;
-  messages?: { id: string; created_at: string }[];
+  messages: { id: string; created_at: string }[];
 }
 
 interface ChatProps {
   orderId: string;
 }
-
-// Add message queue for better performance
-const MESSAGE_QUEUE = new Map<string, RetryableMessage>();
-const RETRY_DELAY = 3000;
-
-interface RetryableMessage {
-  content: string;
-  retryCount: number;
-  timeoutId?: NodeJS.Timeout;
-}
-
-// Add message status type
-type MessageStatus = "sending" | "sent" | "error";
-
-// Add message status tracking
-interface MessageWithStatus extends Message {
-  status?: MessageStatus;
-}
-
-// Add debounced message input
-const useDebounce = (value: string, delay: number) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
-};
 
 // Create separate components for better performance
 const MessageBubble = React.memo(function MessageBubble({
@@ -158,6 +123,8 @@ const OrderButton = React.memo(function OrderButton({
   isAdmin: boolean;
   onClick: () => void;
 }) {
+  const messageCount = order.messages?.length || 0;
+
   return (
     <button
       onClick={onClick}
@@ -169,79 +136,18 @@ const OrderButton = React.memo(function OrderButton({
     >
       <div className="font-medium">{order.full_name}</div>
       <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {isAdmin && order.messages?.length > 0 && (
+      {isAdmin && messageCount > 0 && (
         <div className="text-xs text-emerald-400 mt-1">
-          {order.messages.length} messages
+          {messageCount} messages
         </div>
       )}
     </button>
   );
 });
 
-// Create separate MessageList component for better performance
-const MessageList = React.memo(function MessageList({
-  messages,
-  messageQueue,
-  pendingMessages,
-  unreadMessages,
-  onRetry,
-  onMarkAsRead,
-}: {
-  messages: MessageWithStatus[];
-  messageQueue: Set<string>;
-  pendingMessages: Map<string, MessageWithStatus>;
-  unreadMessages: Set<string>;
-  onRetry: (messageId: string) => void;
-  onMarkAsRead: (messageId: string) => void;
-}) {
-  const listRef = useRef<HTMLDivElement>(null);
-  const observerRef = useRef<IntersectionObserver | null>(null);
-
-  // Add virtual scrolling
-  useEffect(() => {
-    if (!listRef.current) return;
-
-    const options = {
-      root: listRef.current,
-      rootMargin: "20px",
-      threshold: 0.1,
-    };
-
-    observerRef.current = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const messageId = entry.target.getAttribute("data-message-id");
-          if (messageId) {
-            // Handle message visibility
-          }
-        }
-      });
-    }, options);
-
-    return () => observerRef.current?.disconnect();
-  }, []);
-
-  return (
-    <div ref={listRef} className="space-y-4">
-      {messages.map((message) => (
-        <div key={message.id} data-message-id={message.id}>
-          <MessageBubble
-            message={message}
-            isLatest={message.id === messages[messages.length - 1]?.id}
-            sending={messageQueue.has(message.id)}
-            isUnread={unreadMessages.has(message.id)}
-            onRetry={() => onRetry(message.id)}
-            isPending={pendingMessages.has(message.id)}
-          />
-        </div>
-      ))}
-    </div>
-  );
-});
-
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<MessageWithStatus[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -263,33 +169,15 @@ function ChatPage() {
 
   // Add message queue for optimistic updates
   const messageQueue = useRef<Set<string>>(new Set());
-  const pendingMessages = useRef<Map<string, MessageWithStatus>>(new Map());
+  const pendingMessages = useRef<Map<string, Message>>(new Map());
 
   // Add virtual scrolling state
-  const [visibleMessages, setVisibleMessages] = useState<MessageWithStatus[]>(
-    []
-  );
+  const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
   const messageListRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Add audio ref to prevent multiple instances
   const notificationSound = useRef<HTMLAudioElement | null>(null);
-
-  // Add message tracking to prevent duplicates
-  const processedMessages = useRef<Set<string>>(new Set());
-
-  // Add typing indicator
-  const [isTyping, setIsTyping] = useState(false);
-  const typingTimeoutRef = useRef<NodeJS.Timeout>();
-  const debouncedMessage = useDebounce(newMessage, 500);
-
-  // Add read receipts
-  const [readMessages, setReadMessages] = useState<Set<string>>(new Set());
-
-  // Add message status tracking
-  const [messageStatuses, setMessageStatuses] = useState<
-    Record<string, MessageStatus>
-  >({});
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -313,22 +201,26 @@ function ChatPage() {
 
   // Memoize messages list
   const messagesList = useMemo(() => {
-    return messages.map((message) => ({
-      ...message,
-      status: messageStatuses[message.id] || "sent",
-      isRead: readMessages.has(message.id),
-    }));
-  }, [messages, messageStatuses, readMessages]);
+    return messages.map((message, index) => (
+      <MessageBubble
+        key={message.id}
+        message={message}
+        isLatest={index === messages.length - 1}
+        sending={sending}
+        isUnread={unreadMessages.has(message.id)}
+      />
+    ));
+  }, [messages, sending, unreadMessages]);
 
   // Debounced message input handler
-  const debouncedSetNewMessage = useCallback(
-    debounce((value: string) => setNewMessage(value), 100),
+  const debouncedSetNewMessage = useMemo(
+    () => debounce((value: string) => setNewMessage(value), 100),
     []
   );
 
   // Initialize audio on mount
   useEffect(() => {
-    notificationSound.current = new Audio("/sounds/gg.mp3");
+    notificationSound.current = new Audio("/sounds/notification.mp3");
     notificationSound.current.volume = 0.5;
 
     return () => {
@@ -357,59 +249,32 @@ function ChatPage() {
         async (payload) => {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
-          // Skip if this is our own message
-          if (payload.new.user_id === user?.id) {
+          const newMessage = payload.new as Message;
+          if (!newMessage || messageQueue.current.has(newMessage.id)) {
+            messageQueue.current.delete(newMessage.id);
+            pendingMessages.current.delete(newMessage.id);
             return;
           }
 
-          try {
-            // Fetch the complete message with order data
-            const { data, error } = await supabase
-              .from("messages")
-              .select(
-                `
-                *,
-                orders!inner(
-                  user_id,
-                  full_name
-                )
-              `
-              )
-              .eq("id", payload.new.id)
-              .single();
+          setMessages((prev) => {
+            if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
-            if (error) throw error;
-            if (!data) return;
-
-            const newMessage = {
-              id: data.id,
-              content: data.content,
-              user_name: data.user_name,
-              user_avatar: data.user_avatar,
-              is_admin: data.user_id !== data.orders.user_id,
-              created_at: data.created_at,
-              order_id: data.order_id,
-              user_id: data.user_id,
-            };
-
-            setMessages((prev) => {
-              // Skip if message already exists
-              if (prev.some((msg) => msg.id === newMessage.id)) return prev;
+            const isFromOther = newMessage.user_id !== user?.id;
+            if (isFromOther && notificationSound.current) {
+              notificationSound.current.currentTime = 0;
+              notificationSound.current.play().catch(() => {
+                // Ignore autoplay errors
+              });
 
               if (!isTabFocused) {
                 setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-                if (notificationSound.current) {
-                  notificationSound.current.currentTime = 0;
-                  notificationSound.current.play().catch(() => {});
-                }
               }
-              return [...prev, newMessage];
-            });
+            }
 
-            requestAnimationFrame(scrollToBottom);
-          } catch (error) {
-            console.error("Error processing new message:", error);
-          }
+            return [...prev, newMessage];
+          });
+
+          requestAnimationFrame(scrollToBottom);
         }
       )
       .subscribe();
@@ -459,157 +324,109 @@ function ChatPage() {
     };
   }, [messages]);
 
-  // Add retryMessage function
-  const retryMessage = useCallback(
-    async (messageId: string) => {
-      const queuedMessage = MESSAGE_QUEUE.get(messageId);
-      if (!queuedMessage) return;
-
-      // Clear existing timeout if any
-      if (queuedMessage.timeoutId) {
-        clearTimeout(queuedMessage.timeoutId);
-      }
-
-      try {
-        const { data, error } = await supabase.from("messages").insert([
-          {
-            content: queuedMessage.content,
-            order_id: selectedOrderId,
-            user_name: user?.user_metadata.full_name || user?.email,
-            user_avatar: user?.user_metadata.avatar_url,
-            user_id: user?.id,
-          },
-        ]);
-
-        if (error) throw error;
-
-        // Remove from retry queue on success
-        MESSAGE_QUEUE.delete(messageId);
-
-        // Update message with real ID
-        if (data?.[0]) {
-          setMessages((prev) =>
-            prev.map((msg) => (msg.id === messageId ? data[0] : msg))
-          );
-          toast.success("Message sent successfully");
-        }
-      } catch (error) {
-        console.error("Error retrying message:", error);
-        toast.error("Failed to retry message");
-      }
-    },
-    [selectedOrderId, user]
-  );
-
-  // Add typing indicator handling
-  useEffect(() => {
-    if (debouncedMessage && selectedOrderId) {
-      setIsTyping(true);
-      // Emit typing event to other users
-      supabase.channel(`typing:${selectedOrderId}`).send({
-        type: "broadcast",
-        event: "typing",
-        payload: { userId: user?.id },
-      });
-
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-
-      typingTimeoutRef.current = setTimeout(() => {
-        setIsTyping(false);
-      }, 2000);
-    }
-  }, [debouncedMessage, selectedOrderId, user?.id]);
-
-  // Add read receipt handling
-  const markMessageAsRead = useCallback(
-    (messageId: string) => {
-      setReadMessages((prev) => new Set(prev).add(messageId));
-      // Emit read receipt to other users
-      supabase.channel(`read:${selectedOrderId}`).send({
-        type: "broadcast",
-        event: "read",
-        payload: { messageId, userId: user?.id },
-      });
-    },
-    [selectedOrderId, user?.id]
-  );
-
-  // Update handleSendMessage function
+  // Optimized message sending with better error handling
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!user || !selectedOrderId || !newMessage.trim() || sending) return;
+      if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
 
       const messageContent = newMessage.trim();
+      setNewMessage("");
+      setSending(true);
+
       const tempId = crypto.randomUUID();
-      const timestamp = new Date().toISOString();
-
-      // Set initial status
-      setMessageStatuses((prev) => ({ ...prev, [tempId]: "sending" }));
-
-      // Create optimistic message
-      const optimisticMessage: MessageWithStatus = {
+      const optimisticMessage: Message = {
         id: tempId,
         content: messageContent,
-        user_name: user.user_metadata.full_name || user.email || "User",
+        user_id: user.id,
+        user_name: user.user_metadata.full_name || user.email,
         user_avatar: user.user_metadata.avatar_url,
         is_admin: isAdmin,
-        created_at: timestamp,
+        created_at: new Date().toISOString(),
         order_id: selectedOrderId,
-        user_id: user.id,
-        status: "sending",
       };
 
+      // Add to pending queue
+      messageQueue.current.add(tempId);
+      pendingMessages.current.set(tempId, optimisticMessage);
+
+      // Optimistic update
       setMessages((prev) => [...prev, optimisticMessage]);
-      setNewMessage("");
-      scrollToBottom();
+      requestAnimationFrame(scrollToBottom);
 
       try {
-        const { data, error } = await supabase.from("messages").insert([
-          {
-            content: messageContent,
-            order_id: selectedOrderId,
-            user_name: user.user_metadata.full_name || user.email,
-            user_avatar: user.user_metadata.avatar_url,
-            user_id: user.id,
-            is_admin: isAdmin,
-            created_at: timestamp,
-          },
-        ]);
+        // Get order details first
+        const { data: orderData } = await supabase
+          .from("orders")
+          .select("user_id")
+          .eq("id", selectedOrderId)
+          .single();
 
-        if (error) throw error;
+        if (!orderData) throw new Error("Order not found");
 
-        if (data?.[0]) {
-          setMessageStatuses((prev) => ({ ...prev, [data[0].id]: "sent" }));
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === tempId ? { ...data[0], status: "sent" } : msg
-            )
-          );
-        }
+        // Send message
+        const { data: messageData, error: messageError } = await supabase
+          .from("messages")
+          .insert([
+            {
+              content: messageContent,
+              user_id: user.id,
+              is_admin: user.id !== orderData.user_id,
+              user_name: user.user_metadata.full_name || user.email,
+              user_avatar: user.user_metadata.avatar_url,
+              order_id: selectedOrderId,
+              order_user_id: orderData.user_id,
+            },
+          ])
+          .select()
+          .single();
+
+        if (messageError) throw messageError;
+
+        // Update message with real ID
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, id: messageData.id } : msg
+          )
+        );
       } catch (error) {
         console.error("Error sending message:", error);
-        setMessageStatuses((prev) => ({ ...prev, [tempId]: "error" }));
-        toast.error("Failed to send message. Click retry to try again.");
-        pendingMessages.current.set(tempId, optimisticMessage);
+        // Remove optimistic message on error
+        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+        setError("Failed to send message");
+        setNewMessage(messageContent);
+      } finally {
+        messageQueue.current.delete(tempId);
+        pendingMessages.current.delete(tempId);
+        setSending(false);
       }
     },
-    [user, selectedOrderId, newMessage, sending, scrollToBottom, isAdmin]
+    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
   );
 
-  // Add cleanup for message queue
-  useEffect(() => {
-    return () => {
-      MESSAGE_QUEUE.forEach((message) => {
-        if (message.timeoutId) {
-          clearTimeout(message.timeoutId);
-        }
-      });
-      MESSAGE_QUEUE.clear();
-    };
-  }, []);
+  // Add message retry functionality
+  const retryMessage = useCallback(
+    async (messageId: string) => {
+      const pendingMessage = pendingMessages.current.get(messageId);
+      if (!pendingMessage) return;
+
+      try {
+        const { error } = await supabase
+          .from("messages")
+          .insert([pendingMessage]);
+        if (error) throw error;
+
+        pendingMessages.current.delete(messageId);
+        messageQueue.current.delete(messageId);
+
+        await fetchMessages(selectedOrderId!);
+      } catch (error) {
+        console.error("Error retrying message:", error);
+        toast.error("Failed to send message");
+      }
+    },
+    [selectedOrderId, fetchMessages]
+  );
 
   useEffect(() => {
     setPageTitle("Chat");
@@ -734,12 +551,9 @@ function ChatPage() {
     }
   };
 
-  // Update fetchMessages function with better error handling and typing
   const fetchMessages = async (orderId: string) => {
     try {
       setLoading(true);
-      setError(null);
-
       const { data, error } = await supabase
         .from("messages")
         .select(
@@ -756,33 +570,17 @@ function ChatPage() {
 
       if (error) throw error;
 
-      // Clear processed messages before setting new ones
-      processedMessages.current.clear();
-
-      // Transform and type the data properly
-      const transformedMessages =
+      setMessages(
         data?.map((msg) => ({
-          id: msg.id,
-          content: msg.content,
-          user_name: msg.user_name,
-          user_avatar: msg.user_avatar,
+          ...msg,
           is_admin: msg.user_id !== msg.orders.user_id,
-          created_at: msg.created_at,
-          order_id: msg.order_id,
-          user_id: msg.user_id,
-        })) || [];
-
-      // Add fetched messages to processed set
-      transformedMessages.forEach((msg) =>
-        processedMessages.current.add(msg.id)
+          orders: undefined,
+        })) || []
       );
-
-      setMessages(transformedMessages);
       setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
       setError("Failed to load messages");
-      toast.error("Failed to load messages. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -886,14 +684,20 @@ function ChatPage() {
                         <p className="text-sm">Start the conversation!</p>
                       </div>
                     ) : (
-                      <MessageList
-                        messages={messagesList}
-                        messageQueue={messageQueue.current}
-                        pendingMessages={pendingMessages.current}
-                        unreadMessages={unreadMessages}
-                        onRetry={retryMessage}
-                        onMarkAsRead={markMessageAsRead}
-                      />
+                      messages.map((message) => (
+                        <div key={message.id} data-message-id={message.id}>
+                          <MessageBubble
+                            message={message}
+                            isLatest={
+                              message.id === messages[messages.length - 1].id
+                            }
+                            sending={messageQueue.current.has(message.id)}
+                            isUnread={unreadMessages.has(message.id)}
+                            onRetry={() => retryMessage(message.id)}
+                            isPending={pendingMessages.current.has(message.id)}
+                          />
+                        </div>
+                      ))
                     )}
                     <div ref={messagesEndRef} />
                   </div>
@@ -932,11 +736,6 @@ function ChatPage() {
                 </div>
               )}
             </div>
-            {isTyping && (
-              <div className="text-sm text-white/50 italic">
-                Someone is typing...
-              </div>
-            )}
           </div>
         </div>
       </main>
@@ -944,8 +743,8 @@ function ChatPage() {
   );
 }
 
-// Debounce utility
-function debounce<T extends (...args: any[]) => any>(
+// Debounce utility with proper types
+function debounce<T extends (...args: unknown[]) => void>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {
