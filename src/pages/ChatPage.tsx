@@ -174,6 +174,9 @@ function ChatPage() {
   const messageListRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
+  // Add audio ref to prevent multiple instances
+  const notificationSound = useRef<HTMLAudioElement | null>(null);
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
@@ -213,7 +216,19 @@ function ChatPage() {
     []
   );
 
-  // Optimized message subscription with better real-time handling
+  // Initialize audio on mount
+  useEffect(() => {
+    notificationSound.current = new Audio("/sounds/gg.mp3");
+    notificationSound.current.volume = 0.5;
+    return () => {
+      if (notificationSound.current) {
+        notificationSound.current.pause();
+        notificationSound.current = null;
+      }
+    };
+  }, []);
+
+  // Update subscription with better sound handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -244,9 +259,20 @@ function ChatPage() {
             const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther) {
               // Play notification sound
-              const audio = new Audio("/sounds/gg.mp3");
-              audio.volume = 0.5;
-              audio.play().catch(() => {});
+              if (notificationSound.current) {
+                try {
+                  // Reset and play
+                  notificationSound.current.currentTime = 0;
+                  const playPromise = notificationSound.current.play();
+                  if (playPromise) {
+                    playPromise.catch((error) => {
+                      console.warn("Audio playback failed:", error);
+                    });
+                  }
+                } catch (error) {
+                  console.warn("Audio playback error:", error);
+                }
+              }
 
               // Show toast notification
               toast.message("New message", {
