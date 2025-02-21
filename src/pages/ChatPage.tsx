@@ -45,6 +45,31 @@ interface RetryableMessage {
   timeoutId?: NodeJS.Timeout;
 }
 
+// Add message status type
+type MessageStatus = "sending" | "sent" | "error";
+
+// Add message status tracking
+interface MessageWithStatus extends Message {
+  status?: MessageStatus;
+}
+
+// Add debounced message input
+const useDebounce = (value: string, delay: number) => {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+};
+
 // Create separate components for better performance
 const MessageBubble = React.memo(function MessageBubble({
   message,
@@ -160,12 +185,14 @@ const MessageList = React.memo(function MessageList({
   pendingMessages,
   unreadMessages,
   onRetry,
+  onMarkAsRead,
 }: {
-  messages: Message[];
+  messages: MessageWithStatus[];
   messageQueue: Set<string>;
-  pendingMessages: Map<string, Message>;
+  pendingMessages: Map<string, MessageWithStatus>;
   unreadMessages: Set<string>;
   onRetry: (messageId: string) => void;
+  onMarkAsRead: (messageId: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -214,7 +241,7 @@ const MessageList = React.memo(function MessageList({
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<MessageWithStatus[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -236,10 +263,12 @@ function ChatPage() {
 
   // Add message queue for optimistic updates
   const messageQueue = useRef<Set<string>>(new Set());
-  const pendingMessages = useRef<Map<string, Message>>(new Map());
+  const pendingMessages = useRef<Map<string, MessageWithStatus>>(new Map());
 
   // Add virtual scrolling state
-  const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
+  const [visibleMessages, setVisibleMessages] = useState<MessageWithStatus[]>(
+    []
+  );
   const messageListRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -248,6 +277,19 @@ function ChatPage() {
 
   // Add message tracking to prevent duplicates
   const processedMessages = useRef<Set<string>>(new Set());
+
+  // Add typing indicator
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout>();
+  const debouncedMessage = useDebounce(newMessage, 500);
+
+  // Add read receipts
+  const [readMessages, setReadMessages] = useState<Set<string>>(new Set());
+
+  // Add message status tracking
+  const [messageStatuses, setMessageStatuses] = useState<
+    Record<string, MessageStatus>
+  >({});
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -271,16 +313,12 @@ function ChatPage() {
 
   // Memoize messages list
   const messagesList = useMemo(() => {
-    return messages.map((message, index) => (
-      <MessageBubble
-        key={message.id}
-        message={message}
-        isLatest={index === messages.length - 1}
-        sending={sending}
-        isUnread={unreadMessages.has(message.id)}
-      />
-    ));
-  }, [messages, sending, unreadMessages]);
+    return messages.map((message) => ({
+      ...message,
+      status: messageStatuses[message.id] || "sent",
+      isRead: readMessages.has(message.id),
+    }));
+  }, [messages, messageStatuses, readMessages]);
 
   // Debounced message input handler
   const debouncedSetNewMessage = useCallback(
@@ -463,6 +501,41 @@ function ChatPage() {
     [selectedOrderId, user]
   );
 
+  // Add typing indicator handling
+  useEffect(() => {
+    if (debouncedMessage && selectedOrderId) {
+      setIsTyping(true);
+      // Emit typing event to other users
+      supabase.channel(`typing:${selectedOrderId}`).send({
+        type: "broadcast",
+        event: "typing",
+        payload: { userId: user?.id },
+      });
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+      }, 2000);
+    }
+  }, [debouncedMessage, selectedOrderId, user?.id]);
+
+  // Add read receipt handling
+  const markMessageAsRead = useCallback(
+    (messageId: string) => {
+      setReadMessages((prev) => new Set(prev).add(messageId));
+      // Emit read receipt to other users
+      supabase.channel(`read:${selectedOrderId}`).send({
+        type: "broadcast",
+        event: "read",
+        payload: { messageId, userId: user?.id },
+      });
+    },
+    [selectedOrderId, user?.id]
+  );
+
   // Update handleSendMessage function
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
@@ -473,8 +546,11 @@ function ChatPage() {
       const tempId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
+      // Set initial status
+      setMessageStatuses((prev) => ({ ...prev, [tempId]: "sending" }));
+
       // Create optimistic message
-      const optimisticMessage: Message = {
+      const optimisticMessage: MessageWithStatus = {
         id: tempId,
         content: messageContent,
         user_name: user.user_metadata.full_name || user.email || "User",
@@ -483,9 +559,9 @@ function ChatPage() {
         created_at: timestamp,
         order_id: selectedOrderId,
         user_id: user.id,
+        status: "sending",
       };
 
-      // Add optimistic update
       setMessages((prev) => [...prev, optimisticMessage]);
       setNewMessage("");
       scrollToBottom();
@@ -506,13 +582,16 @@ function ChatPage() {
         if (error) throw error;
 
         if (data?.[0]) {
-          // Update the optimistic message with the real one
+          setMessageStatuses((prev) => ({ ...prev, [data[0].id]: "sent" }));
           setMessages((prev) =>
-            prev.map((msg) => (msg.id === tempId ? data[0] : msg))
+            prev.map((msg) =>
+              msg.id === tempId ? { ...data[0], status: "sent" } : msg
+            )
           );
         }
       } catch (error) {
         console.error("Error sending message:", error);
+        setMessageStatuses((prev) => ({ ...prev, [tempId]: "error" }));
         toast.error("Failed to send message. Click retry to try again.");
         pendingMessages.current.set(tempId, optimisticMessage);
       }
@@ -808,11 +887,12 @@ function ChatPage() {
                       </div>
                     ) : (
                       <MessageList
-                        messages={messages}
+                        messages={messagesList}
                         messageQueue={messageQueue.current}
                         pendingMessages={pendingMessages.current}
                         unreadMessages={unreadMessages}
                         onRetry={retryMessage}
+                        onMarkAsRead={markMessageAsRead}
                       />
                     )}
                     <div ref={messagesEndRef} />
@@ -852,6 +932,11 @@ function ChatPage() {
                 </div>
               )}
             </div>
+            {isTyping && (
+              <div className="text-sm text-white/50 italic">
+                Someone is typing...
+              </div>
+            )}
           </div>
         </div>
       </main>
