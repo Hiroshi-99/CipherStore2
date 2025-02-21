@@ -49,8 +49,7 @@ CREATE TABLE messages (
     user_name VARCHAR(255),
     discord_message_id VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    order_user_id UUID,
-    deleted_at TIMESTAMP WITH TIME ZONE
+    order_user_id UUID
 );
 
 -- Inbox messages table
@@ -90,7 +89,6 @@ CREATE INDEX idx_discord_channels_order_id ON discord_channels(order_id);
 -- Messages indexes
 CREATE INDEX idx_messages_order_id ON messages(order_id);
 CREATE INDEX idx_messages_created_at ON messages(created_at);
-CREATE INDEX idx_messages_deleted_at ON messages(deleted_at);
 
 -- Inbox messages indexes
 CREATE INDEX idx_inbox_messages_user_id ON inbox_messages(user_id);
