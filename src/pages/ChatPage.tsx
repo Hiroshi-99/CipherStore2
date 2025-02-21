@@ -12,10 +12,7 @@ import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { Toaster } from "sonner";
-import { FixedSizeList as List } from "react-window";
-import { useQuery, useMutation, useQueryClient } from "react-query";
-import toast from "react-hot-toast";
+import { Toaster, toast } from "sonner";
 
 interface Message {
   id: string;
@@ -31,7 +28,7 @@ interface Message {
 interface Order {
   id: string;
   full_name: string;
-  messages: Message[];
+  messages?: { id: string; created_at: string }[];
 }
 
 interface ChatProps {
@@ -73,7 +70,7 @@ const MessageBubble = React.memo(function MessageBubble({
       <div
         className={`max-w-[70%] ${
           message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-        } rounded-lg p-3`}
+        } rounded-lg p-3 relative group`}
       >
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-medium text-white/90">
@@ -86,6 +83,22 @@ const MessageBubble = React.memo(function MessageBubble({
         <p className="text-white/90 whitespace-pre-wrap break-words">
           {message.content}
         </p>
+        {isPending && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry();
+            }}
+            className="absolute -bottom-6 left-0 text-xs text-red-400 hover:text-red-300 transition-colors bg-black/50 px-2 py-1 rounded"
+          >
+            Retry
+          </button>
+        )}
+        {sending && (
+          <div className="absolute right-2 bottom-2">
+            <LoadingSpinner size="sm" light />
+          </div>
+        )}
       </div>
       {!message.is_admin && (
         <img
@@ -94,14 +107,6 @@ const MessageBubble = React.memo(function MessageBubble({
           className="w-8 h-8 rounded-full"
           loading="lazy"
         />
-      )}
-      {isPending && (
-        <button
-          onClick={onRetry}
-          className="text-xs text-red-400 hover:text-red-300 transition-colors"
-        >
-          Retry
-        </button>
       )}
     </div>
   );
@@ -118,8 +123,6 @@ const OrderButton = React.memo(function OrderButton({
   isAdmin: boolean;
   onClick: () => void;
 }) {
-  const messageCount = order.messages?.length || 0;
-
   return (
     <button
       onClick={onClick}
@@ -131,56 +134,12 @@ const OrderButton = React.memo(function OrderButton({
     >
       <div className="font-medium">{order.full_name}</div>
       <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {isAdmin && messageCount > 0 && (
+      {isAdmin && order.messages?.length > 0 && (
         <div className="text-xs text-emerald-400 mt-1">
-          {messageCount} messages
+          {order.messages.length} messages
         </div>
       )}
     </button>
-  );
-});
-
-// Add a virtualized message list component for better performance
-const VirtualizedMessageList = React.memo(function VirtualizedMessageList({
-  messages,
-  messageQueue,
-  unreadMessages,
-  pendingMessages,
-  onRetry,
-}: {
-  messages: Message[];
-  messageQueue: Set<string>;
-  unreadMessages: Set<string>;
-  pendingMessages: Map<string, Message>;
-  onRetry: (id: string) => void;
-}) {
-  const Row = ({
-    index,
-    style,
-  }: {
-    index: number;
-    style: React.CSSProperties;
-  }) => {
-    const message = messages[index];
-    return (
-      <div style={style}>
-        <MessageBubble
-          key={message.id}
-          message={message}
-          isLatest={index === messages.length - 1}
-          sending={messageQueue.has(message.id)}
-          isUnread={unreadMessages.has(message.id)}
-          onRetry={() => onRetry(message.id)}
-          isPending={pendingMessages.has(message.id)}
-        />
-      </div>
-    );
-  };
-
-  return (
-    <List height={600} itemCount={messages.length} itemSize={100} width="100%">
-      {Row}
-    </List>
   );
 });
 
@@ -210,9 +169,10 @@ function ChatPage() {
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
 
-  // Add message batching for better performance
-  const batchedMessages = useRef<Message[]>([]);
-  const batchTimeout = useRef<NodeJS.Timeout>();
+  // Add virtual scrolling state
+  const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -253,15 +213,7 @@ function ChatPage() {
     []
   );
 
-  // Add message batching for better performance
-  const flushMessageBatch = useCallback(() => {
-    if (batchedMessages.current.length > 0) {
-      setMessages((prev) => [...prev, ...batchedMessages.current]);
-      batchedMessages.current = [];
-    }
-  }, []);
-
-  // Improved message subscription with batching
+  // Optimized message subscription with better real-time handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -286,145 +238,180 @@ function ChatPage() {
             return;
           }
 
-          // Add to batch
-          batchedMessages.current.push(newMessage);
+          setMessages((prev) => {
+            if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
-          // Clear existing timeout
-          if (batchTimeout.current) {
-            clearTimeout(batchTimeout.current);
-          }
+            const isFromOther = newMessage.user_id !== user?.id;
+            if (isFromOther) {
+              // Play notification sound
+              const audio = new Audio("/notification.mp3");
+              audio.volume = 0.5;
+              audio.play().catch(() => {});
 
-          // Set new timeout to flush batch
-          batchTimeout.current = setTimeout(flushMessageBatch, 100);
+              // Show toast notification
+              toast.message("New message", {
+                description: `${
+                  newMessage.user_name
+                }: ${newMessage.content.slice(0, 60)}${
+                  newMessage.content.length > 60 ? "..." : ""
+                }`,
+              });
 
-          if (newMessage.user_id !== user?.id) {
-            handleNewMessageNotification(newMessage);
-          }
+              if (!isTabFocused) {
+                setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
+              }
+            }
+
+            return [...prev, newMessage];
+          });
+
+          requestAnimationFrame(scrollToBottom);
         }
       )
       .subscribe();
 
     return () => {
       isSubscribed = false;
-      if (batchTimeout.current) {
-        clearTimeout(batchTimeout.current);
-      }
-      flushMessageBatch();
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, flushMessageBatch]);
+  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
 
-  // Extracted notification logic
-  const handleNewMessageNotification = useCallback(
-    (message: Message) => {
-      if (!isTabFocused) {
-        const audio = new Audio("/notification.mp3");
-        audio.volume = 0.5;
-        audio.play().catch(() => {});
+  // Add virtual scrolling
+  useEffect(() => {
+    if (!messageListRef.current) return;
 
-        setNotification(
-          `${message.user_name}: ${message.content.slice(0, 60)}${
-            message.content.length > 60 ? "..." : ""
-          }`
-        );
-        setTimeout(() => setNotification(null), 4000);
-
-        setUnreadMessages((prev) => new Set(prev).add(message.id));
-      }
-    },
-    [isTabFocused]
-  );
-
-  const queryClient = useQueryClient();
-
-  const {
-    data: messagesData,
-    isLoading,
-    error: queryError,
-  } = useQuery(
-    ["messages", selectedOrderId],
-    () => fetchMessages(selectedOrderId),
-    {
-      enabled: !!selectedOrderId,
-      staleTime: 5 * 60 * 1000, // 5 minutes
-    }
-  );
-
-  const sendMessageMutation = useMutation(
-    (message: Message) => sendMessage(message),
-    {
-      onSuccess: () => {
-        queryClient.invalidateQueries(["messages", selectedOrderId]);
-      },
-    }
-  );
-
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user || !newMessage.trim() || sending || !selectedOrderId) {
-      toast.error("Cannot send message at this time");
-      return;
-    }
-
-    const messageContent = newMessage.trim();
-    setNewMessage("");
-    setSending(true);
-
-    const optimisticMessage: Message = {
-      id: crypto.randomUUID(),
-      content: messageContent,
-      user_id: user.id,
-      user_name: user.user_metadata.full_name || user.email,
-      user_avatar: user.user_metadata.avatar_url,
-      is_admin: isAdmin,
-      created_at: new Date().toISOString(),
-      order_id: selectedOrderId,
+    const options = {
+      root: messageListRef.current,
+      rootMargin: "20px",
+      threshold: 0.1,
     };
 
-    try {
-      sendMessageMutation.mutate(optimisticMessage);
-      toast.success("Message sent successfully");
-    } catch (error) {
-      console.error("Error sending message:", error);
-      toast.error("Failed to send message. Please try again.");
-    } finally {
-      setSending(false);
-    }
-  };
+    observerRef.current = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const messageId = entry.target.getAttribute("data-message-id");
+          if (messageId) {
+            setVisibleMessages((prev) =>
+              [...prev, messages.find((m) => m.id === messageId)!].filter(
+                Boolean
+              )
+            );
+          }
+        }
+      });
+    }, options);
 
-  const fetchMessages = async (orderId: string, page = 1, pageSize = 50) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: true })
-        .range((page - 1) * pageSize, page * pageSize - 1);
+    messages.forEach((message) => {
+      const element = document.querySelector(
+        `[data-message-id="${message.id}"]`
+      );
+      if (element) {
+        observerRef.current?.observe(element);
+      }
+    });
 
-      if (error) throw error;
-      setMessages((prev) => [...prev, ...data]);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      toast.error("Failed to load messages. Please try again.");
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  };
+    return () => {
+      observerRef.current?.disconnect();
+    };
+  }, [messages]);
 
-  useEffect(() => {
-    if (selectedOrderId) {
-      fetchMessages(selectedOrderId);
-    }
-  }, [selectedOrderId]);
+  // Optimized message sending with better error handling
+  const handleSendMessage = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
 
-  // Add a "Load More" button to fetch the next page of messages
-  const loadMoreMessages = () => {
-    if (selectedOrderId) {
-      fetchMessages(selectedOrderId, Math.floor(messages.length / 50) + 1);
-    }
-  };
+      const messageContent = newMessage.trim();
+      setNewMessage("");
+      setSending(true);
+
+      const tempId = crypto.randomUUID();
+      const optimisticMessage: Message = {
+        id: tempId,
+        content: messageContent,
+        user_id: user.id,
+        user_name: user.user_metadata.full_name || user.email,
+        user_avatar: user.user_metadata.avatar_url,
+        is_admin: isAdmin,
+        created_at: new Date().toISOString(),
+        order_id: selectedOrderId,
+      };
+
+      // Add to pending queue
+      messageQueue.current.add(tempId);
+      pendingMessages.current.set(tempId, optimisticMessage);
+
+      // Optimistic update
+      setMessages((prev) => [...prev, optimisticMessage]);
+      requestAnimationFrame(scrollToBottom);
+
+      try {
+        // Get order details first
+        const { data: orderData } = await supabase
+          .from("orders")
+          .select("user_id")
+          .eq("id", selectedOrderId)
+          .single();
+
+        if (!orderData) throw new Error("Order not found");
+
+        // Send message
+        const { data: messageData, error: messageError } = await supabase
+          .from("messages")
+          .insert([
+            {
+              content: messageContent,
+              user_id: user.id,
+              is_admin: user.id !== orderData.user_id,
+              user_name: user.user_metadata.full_name || user.email,
+              user_avatar: user.user_metadata.avatar_url,
+              order_id: selectedOrderId,
+              order_user_id: orderData.user_id,
+            },
+          ])
+          .select()
+          .single();
+
+        if (messageError) throw messageError;
+
+        // Update message with real ID
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, id: messageData.id } : msg
+          )
+        );
+      } catch (error) {
+        console.error("Error sending message:", error);
+        // Remove optimistic message on error
+        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+        setError("Failed to send message");
+        setNewMessage(messageContent);
+      } finally {
+        messageQueue.current.delete(tempId);
+        pendingMessages.current.delete(tempId);
+        setSending(false);
+      }
+    },
+    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
+  );
+
+  // Add message retry functionality
+  const retryMessage = useCallback(
+    async (tempId: string) => {
+      const message = pendingMessages.current.get(tempId);
+      if (!message) return;
+
+      // Remove failed message
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+
+      // Retry sending
+      const content = message.content;
+      pendingMessages.current.delete(tempId);
+      setNewMessage(content);
+      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
+    },
+    [handleSendMessage]
+  );
 
   useEffect(() => {
     setPageTitle("Chat");
@@ -462,13 +449,6 @@ function ChatPage() {
       setUnreadMessages(new Set());
     }
   }, [isTabFocused]);
-
-  useEffect(() => {
-    if (error) {
-      const timer = setTimeout(() => setError(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [error]);
 
   const checkUser = async () => {
     try {
@@ -556,6 +536,41 @@ function ChatPage() {
     }
   };
 
+  const fetchMessages = async (orderId: string) => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("messages")
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      setMessages(
+        data?.map((msg) => ({
+          ...msg,
+          is_admin: msg.user_id !== msg.orders.user_id,
+          orders: undefined,
+        })) || []
+      );
+      setTimeout(scrollToBottom, 100);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+      setError("Failed to load messages");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (initialLoading) {
     return (
       <PageContainer title="CHAT" user={null}>
@@ -571,11 +586,6 @@ function ChatPage() {
       {notification && (
         <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
           {notification}
-        </div>
-      )}
-      {error && (
-        <div className="fixed top-4 right-4 z-50 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
-          {error}
         </div>
       )}
       <main className="max-w-6xl mx-auto px-4 py-8">
@@ -644,19 +654,39 @@ function ChatPage() {
             <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
               {selectedOrderId ? (
                 <>
-                  {loading ? (
-                    <div className="flex items-center justify-center h-[600px]">
-                      <LoadingSpinner size="lg" light />
-                    </div>
-                  ) : (
-                    <VirtualizedMessageList
-                      messages={messages}
-                      messageQueue={messageQueue.current}
-                      unreadMessages={unreadMessages}
-                      pendingMessages={pendingMessages.current}
-                      onRetry={retryMessage}
-                    />
-                  )}
+                  {/* Messages Container */}
+                  <div
+                    ref={messageListRef}
+                    className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
+                  >
+                    {loading ? (
+                      <div className="flex items-center justify-center h-full">
+                        <LoadingSpinner size="lg" light />
+                      </div>
+                    ) : messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+                        <p>No messages yet.</p>
+                        <p className="text-sm">Start the conversation!</p>
+                      </div>
+                    ) : (
+                      messages.map((message) => (
+                        <div key={message.id} data-message-id={message.id}>
+                          <MessageBubble
+                            message={message}
+                            isLatest={
+                              message.id === messages[messages.length - 1].id
+                            }
+                            sending={messageQueue.current.has(message.id)}
+                            isUnread={unreadMessages.has(message.id)}
+                            onRetry={() => retryMessage(message.id)}
+                            isPending={pendingMessages.current.has(message.id)}
+                          />
+                        </div>
+                      ))
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
+
                   {/* Message Input */}
                   <form
                     onSubmit={handleSendMessage}
@@ -685,7 +715,7 @@ function ChatPage() {
                   </form>
                 </>
               ) : (
-                <div className="h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
                   <p>Select an order to start chatting</p>
                   <p className="text-sm">Your conversations will appear here</p>
                 </div>
@@ -699,7 +729,7 @@ function ChatPage() {
 }
 
 // Debounce utility
-function debounce<T extends (...args: unknown[]) => void>(
+function debounce<T extends (...args: any[]) => any>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {
