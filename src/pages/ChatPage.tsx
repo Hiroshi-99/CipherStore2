@@ -349,21 +349,11 @@ function ChatPage() {
               user_id: data.user_id,
             };
 
-            // Check for duplicates
-            const isDuplicate =
+            // Check for duplicates using messageId only
+            if (
               processedMessages.current.has(newMessage.id) ||
-              messageQueue.current.has(newMessage.id) ||
-              messages.some(
-                (msg) =>
-                  msg.id === newMessage.id ||
-                  (msg.content === newMessage.content &&
-                    Math.abs(
-                      new Date(msg.created_at).getTime() -
-                        new Date(newMessage.created_at).getTime()
-                    ) < 1000)
-              );
-
-            if (isDuplicate) {
+              messageQueue.current.has(newMessage.id)
+            ) {
               messageQueue.current.delete(newMessage.id);
               pendingMessages.current.delete(newMessage.id);
               return;
@@ -372,6 +362,9 @@ function ChatPage() {
             processedMessages.current.add(newMessage.id);
 
             setMessages((prev) => {
+              // Only check for exact ID matches
+              if (prev.some((msg) => msg.id === newMessage.id)) return prev;
+
               const isFromOther = newMessage.user_id !== user?.id;
               if (isFromOther && !isTabFocused) {
                 setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
@@ -396,7 +389,7 @@ function ChatPage() {
       supabase.removeChannel(channel);
       processedMessages.current.clear();
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused, messages]);
+  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
 
   // Add virtual scrolling
   useEffect(() => {
@@ -479,7 +472,7 @@ function ChatPage() {
     [selectedOrderId, user]
   );
 
-  // Update handleSendMessage to use MESSAGE_QUEUE
+  // Update handleSendMessage to avoid duplicate checks
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -520,7 +513,7 @@ function ChatPage() {
             user_avatar: user.user_metadata.avatar_url,
             user_id: user.id,
             is_admin: isAdmin,
-            created_at: timestamp, // Use the same timestamp
+            created_at: timestamp,
           },
         ]);
 
