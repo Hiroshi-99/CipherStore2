@@ -158,6 +158,7 @@ function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userOrders, setUserOrders] = useState<Order[]>([]);
+  const [adminOrders, setAdminOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
@@ -183,7 +184,8 @@ function ChatPage() {
 
   // Memoize orders list
   const ordersList = useMemo(() => {
-    return (isAdmin ? adminOrders : userOrders).map((order) => (
+    const orders = isAdmin ? adminOrders : userOrders;
+    return orders.map((order) => (
       <OrderButton
         key={order.id}
         order={order}
@@ -213,10 +215,9 @@ function ChatPage() {
   }, [messages, unreadMessages]);
 
   // Debounced message input handler
-  const debouncedSetNewMessage = useMemo(
-    () => debounce((value: string) => setNewMessage(value), 100),
-    []
-  );
+  const debouncedSetNewMessage = useCallback((value: string) => {
+    setNewMessage(value);
+  }, []);
 
   // Initialize audio on mount
   useEffect(() => {
@@ -505,26 +506,43 @@ function ChatPage() {
     }
   };
 
-  const fetchUserOrders = async (userId: string) => {
+  const fetchUserOrders = useCallback(async (userId: string) => {
     try {
       const { data: ordersData, error } = await supabase
         .from("orders")
-        .select("id, full_name")
+        .select(
+          `
+          id,
+          full_name,
+          messages (
+            id,
+            created_at
+          )
+        `
+        )
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setUserOrders(ordersData || []);
-      if (ordersData?.length > 0) {
-        setSelectedOrderId(ordersData[0].id);
+
+      // Transform the data to match Order type
+      const transformedOrders: Order[] = (ordersData || []).map((order) => ({
+        id: order.id,
+        full_name: order.full_name,
+        messages: order.messages || [],
+      }));
+
+      setUserOrders(transformedOrders);
+      if (transformedOrders.length > 0) {
+        setSelectedOrderId(transformedOrders[0].id);
       }
     } catch (error) {
       console.error("Error fetching user orders:", error);
-      setError("Failed to load orders");
+      toast.error("Failed to load orders");
     }
-  };
+  }, []);
 
-  const fetchAdminOrders = async () => {
+  const fetchAdminOrders = useCallback(async () => {
     try {
       const { data: ordersData, error } = await supabase
         .from("orders")
@@ -541,15 +559,23 @@ function ChatPage() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setAdminOrders(ordersData || []);
-      if (ordersData?.length > 0) {
-        setSelectedOrderId(ordersData[0].id);
+
+      // Transform the data to match Order type
+      const transformedOrders: Order[] = (ordersData || []).map((order) => ({
+        id: order.id,
+        full_name: order.full_name,
+        messages: order.messages || [],
+      }));
+
+      setAdminOrders(transformedOrders);
+      if (transformedOrders.length > 0) {
+        setSelectedOrderId(transformedOrders[0].id);
       }
     } catch (error) {
       console.error("Error fetching admin orders:", error);
-      setError("Failed to load orders");
+      toast.error("Failed to load orders");
     }
-  };
+  }, []);
 
   // Define fetchMessages before using it
   const fetchMessages = useCallback<FetchMessagesFunction>(async (orderId) => {
@@ -728,18 +754,6 @@ function ChatPage() {
       </main>
     </PageContainer>
   );
-}
-
-// Debounce utility with proper types
-function debounce<T extends (...args: unknown[]) => void>(
-  func: T,
-  wait: number
-): (...args: Parameters<T>) => void {
-  let timeout: NodeJS.Timeout;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  };
 }
 
 export default React.memo(ChatPage);
