@@ -11,6 +11,13 @@ import {
   Search,
   Send,
   MessageCircle,
+  Download,
+  Filter,
+  SortAsc,
+  SortDesc,
+  Calendar,
+  Clock,
+  User,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
@@ -18,6 +25,7 @@ import { getAuthHeaders } from "../lib/auth";
 import { setPageTitle } from "../utils/title";
 import { toast } from "sonner";
 import LoadingSpinner from "../components/LoadingSpinner";
+import PageContainer from "../components/PageContainer";
 
 interface Order {
   id: string;
@@ -40,6 +48,12 @@ interface Admin {
   created_at: string;
 }
 
+// Add date range type
+type DateRange = {
+  start: Date | null;
+  end: Date | null;
+};
+
 function AdminPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,6 +71,19 @@ function AdminPage() {
   >("all");
   const [sortBy, setSortBy] = useState<"date" | "status" | "name">("date");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [dateRange, setDateRange] = useState<DateRange>({
+    start: null,
+    end: null,
+  });
+  const [showFilters, setShowFilters] = useState(false);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [stats, setStats] = useState({
+    total: 0,
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+  });
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -186,18 +213,41 @@ function AdminPage() {
     [fetchOrders]
   );
 
+  // Add stats calculation
+  const calculateStats = useCallback((orders: Order[]) => {
+    return orders.reduce(
+      (acc, order) => ({
+        total: acc.total + 1,
+        pending: acc.pending + (order.status === "pending" ? 1 : 0),
+        approved: acc.approved + (order.status === "active" ? 1 : 0),
+        rejected: acc.rejected + (order.status === "rejected" ? 1 : 0),
+      }),
+      {
+        total: 0,
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+      }
+    );
+  }, []);
+
+  // Update filtered orders with date range and status filters
   const filteredOrders = useMemo(() => {
     return orders
       .filter((order) => {
         const matchesSearch =
           order.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
           order.email.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesFilter =
-          filter === "all" ||
-          (filter === "pending" && order.status === "pending") ||
-          (filter === "approved" && order.status === "active") ||
-          (filter === "rejected" && order.status === "rejected");
-        return matchesSearch && matchesFilter;
+
+        const matchesDateRange =
+          (!dateRange.start || new Date(order.created_at) >= dateRange.start) &&
+          (!dateRange.end || new Date(order.created_at) <= dateRange.end);
+
+        const matchesStatus =
+          selectedStatuses.length === 0 ||
+          selectedStatuses.includes(order.status);
+
+        return matchesSearch && matchesDateRange && matchesStatus;
       })
       .sort((a, b) => {
         switch (sortBy) {
@@ -219,7 +269,58 @@ function AdminPage() {
             return 0;
         }
       });
-  }, [orders, searchTerm, filter, sortBy, sortOrder]);
+  }, [orders, searchTerm, dateRange, selectedStatuses, sortBy, sortOrder]);
+
+  // Add export function
+  const handleExport = useCallback(() => {
+    const csv = [
+      [
+        "Order ID",
+        "Name",
+        "Email",
+        "Status",
+        "Date",
+        "Has Account File",
+        "Messages",
+      ],
+      ...filteredOrders.map((order) => [
+        order.id,
+        order.full_name,
+        order.email,
+        order.status,
+        new Date(order.created_at).toLocaleString(),
+        order.account_file_url ? "Yes" : "No",
+        order.messages?.length || 0,
+      ]),
+    ]
+      .map((row) => row.join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `orders-${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  }, [filteredOrders]);
+
+  // Add stats display component
+  const StatsDisplay = () => (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {Object.entries(stats).map(([key, value]) => (
+        <div key={key} className="bg-white/5 p-4 rounded-lg">
+          <h3 className="text-white/70 capitalize">{key}</h3>
+          <p className="text-2xl font-bold text-white">{value}</p>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Update useEffect to calculate stats
+  useEffect(() => {
+    setStats(calculateStats(orders));
+  }, [orders, calculateStats]);
 
   if (loading) {
     return (
@@ -230,140 +331,156 @@ function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen relative">
-      {/* Background Image */}
-      <div
-        className="absolute inset-0 z-0"
-        style={{
-          backgroundImage: 'url("https://i.imgur.com/crS3FrR.jpeg")',
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          filter: "brightness(0.7)",
-        }}
-      />
+    <PageContainer title="ADMIN" user={null}>
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        {/* Stats Display */}
+        <StatsDisplay />
 
-      {/* Content */}
-      <div className="relative z-10 min-h-screen">
-        <Header title="ADMIN" showBack user={null} />
-
-        <main className="max-w-6xl mx-auto px-4 py-8">
-          {error && (
-            <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-2 rounded-lg mb-6">
-              {error}
-            </div>
-          )}
-
-          <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
-            {/* Controls */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 w-5 h-5" />
-                  <input
-                    type="text"
-                    placeholder="Search orders..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                  />
-                </div>
-
-                <select
-                  value={filter}
-                  onChange={(e) =>
-                    setFilter(
-                      e.target.value as
-                        | "all"
-                        | "pending"
-                        | "approved"
-                        | "rejected"
-                    )
-                  }
-                  className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:border-white/40"
-                >
-                  <option value="all">All Orders</option>
-                  <option value="pending">Pending</option>
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-
-                <select
-                  value={sortBy}
-                  onChange={(e) =>
-                    setSortBy(e.target.value as "date" | "status" | "name")
-                  }
-                  className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:border-white/40"
-                >
-                  <option value="date">Sort by Date</option>
-                  <option value="status">Sort by Status</option>
-                  <option value="name">Sort by Name</option>
-                </select>
-
-                <button
-                  onClick={() =>
-                    setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))
-                  }
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                  title={`Sort ${
-                    sortOrder === "asc" ? "Descending" : "Ascending"
-                  }`}
-                >
-                  {sortOrder === "asc" ? "↑" : "↓"}
-                </button>
+        <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
+          {/* Controls */}
+          <div className="flex flex-wrap items-center gap-4 mb-6">
+            <div className="flex-1 flex flex-wrap items-center gap-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 w-5 h-5" />
+                <input
+                  type="text"
+                  placeholder="Search orders..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
               </div>
 
               <button
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white flex items-center gap-2 transition-colors disabled:opacity-50"
+                onClick={() => setShowFilters(!showFilters)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Toggle filters"
               >
-                <RefreshCw
-                  className={`w-5 h-5 ${refreshing ? "animate-spin" : ""}`}
-                />
-                Refresh
+                <Filter className="w-5 h-5 text-white" />
+              </button>
+
+              <button
+                onClick={handleExport}
+                className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg flex items-center gap-2"
+                title="Export to CSV"
+              >
+                <Download className="w-4 h-4" />
+                Export
               </button>
             </div>
 
-            {/* Orders List */}
-            <div className="space-y-6">
-              {loading ? (
-                <div className="text-center py-12">
-                  <LoadingSpinner size="lg" light />
-                </div>
-              ) : filteredOrders.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-white/70 text-lg">No orders found</p>
-                  <p className="text-white/50 text-sm mt-2">
-                    {searchTerm || filter !== "all"
-                      ? "Try adjusting your search or filter"
-                      : "New orders will appear here"}
-                  </p>
-                </div>
-              ) : (
-                filteredOrders.map((order) => (
-                  <OrderCard
-                    key={order.id}
-                    order={order}
-                    onImageView={setSelectedImage}
-                    onPaymentAction={handlePaymentAction}
-                    onFileUpload={handleFileUploadSuccess}
-                    actionInProgress={actionInProgress}
-                  />
-                ))
-              )}
+            {/* View mode toggle */}
+            <div className="flex items-center gap-2 bg-white/5 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode("list")}
+                className={`p-2 rounded ${
+                  viewMode === "list" ? "bg-white/10" : ""
+                }`}
+              >
+                List
+              </button>
+              <button
+                onClick={() => setViewMode("grid")}
+                className={`p-2 rounded ${
+                  viewMode === "grid" ? "bg-white/10" : ""
+                }`}
+              >
+                Grid
+              </button>
             </div>
           </div>
-        </main>
-      </div>
 
-      {/* Image Preview Modal */}
-      {selectedImage && (
-        <ImageModal
-          imageUrl={selectedImage}
-          onClose={() => setSelectedImage(null)}
-        />
-      )}
-    </div>
+          {/* Filters panel */}
+          {showFilters && (
+            <div className="mb-6 p-4 bg-white/5 rounded-lg">
+              <h3 className="text-white mb-4">Filters</h3>
+              <div className="flex flex-wrap gap-4">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-white/70" />
+                  <input
+                    type="date"
+                    onChange={(e) =>
+                      setDateRange((prev) => ({
+                        ...prev,
+                        start: e.target.value ? new Date(e.target.value) : null,
+                      }))
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  />
+                  <span className="text-white/70">to</span>
+                  <input
+                    type="date"
+                    onChange={(e) =>
+                      setDateRange((prev) => ({
+                        ...prev,
+                        end: e.target.value ? new Date(e.target.value) : null,
+                      }))
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-white/70" />
+                  <select
+                    multiple
+                    value={selectedStatuses}
+                    onChange={(e) =>
+                      setSelectedStatuses(
+                        Array.from(
+                          e.target.selectedOptions,
+                          (option) => option.value
+                        )
+                      )
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="active">Active</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Orders List/Grid */}
+          <div
+            className={
+              viewMode === "grid"
+                ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                : "space-y-6"
+            }
+          >
+            {loading ? (
+              <div className="text-center py-12">
+                <LoadingSpinner size="lg" light />
+              </div>
+            ) : filteredOrders.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-white/70 text-lg">No orders found</p>
+                <p className="text-white/50 text-sm mt-2">
+                  {searchTerm || filter !== "all"
+                    ? "Try adjusting your search or filter"
+                    : "New orders will appear here"}
+                </p>
+              </div>
+            ) : (
+              filteredOrders.map((order) => (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  onImageView={setSelectedImage}
+                  onPaymentAction={handlePaymentAction}
+                  onFileUpload={handleFileUploadSuccess}
+                  actionInProgress={actionInProgress}
+                />
+              ))
+            )}
+          </div>
+        </div>
+      </main>
+    </PageContainer>
   );
 }
 
