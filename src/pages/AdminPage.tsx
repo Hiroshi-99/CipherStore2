@@ -29,10 +29,9 @@ import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
 import { getAuthHeaders } from "../lib/auth";
 import { setPageTitle } from "../utils/title";
-import { toast } from "sonner";
+import { toast, Toaster } from "sonner";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageContainer from "../components/PageContainer";
-import { Toaster } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Order {
@@ -346,7 +345,7 @@ function AdminPage() {
     try {
       switch (action) {
         case "approve":
-        case "reject":
+        case "reject": {
           await Promise.all(
             Array.from(selectedOrders).map((orderId) =>
               handlePaymentAction(
@@ -359,21 +358,21 @@ function AdminPage() {
             `Successfully ${action}ed ${selectedOrders.size} orders`
           );
           break;
-
-        case "export":
+        }
+        case "export": {
           const selectedOrdersData = filteredOrders.filter((order) =>
             selectedOrders.has(order.id)
           );
-          handleExport(selectedOrdersData);
+          handleExport();
           break;
-
-        case "delete":
-          // Add delete confirmation
+        }
+        case "delete": {
           if (!window.confirm(`Delete ${selectedOrders.size} orders?`)) return;
           // Implement delete logic here
           break;
+        }
       }
-    } catch (error) {
+    } catch (err) {
       toast.error(`Failed to ${action} orders`);
     } finally {
       setIsBatchProcessing(false);
@@ -611,12 +610,6 @@ function AdminPage() {
         <ImageModal
           imageUrl={currentImageUrl}
           onClose={() => setShowImageModal(false)}
-          onNext={() => {
-            /* Implement image navigation */
-          }}
-          onPrev={() => {
-            /* Implement image navigation */
-          }}
         />
       )}
     </PageContainer>
