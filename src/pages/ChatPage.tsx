@@ -319,17 +319,12 @@ function ChatPage() {
         async (payload) => {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
-          try {
-            // Check if message is already in the queue or processed
-            if (
-              messageQueue.current.has(payload.new.id) ||
-              processedMessages.current.has(payload.new.id)
-            ) {
-              messageQueue.current.delete(payload.new.id);
-              pendingMessages.current.delete(payload.new.id);
-              return;
-            }
+          // Skip if this is our own optimistic update
+          if (messageQueue.current.has(payload.new.id)) {
+            return;
+          }
 
+          try {
             // Fetch the complete message with order data
             const { data, error } = await supabase
               .from("messages")
@@ -359,11 +354,8 @@ function ChatPage() {
               user_id: data.user_id,
             };
 
-            // Add to processed messages
-            processedMessages.current.add(newMessage.id);
-
             setMessages((prev) => {
-              // Check for duplicates in current messages
+              // Skip if message already exists
               if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
               const isFromOther = newMessage.user_id !== user?.id;
@@ -388,7 +380,6 @@ function ChatPage() {
     return () => {
       isSubscribed = false;
       supabase.removeChannel(channel);
-      processedMessages.current.clear();
     };
   }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
 
@@ -483,10 +474,7 @@ function ChatPage() {
       const tempId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
-      // Add to message queue first
-      messageQueue.current.add(tempId);
-
-      // Optimistic update
+      // Create optimistic message
       const optimisticMessage: Message = {
         id: tempId,
         content: messageContent,
@@ -498,6 +486,8 @@ function ChatPage() {
         user_id: user.id,
       };
 
+      // Add to message queue before sending
+      messageQueue.current.add(tempId);
       setMessages((prev) => [...prev, optimisticMessage]);
       setNewMessage("");
       scrollToBottom();
@@ -518,16 +508,12 @@ function ChatPage() {
         if (error) throw error;
 
         if (data?.[0]) {
-          // Add to processed messages
-          processedMessages.current.add(data[0].id);
-          // Update message with real ID
+          // Update the optimistic message with the real one
           setMessages((prev) =>
             prev.map((msg) => (msg.id === tempId ? data[0] : msg))
           );
+          messageQueue.current.delete(tempId);
         }
-
-        // Remove from message queue
-        messageQueue.current.delete(tempId);
       } catch (error) {
         console.error("Error sending message:", error);
         toast.error("Failed to send message. Click retry to try again.");
