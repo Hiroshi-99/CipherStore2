@@ -145,6 +145,9 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
+// Declare fetchMessages type before use
+type FetchMessagesFunction = (orderId: string) => Promise<void>;
+
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -154,12 +157,7 @@ function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [userOrders, setUserOrders] = useState<
-    { id: string; full_name: string }[]
-  >([]);
-  const [adminOrders, setAdminOrders] = useState<
-    { id: string; full_name: string }[]
-  >([]);
+  const [userOrders, setUserOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
@@ -199,18 +197,20 @@ function ChatPage() {
     ));
   }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
 
-  // Memoize messages list
+  // Memoize messages list with proper types
   const messagesList = useMemo(() => {
     return messages.map((message, index) => (
       <MessageBubble
         key={message.id}
         message={message}
         isLatest={index === messages.length - 1}
-        sending={sending}
+        sending={messageQueue.current.has(message.id)}
         isUnread={unreadMessages.has(message.id)}
+        onRetry={() => retryMessage(message.id)}
+        isPending={pendingMessages.current.has(message.id)}
       />
     ));
-  }, [messages, sending, unreadMessages]);
+  }, [messages, unreadMessages]);
 
   // Debounced message input handler
   const debouncedSetNewMessage = useMemo(
@@ -231,7 +231,7 @@ function ChatPage() {
     };
   }, []);
 
-  // Update message subscription with better sound handling
+  // Update message subscription
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -551,40 +551,27 @@ function ChatPage() {
     }
   };
 
-  const fetchMessages = async (orderId: string) => {
+  // Define fetchMessages before using it
+  const fetchMessages = useCallback<FetchMessagesFunction>(async (orderId) => {
+    if (!orderId) return;
+    setLoading(true);
     try {
-      setLoading(true);
-      const { data, error } = await supabase
+      const { data, error: messagesError } = await supabase
         .from("messages")
-        .select(
-          `
-          *,
-          orders!inner(
-            user_id,
-            full_name
-          )
-        `
-        )
+        .select("*")
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
-      if (error) throw error;
-
-      setMessages(
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined,
-        })) || []
-      );
-      setTimeout(scrollToBottom, 100);
+      if (messagesError) throw messagesError;
+      setMessages(data || []);
+      requestAnimationFrame(scrollToBottom);
     } catch (error) {
       console.error("Error fetching messages:", error);
-      setError("Failed to load messages");
+      toast.error("Failed to load messages");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   if (initialLoading) {
     return (
