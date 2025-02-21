@@ -13,7 +13,6 @@ import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster } from "sonner";
-import { useChat } from "../hooks/useChat";
 
 interface Message {
   id: string;
@@ -29,7 +28,7 @@ interface Message {
 interface Order {
   id: string;
   full_name: string;
-  messages?: { id: string; created_at: string }[];
+  messages?: Message[];
 }
 
 interface ChatProps {
@@ -136,9 +135,68 @@ const OrderButton = React.memo(function OrderButton({
   );
 });
 
+// Add a virtualized message list component for better performance
+const VirtualizedMessageList = React.memo(function VirtualizedMessageList({
+  messages,
+  messageQueue,
+  unreadMessages,
+  pendingMessages,
+  onRetry,
+}: {
+  messages: Message[];
+  messageQueue: Set<string>;
+  unreadMessages: Set<string>;
+  pendingMessages: Map<string, Message>;
+  onRetry: (id: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
+
+  const handleScroll = useCallback(() => {
+    if (!containerRef.current) return;
+    const { scrollTop, clientHeight, scrollHeight } = containerRef.current;
+    const buffer = clientHeight * 2;
+    const start = Math.max(0, Math.floor((scrollTop - buffer) / 50));
+    const end = Math.min(
+      messages.length,
+      Math.ceil((scrollTop + clientHeight + buffer) / 50)
+    );
+    setVisibleRange({ start, end });
+  }, [messages.length]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container) {
+      container.addEventListener("scroll", handleScroll);
+      return () => container.removeEventListener("scroll", handleScroll);
+    }
+  }, [handleScroll]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
+    >
+      {messages.slice(visibleRange.start, visibleRange.end).map((message) => (
+        <MessageBubble
+          key={message.id}
+          message={message}
+          isLatest={message.id === messages[messages.length - 1].id}
+          sending={messageQueue.has(message.id)}
+          isUnread={unreadMessages.has(message.id)}
+          onRetry={() => onRetry(message.id)}
+          isPending={pendingMessages.has(message.id)}
+        />
+      ))}
+    </div>
+  );
+});
+
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
+  const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -156,14 +214,13 @@ function ChatPage() {
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
 
-  const {
-    messages,
-    loading: messagesLoading,
-    error: chatError,
-    sendMessage,
-    messageQueue,
-    pendingMessages,
-  } = useChat(user, selectedOrderId);
+  // Add message queue for optimistic updates
+  const messageQueue = useRef<Set<string>>(new Set());
+  const pendingMessages = useRef<Map<string, Message>>(new Map());
+
+  // Add message batching for better performance
+  const batchedMessages = useRef<Message[]>([]);
+  const batchTimeout = useRef<NodeJS.Timeout>();
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -204,33 +261,172 @@ function ChatPage() {
     []
   );
 
-  // Optimized message sending handler
+  // Add message batching for better performance
+  const flushMessageBatch = useCallback(() => {
+    if (batchedMessages.current.length > 0) {
+      setMessages((prev) => [...prev, ...batchedMessages.current]);
+      batchedMessages.current = [];
+    }
+  }, []);
+
+  // Improved message subscription with batching
+  const subscribeToMessages = useCallback(() => {
+    if (!selectedOrderId) return undefined;
+
+    let isSubscribed = true;
+    const channel = supabase
+      .channel(`messages:${selectedOrderId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+          filter: `order_id=eq.${selectedOrderId}`,
+        },
+        async (payload) => {
+          if (!isSubscribed || payload.eventType !== "INSERT") return;
+
+          const newMessage = payload.new as Message;
+          if (!newMessage || messageQueue.current.has(newMessage.id)) {
+            messageQueue.current.delete(newMessage.id);
+            pendingMessages.current.delete(newMessage.id);
+            return;
+          }
+
+          // Add to batch
+          batchedMessages.current.push(newMessage);
+
+          // Clear existing timeout
+          if (batchTimeout.current) {
+            clearTimeout(batchTimeout.current);
+          }
+
+          // Set new timeout to flush batch
+          batchTimeout.current = setTimeout(flushMessageBatch, 100);
+
+          if (newMessage.user_id !== user?.id) {
+            handleNewMessageNotification(newMessage);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isSubscribed = false;
+      if (batchTimeout.current) {
+        clearTimeout(batchTimeout.current);
+      }
+      flushMessageBatch();
+      supabase.removeChannel(channel);
+    };
+  }, [selectedOrderId, user?.id, flushMessageBatch]);
+
+  // Extracted notification logic
+  const handleNewMessageNotification = useCallback(
+    (message: Message) => {
+      if (!isTabFocused) {
+        const audio = new Audio("/notification.mp3");
+        audio.volume = 0.5;
+        audio.play().catch(() => {});
+
+        setNotification(
+          `${message.user_name}: ${message.content.slice(0, 60)}${
+            message.content.length > 60 ? "..." : ""
+          }`
+        );
+        setTimeout(() => setNotification(null), 4000);
+
+        setUnreadMessages((prev) => new Set(prev).add(message.id));
+      }
+    },
+    [isTabFocused]
+  );
+
+  // Optimized message sending with better error handling
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!newMessage.trim() || sending) return;
+      if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
 
       const messageContent = newMessage.trim();
       setNewMessage("");
       setSending(true);
 
+      const tempId = crypto.randomUUID();
+      const optimisticMessage: Message = {
+        id: tempId,
+        content: messageContent,
+        user_id: user.id,
+        user_name: user.user_metadata.full_name || user.email,
+        user_avatar: user.user_metadata.avatar_url,
+        is_admin: isAdmin,
+        created_at: new Date().toISOString(),
+        order_id: selectedOrderId,
+      };
+
+      // Add to pending queue
+      messageQueue.current.add(tempId);
+      pendingMessages.current.set(tempId, optimisticMessage);
+
+      // Optimistic update
+      setMessages((prev) => [...prev, optimisticMessage]);
+      requestAnimationFrame(scrollToBottom);
+
       try {
-        await sendMessage(messageContent);
-        requestAnimationFrame(scrollToBottom);
+        // Get order details first
+        const { data: orderData } = await supabase
+          .from("orders")
+          .select("user_id")
+          .eq("id", selectedOrderId)
+          .single();
+
+        if (!orderData) throw new Error("Order not found");
+
+        // Send message
+        const { data: messageData, error: messageError } = await supabase
+          .from("messages")
+          .insert([
+            {
+              content: messageContent,
+              user_id: user.id,
+              is_admin: user.id !== orderData.user_id,
+              user_name: user.user_metadata.full_name || user.email,
+              user_avatar: user.user_metadata.avatar_url,
+              order_id: selectedOrderId,
+              order_user_id: orderData.user_id,
+            },
+          ])
+          .select()
+          .single();
+
+        if (messageError) throw messageError;
+
+        // Update message with real ID
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, id: messageData.id } : msg
+          )
+        );
       } catch (error) {
+        console.error("Error sending message:", error);
+        // Remove optimistic message on error
+        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
         setError("Failed to send message");
         setNewMessage(messageContent);
       } finally {
+        messageQueue.current.delete(tempId);
+        pendingMessages.current.delete(tempId);
         setSending(false);
       }
     },
-    [newMessage, sending, sendMessage, scrollToBottom]
+    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
   );
 
   // Add message retry functionality
   const retryMessage = useCallback(
     async (tempId: string) => {
-      const message = pendingMessages.get(tempId);
+      const message = pendingMessages.current.get(tempId);
       if (!message) return;
 
       // Remove failed message
@@ -238,6 +434,7 @@ function ChatPage() {
 
       // Retry sending
       const content = message.content;
+      pendingMessages.current.delete(tempId);
       setNewMessage(content);
       await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
     },
@@ -485,27 +682,19 @@ function ChatPage() {
             <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
               {selectedOrderId ? (
                 <>
-                  {/* Messages Container */}
-                  <div className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4">
-                    {messagesLoading ? (
+                  {loading ? (
+                    <div className="flex items-center justify-center h-[600px]">
                       <LoadingSpinner size="lg" light />
-                    ) : messages.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-                        <p>No messages yet.</p>
-                        <p className="text-sm">Start the conversation!</p>
-                      </div>
-                    ) : (
-                      <MessageList
-                        messages={messages}
-                        messageQueue={messageQueue}
-                        pendingMessages={pendingMessages}
-                        unreadMessages={unreadMessages}
-                        onRetry={retryMessage}
-                      />
-                    )}
-                    <div ref={messagesEndRef} />
-                  </div>
-
+                    </div>
+                  ) : (
+                    <VirtualizedMessageList
+                      messages={messages}
+                      messageQueue={messageQueue.current}
+                      unreadMessages={unreadMessages}
+                      pendingMessages={pendingMessages.current}
+                      onRetry={retryMessage}
+                    />
+                  )}
                   {/* Message Input */}
                   <form
                     onSubmit={handleSendMessage}
@@ -534,7 +723,7 @@ function ChatPage() {
                   </form>
                 </>
               ) : (
-                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                <div className="h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
                   <p>Select an order to start chatting</p>
                   <p className="text-sm">Your conversations will appear here</p>
                 </div>
