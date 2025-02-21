@@ -244,7 +244,7 @@ function ChatPage() {
             const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther) {
               // Play notification sound
-              const audio = new Audio("/notification.mp3");
+              const audio = new Audio("/sounds/gg.mp3");
               audio.volume = 0.5;
               audio.play().catch(() => {});
 
