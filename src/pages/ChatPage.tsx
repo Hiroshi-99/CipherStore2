@@ -436,18 +436,11 @@ function ChatPage() {
 
   useEffect(() => {
     if (selectedOrderId) {
-      // Fetch messages first
       fetchMessages(selectedOrderId);
-
-      // Then set up subscription
       const cleanup = subscribeToMessages();
-      return () => {
-        if (cleanup && typeof cleanup === "function") {
-          cleanup();
-        }
-      };
+      return cleanup;
     }
-  }, [selectedOrderId, subscribeToMessages]);
+  }, [selectedOrderId, fetchMessages, subscribeToMessages]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
