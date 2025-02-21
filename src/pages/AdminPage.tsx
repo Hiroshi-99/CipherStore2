@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import {
@@ -8,11 +8,14 @@ import {
   FileText,
   RefreshCw,
   Search,
+  Send,
+  MessageCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
 import { getAuthHeaders } from "../lib/auth";
 import { setPageTitle } from "../utils/title";
+import { toast } from "sonner";
 
 interface Order {
   id: string;
@@ -21,11 +24,12 @@ interface Order {
   status: string;
   created_at: string;
   account_file_url?: string;
-  payment_proofs: {
+  payment_proofs?: {
     id: string;
     image_url: string;
     status: string;
   }[];
+  messages?: { id: string }[];
 }
 
 interface Admin {
@@ -49,6 +53,8 @@ function AdminPage() {
   const [filter, setFilter] = useState<
     "all" | "pending" | "approved" | "rejected"
   >("all");
+  const [sortBy, setSortBy] = useState<"date" | "status" | "name">("date");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -57,12 +63,18 @@ function AdminPage() {
     checkAdminStatus();
   }, []);
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     try {
       setError(null);
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
-        .select("*, payment_proofs(id, image_url, status)")
+        .select(
+          `
+          *,
+          payment_proofs(id, image_url, status),
+          messages(id)
+        `
+        )
         .order("created_at", { ascending: false });
 
       if (ordersError) throw ordersError;
@@ -70,11 +82,12 @@ function AdminPage() {
     } catch (error) {
       console.error("Error fetching orders:", error);
       setError("Failed to load orders");
+      toast.error("Failed to load orders");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
 
   const checkAdminStatus = async () => {
     try {
@@ -97,68 +110,55 @@ function AdminPage() {
     await fetchOrders();
   };
 
-  const handlePaymentAction = async (
-    orderId: string,
-    status: "approved" | "rejected",
-    notes?: string
-  ) => {
-    if (actionInProgress) return;
+  const handlePaymentAction = useCallback(
+    async (orderId: string, status: "approved" | "rejected") => {
+      if (actionInProgress) return;
+      setActionInProgress(orderId);
 
-    setActionInProgress(orderId);
-    try {
-      const headers = await getAuthHeaders();
-      const response = await fetch(
-        "/.netlify/functions/discord-update-payment",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: headers.Authorization,
-          },
-          body: JSON.stringify({
-            orderId,
-            status,
-            notes: notes || `Payment ${status} by admin`,
-          }),
-        }
-      );
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          data.details || data.error || "Failed to update payment status"
-        );
-      }
-
-      // Update local state
-      setOrders((prevOrders) =>
-        prevOrders.map((order) =>
+      setOrders((prev) =>
+        prev.map((order) =>
           order.id === orderId
             ? {
                 ...order,
-                payment_proofs: order.payment_proofs.map((proof) => ({
+                status: status === "approved" ? "active" : "rejected",
+                payment_proofs: order.payment_proofs?.map((proof) => ({
                   ...proof,
                   status,
                 })),
-                status: status === "approved" ? "active" : "rejected",
               }
             : order
         )
       );
 
-      // Show success message
-      alert(`Payment ${status} successfully!`);
-    } catch (error) {
-      console.error("Error updating payment status:", error);
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Failed to update payment status"
-      );
-    } finally {
-      setActionInProgress(null);
-    }
-  };
+      try {
+        const response = await fetch(
+          "/.netlify/functions/discord-update-payment",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              orderId,
+              status,
+              notes: `Payment ${status} by admin`,
+            }),
+          }
+        );
+
+        if (!response.ok) throw new Error("Failed to update payment status");
+
+        toast.success(`Payment ${status} successfully`);
+      } catch (error) {
+        console.error("Error updating payment status:", error);
+        await fetchOrders();
+        toast.error("Failed to update payment status");
+      } finally {
+        setActionInProgress(null);
+      }
+    },
+    [actionInProgress, fetchOrders]
+  );
 
   const handleOrderSelect = (orderId: string) => {
     setSelectedOrderId(orderId);
@@ -166,65 +166,64 @@ function AdminPage() {
     setError(null);
   };
 
-  const handleFileUploadSuccess = async (fileUrl: string) => {
-    setUploadedFileUrl(fileUrl);
-    if (!selectedOrderId) return;
+  const handleFileUploadSuccess = useCallback(
+    async (orderId: string, fileUrl: string) => {
+      try {
+        const response = await fetch("/.netlify/functions/admin-upload-file", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ orderId, fileUrl }),
+        });
 
-    try {
-      const headers = await getAuthHeaders();
-      const response = await fetch("/.netlify/functions/admin-upload-file", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: headers.Authorization,
-        },
-        body: JSON.stringify({
-          orderId: selectedOrderId,
-          fileUrl: fileUrl,
-        }),
-      });
+        if (!response.ok) throw new Error("Failed to process file upload");
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to process file upload");
+        setUploadedFileUrl(fileUrl);
+        toast.success("File uploaded successfully");
+        await fetchOrders();
+      } catch (error) {
+        console.error("Error processing file upload:", error);
+        toast.error("Failed to process file upload");
       }
+    },
+    [fetchOrders]
+  );
 
-      // Update local state
-      setOrders((prevOrders) =>
-        prevOrders.map((order) =>
-          order.id === selectedOrderId
-            ? { ...order, account_file_url: fileUrl }
-            : order
-        )
-      );
-
-      alert("File uploaded and sent to user's inbox successfully!");
-      setSelectedOrderId(null);
-    } catch (error) {
-      console.error("Error updating order and sending to inbox:", error);
-      setError(
-        error instanceof Error ? error.message : "Failed to process file upload"
-      );
-    }
-  };
-
-  const filteredOrders = orders.filter((order) => {
-    const matchesSearch =
-      order.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.id.toLowerCase().includes(searchTerm.toLowerCase());
-
-    const matchesFilter =
-      filter === "all" ||
-      (filter === "pending" &&
-        order.payment_proofs?.[0]?.status === "pending") ||
-      (filter === "approved" &&
-        order.payment_proofs?.[0]?.status === "approved") ||
-      (filter === "rejected" &&
-        order.payment_proofs?.[0]?.status === "rejected");
-
-    return matchesSearch && matchesFilter;
-  });
+  const filteredOrders = useMemo(() => {
+    return orders
+      .filter((order) => {
+        const matchesSearch =
+          order.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          order.email.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesFilter =
+          filter === "all" ||
+          (filter === "pending" && order.status === "pending") ||
+          (filter === "approved" && order.status === "active") ||
+          (filter === "rejected" && order.status === "rejected");
+        return matchesSearch && matchesFilter;
+      })
+      .sort((a, b) => {
+        switch (sortBy) {
+          case "date":
+            return sortOrder === "desc"
+              ? new Date(b.created_at).getTime() -
+                  new Date(a.created_at).getTime()
+              : new Date(a.created_at).getTime() -
+                  new Date(b.created_at).getTime();
+          case "status":
+            return sortOrder === "desc"
+              ? b.status.localeCompare(a.status)
+              : a.status.localeCompare(b.status);
+          case "name":
+            return sortOrder === "desc"
+              ? b.full_name.localeCompare(a.full_name)
+              : a.full_name.localeCompare(b.full_name);
+          default:
+            return 0;
+        }
+      });
+  }, [orders, searchTerm, filter, sortBy, sortOrder]);
 
   if (loading) {
     return (
@@ -261,7 +260,7 @@ function AdminPage() {
           <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
             {/* Controls */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-4">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 w-5 h-5" />
                   <input
@@ -272,9 +271,18 @@ function AdminPage() {
                     className="pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                   />
                 </div>
+
                 <select
                   value={filter}
-                  onChange={(e) => setFilter(e.target.value as any)}
+                  onChange={(e) =>
+                    setFilter(
+                      e.target.value as
+                        | "all"
+                        | "pending"
+                        | "approved"
+                        | "rejected"
+                    )
+                  }
                   className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:border-white/40"
                 >
                   <option value="all">All Orders</option>
@@ -282,7 +290,32 @@ function AdminPage() {
                   <option value="approved">Approved</option>
                   <option value="rejected">Rejected</option>
                 </select>
+
+                <select
+                  value={sortBy}
+                  onChange={(e) =>
+                    setSortBy(e.target.value as "date" | "status" | "name")
+                  }
+                  className="px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:border-white/40"
+                >
+                  <option value="date">Sort by Date</option>
+                  <option value="status">Sort by Status</option>
+                  <option value="name">Sort by Name</option>
+                </select>
+
+                <button
+                  onClick={() =>
+                    setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))
+                  }
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                  title={`Sort ${
+                    sortOrder === "asc" ? "Descending" : "Ascending"
+                  }`}
+                >
+                  {sortOrder === "asc" ? "↑" : "↓"}
+                </button>
               </div>
+
               <button
                 onClick={handleRefresh}
                 disabled={refreshing}
@@ -297,7 +330,11 @@ function AdminPage() {
 
             {/* Orders List */}
             <div className="space-y-6">
-              {filteredOrders.length === 0 ? (
+              {loading ? (
+                <div className="text-center py-12">
+                  <LoadingSpinner size="lg" light />
+                </div>
+              ) : filteredOrders.length === 0 ? (
                 <div className="text-center py-12">
                   <p className="text-white/70 text-lg">No orders found</p>
                   <p className="text-white/50 text-sm mt-2">
@@ -308,117 +345,14 @@ function AdminPage() {
                 </div>
               ) : (
                 filteredOrders.map((order) => (
-                  <div
+                  <OrderCard
                     key={order.id}
-                    className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="text-lg font-semibold text-white">
-                          {order.full_name}
-                        </h3>
-                        <p className="text-white/70">{order.email}</p>
-                        <p className="text-sm text-white/50">
-                          {new Date(order.created_at).toLocaleString()}
-                        </p>
-                        <div className="mt-2 flex items-center gap-2">
-                          <span
-                            className={`px-2 py-1 rounded text-xs ${
-                              order.status === "active"
-                                ? "bg-emerald-400/20 text-emerald-400"
-                                : order.status === "rejected"
-                                ? "bg-red-400/20 text-red-400"
-                                : "bg-yellow-400/20 text-yellow-400"
-                            }`}
-                          >
-                            {order.status.toUpperCase()}
-                          </span>
-                          {order.account_file_url && (
-                            <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
-                              HAS ACCOUNT FILE
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        {order.payment_proofs?.map((proof) => (
-                          <div
-                            key={proof.id}
-                            className="flex items-center gap-2"
-                          >
-                            <button
-                              onClick={() => setSelectedImage(proof.image_url)}
-                              className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                              title="View payment proof"
-                            >
-                              <Eye className="text-white" size={20} />
-                            </button>
-                            {proof.status === "pending" && (
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() =>
-                                    handlePaymentAction(order.id, "approved")
-                                  }
-                                  disabled={!!actionInProgress}
-                                  className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-                                  title="Approve payment"
-                                >
-                                  <CheckCircle
-                                    className="text-emerald-400"
-                                    size={20}
-                                  />
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    handlePaymentAction(order.id, "rejected")
-                                  }
-                                  disabled={!!actionInProgress}
-                                  className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-                                  title="Reject payment"
-                                >
-                                  <XCircle className="text-red-400" size={20} />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {selectedOrderId === order.id ? (
-                      <div className="mt-4 border-t border-white/10 pt-4">
-                        <h3 className="text-lg font-medium text-white mb-4">
-                          Upload Account File
-                        </h3>
-                        <FileUpload
-                          orderId={selectedOrderId}
-                          onUploadSuccess={handleFileUploadSuccess}
-                        />
-                        {uploadedFileUrl && (
-                          <div className="mt-4 text-white">
-                            <p>File uploaded successfully:</p>
-                            <a
-                              href={uploadedFileUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-emerald-400 hover:underline flex items-center gap-2"
-                            >
-                              <FileText size={16} />
-                              View File
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => handleOrderSelect(order.id)}
-                        className="mt-4 text-emerald-400 hover:underline flex items-center gap-2"
-                      >
-                        <FileText size={16} />
-                        Upload Account File
-                      </button>
-                    )}
-                  </div>
+                    order={order}
+                    onImageView={setSelectedImage}
+                    onPaymentAction={handlePaymentAction}
+                    onFileUpload={handleFileUploadSuccess}
+                    actionInProgress={actionInProgress}
+                  />
                 ))
               )}
             </div>
@@ -428,42 +362,179 @@ function AdminPage() {
 
       {/* Image Preview Modal */}
       {selectedImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
-          onClick={() => setSelectedImage(null)}
-        >
-          <div
-            className="relative max-w-4xl w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img
-              src={selectedImage}
-              alt="Payment Proof"
-              className="w-full rounded-lg"
-            />
-            <button
-              className="absolute -top-4 -right-4 bg-white/10 hover:bg-white/20 rounded-full p-2 text-white transition-colors"
-              onClick={() => setSelectedImage(null)}
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </div>
-        </div>
+        <ImageModal
+          imageUrl={selectedImage}
+          onClose={() => setSelectedImage(null)}
+        />
       )}
     </div>
   );
 }
+
+const OrderCard = React.memo(function OrderCard({
+  order,
+  onImageView,
+  onPaymentAction,
+  onFileUpload,
+  actionInProgress,
+}: {
+  order: Order;
+  onImageView: (url: string) => void;
+  onPaymentAction: (orderId: string, status: "approved" | "rejected") => void;
+  onFileUpload: (orderId: string, fileUrl: string) => void;
+  actionInProgress: string | null;
+}) {
+  return (
+    <div className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex-1">
+          <h3 className="text-lg font-semibold text-white">
+            {order.full_name}
+          </h3>
+          <p className="text-white/70">{order.email}</p>
+          <p className="text-sm text-white/50">
+            {new Date(order.created_at).toLocaleString()}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <StatusBadge status={order.status} />
+            {order.account_file_url && (
+              <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
+                HAS ACCOUNT FILE
+              </span>
+            )}
+            {order.messages && (
+              <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
+                {order.messages.length} MESSAGES
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {order.payment_proofs?.map((proof) => (
+            <div key={proof.id} className="flex items-center gap-2">
+              <button
+                onClick={() => onImageView(proof.image_url)}
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                title="View payment proof"
+              >
+                <Eye className="text-white" size={20} />
+              </button>
+              {proof.status === "pending" && (
+                <div className="flex items-center gap-2">
+                  <ActionButton
+                    icon={
+                      <CheckCircle className="text-emerald-400" size={20} />
+                    }
+                    onClick={() => onPaymentAction(order.id, "approved")}
+                    disabled={!!actionInProgress}
+                    title="Approve payment"
+                  />
+                  <ActionButton
+                    icon={<XCircle className="text-red-400" size={20} />}
+                    onClick={() => onPaymentAction(order.id, "rejected")}
+                    disabled={!!actionInProgress}
+                    title="Reject payment"
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+
+          <Link
+            to={`/chat?order=${order.id}`}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            title="Open chat"
+          >
+            <MessageCircle className="text-white" size={20} />
+          </Link>
+        </div>
+      </div>
+
+      {order.status === "active" && !order.account_file_url && (
+        <div className="mt-4">
+          <FileUpload
+            orderId={order.id}
+            onUploadSuccess={(fileUrl) => onFileUpload(order.id, fileUrl)}
+          />
+        </div>
+      )}
+    </div>
+  );
+});
+
+const StatusBadge = React.memo(function StatusBadge({
+  status,
+}: {
+  status: string;
+}) {
+  const getStatusStyle = () => {
+    switch (status) {
+      case "active":
+        return "bg-emerald-400/20 text-emerald-400";
+      case "rejected":
+        return "bg-red-400/20 text-red-400";
+      default:
+        return "bg-yellow-400/20 text-yellow-400";
+    }
+  };
+
+  return (
+    <span className={`px-2 py-1 rounded text-xs ${getStatusStyle()}`}>
+      {status.toUpperCase()}
+    </span>
+  );
+});
+
+const ActionButton = React.memo(function ActionButton({
+  icon,
+  onClick,
+  disabled,
+  title,
+}: {
+  icon: React.ReactNode;
+  onClick: () => void;
+  disabled: boolean;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+      title={title}
+    >
+      {icon}
+    </button>
+  );
+});
+
+const ImageModal = React.memo(function ImageModal({
+  imageUrl,
+  onClose,
+}: {
+  imageUrl: string;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-w-4xl w-full mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img src={imageUrl} alt="Payment Proof" className="w-full rounded-lg" />
+        <button
+          className="absolute -top-4 -right-4 bg-white/10 hover:bg-white/20 rounded-full p-2 text-white transition-colors"
+          onClick={onClose}
+        >
+          <XCircle size={24} />
+        </button>
+      </div>
+    </div>
+  );
+});
 
 export default AdminPage;
