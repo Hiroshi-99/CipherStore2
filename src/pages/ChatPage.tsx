@@ -319,8 +319,8 @@ function ChatPage() {
         async (payload) => {
           if (!isSubscribed || payload.eventType !== "INSERT") return;
 
-          // Skip if this is our own optimistic update
-          if (messageQueue.current.has(payload.new.id)) {
+          // Skip if this is our own message
+          if (payload.new.user_id === user?.id) {
             return;
           }
 
@@ -358,8 +358,7 @@ function ChatPage() {
               // Skip if message already exists
               if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
-              const isFromOther = newMessage.user_id !== user?.id;
-              if (isFromOther && !isTabFocused) {
+              if (!isTabFocused) {
                 setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
                 if (notificationSound.current) {
                   notificationSound.current.currentTime = 0;
@@ -486,8 +485,7 @@ function ChatPage() {
         user_id: user.id,
       };
 
-      // Add to message queue before sending
-      messageQueue.current.add(tempId);
+      // Add optimistic update
       setMessages((prev) => [...prev, optimisticMessage]);
       setNewMessage("");
       scrollToBottom();
@@ -512,7 +510,6 @@ function ChatPage() {
           setMessages((prev) =>
             prev.map((msg) => (msg.id === tempId ? data[0] : msg))
           );
-          messageQueue.current.delete(tempId);
         }
       } catch (error) {
         console.error("Error sending message:", error);
