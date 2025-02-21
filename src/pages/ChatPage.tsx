@@ -28,7 +28,7 @@ interface Message {
 interface Order {
   id: string;
   full_name: string;
-  messages: { id: string; created_at: string }[];
+  messages?: { id: string; created_at: string }[];
 }
 
 interface ChatProps {
@@ -123,8 +123,6 @@ const OrderButton = React.memo(function OrderButton({
   isAdmin: boolean;
   onClick: () => void;
 }) {
-  const messageCount = order.messages?.length || 0;
-
   return (
     <button
       onClick={onClick}
@@ -136,17 +134,14 @@ const OrderButton = React.memo(function OrderButton({
     >
       <div className="font-medium">{order.full_name}</div>
       <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {isAdmin && messageCount > 0 && (
+      {isAdmin && order.messages?.length > 0 && (
         <div className="text-xs text-emerald-400 mt-1">
-          {messageCount} messages
+          {order.messages.length} messages
         </div>
       )}
     </button>
   );
 });
-
-// Declare fetchMessages type before use
-type FetchMessagesFunction = (orderId: string) => Promise<void>;
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -157,8 +152,12 @@ function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [userOrders, setUserOrders] = useState<Order[]>([]);
-  const [adminOrders, setAdminOrders] = useState<Order[]>([]);
+  const [userOrders, setUserOrders] = useState<
+    { id: string; full_name: string }[]
+  >([]);
+  const [adminOrders, setAdminOrders] = useState<
+    { id: string; full_name: string }[]
+  >([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
@@ -184,8 +183,7 @@ function ChatPage() {
 
   // Memoize orders list
   const ordersList = useMemo(() => {
-    const orders = isAdmin ? adminOrders : userOrders;
-    return orders.map((order) => (
+    return (isAdmin ? adminOrders : userOrders).map((order) => (
       <OrderButton
         key={order.id}
         order={order}
@@ -199,29 +197,28 @@ function ChatPage() {
     ));
   }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
 
-  // Memoize messages list with proper types
+  // Memoize messages list
   const messagesList = useMemo(() => {
     return messages.map((message, index) => (
       <MessageBubble
         key={message.id}
         message={message}
         isLatest={index === messages.length - 1}
-        sending={messageQueue.current.has(message.id)}
+        sending={sending}
         isUnread={unreadMessages.has(message.id)}
-        onRetry={() => retryMessage(message.id)}
-        isPending={pendingMessages.current.has(message.id)}
       />
     ));
-  }, [messages, unreadMessages]);
+  }, [messages, sending, unreadMessages]);
 
   // Debounced message input handler
-  const debouncedSetNewMessage = useCallback((value: string) => {
-    setNewMessage(value);
-  }, []);
+  const debouncedSetNewMessage = useCallback(
+    debounce((value: string) => setNewMessage(value), 100),
+    []
+  );
 
   // Initialize audio on mount
   useEffect(() => {
-    notificationSound.current = new Audio("/sounds/notification.mp3");
+    notificationSound.current = new Audio("/sounds/gg.mp3");
     notificationSound.current.volume = 0.5;
 
     return () => {
@@ -232,7 +229,7 @@ function ChatPage() {
     };
   }, []);
 
-  // Update message subscription
+  // Update message subscription with better sound handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -261,10 +258,22 @@ function ChatPage() {
             if (prev.some((msg) => msg.id === newMessage.id)) return prev;
 
             const isFromOther = newMessage.user_id !== user?.id;
-            if (isFromOther && notificationSound.current) {
-              notificationSound.current.currentTime = 0;
-              notificationSound.current.play().catch(() => {
-                // Ignore autoplay errors
+            if (isFromOther) {
+              // Play notification sound
+              if (notificationSound.current) {
+                notificationSound.current.currentTime = 0; // Reset audio
+                notificationSound.current.play().catch((error) => {
+                  console.warn("Failed to play notification sound:", error);
+                });
+              }
+
+              // Show toast notification
+              toast.message("New message", {
+                description: `${
+                  newMessage.user_name
+                }: ${newMessage.content.slice(0, 60)}${
+                  newMessage.content.length > 60 ? "..." : ""
+                }`,
               });
 
               if (!isTabFocused) {
@@ -407,26 +416,20 @@ function ChatPage() {
 
   // Add message retry functionality
   const retryMessage = useCallback(
-    async (messageId: string) => {
-      const pendingMessage = pendingMessages.current.get(messageId);
-      if (!pendingMessage) return;
+    async (tempId: string) => {
+      const message = pendingMessages.current.get(tempId);
+      if (!message) return;
 
-      try {
-        const { error } = await supabase
-          .from("messages")
-          .insert([pendingMessage]);
-        if (error) throw error;
+      // Remove failed message
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
 
-        pendingMessages.current.delete(messageId);
-        messageQueue.current.delete(messageId);
-
-        await fetchMessages(selectedOrderId!);
-      } catch (error) {
-        console.error("Error retrying message:", error);
-        toast.error("Failed to send message");
-      }
+      // Retry sending
+      const content = message.content;
+      pendingMessages.current.delete(tempId);
+      setNewMessage(content);
+      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
     },
-    [selectedOrderId, fetchMessages]
+    [handleSendMessage]
   );
 
   useEffect(() => {
@@ -436,11 +439,18 @@ function ChatPage() {
 
   useEffect(() => {
     if (selectedOrderId) {
+      // Fetch messages first
       fetchMessages(selectedOrderId);
+
+      // Then set up subscription
       const cleanup = subscribeToMessages();
-      return cleanup;
+      return () => {
+        if (cleanup && typeof cleanup === "function") {
+          cleanup();
+        }
+      };
     }
-  }, [selectedOrderId, fetchMessages, subscribeToMessages]);
+  }, [selectedOrderId, subscribeToMessages]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -499,43 +509,26 @@ function ChatPage() {
     }
   };
 
-  const fetchUserOrders = useCallback(async (userId: string) => {
+  const fetchUserOrders = async (userId: string) => {
     try {
       const { data: ordersData, error } = await supabase
         .from("orders")
-        .select(
-          `
-          id,
-          full_name,
-          messages (
-            id,
-            created_at
-          )
-        `
-        )
+        .select("id, full_name")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-
-      // Transform the data to match Order type
-      const transformedOrders: Order[] = (ordersData || []).map((order) => ({
-        id: order.id,
-        full_name: order.full_name,
-        messages: order.messages || [],
-      }));
-
-      setUserOrders(transformedOrders);
-      if (transformedOrders.length > 0) {
-        setSelectedOrderId(transformedOrders[0].id);
+      setUserOrders(ordersData || []);
+      if (ordersData?.length > 0) {
+        setSelectedOrderId(ordersData[0].id);
       }
     } catch (error) {
       console.error("Error fetching user orders:", error);
-      toast.error("Failed to load orders");
+      setError("Failed to load orders");
     }
-  }, []);
+  };
 
-  const fetchAdminOrders = useCallback(async () => {
+  const fetchAdminOrders = async () => {
     try {
       const { data: ordersData, error } = await supabase
         .from("orders")
@@ -552,45 +545,50 @@ function ChatPage() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-
-      // Transform the data to match Order type
-      const transformedOrders: Order[] = (ordersData || []).map((order) => ({
-        id: order.id,
-        full_name: order.full_name,
-        messages: order.messages || [],
-      }));
-
-      setAdminOrders(transformedOrders);
-      if (transformedOrders.length > 0) {
-        setSelectedOrderId(transformedOrders[0].id);
+      setAdminOrders(ordersData || []);
+      if (ordersData?.length > 0) {
+        setSelectedOrderId(ordersData[0].id);
       }
     } catch (error) {
       console.error("Error fetching admin orders:", error);
-      toast.error("Failed to load orders");
+      setError("Failed to load orders");
     }
-  }, []);
+  };
 
-  // Define fetchMessages before using it
-  const fetchMessages = useCallback<FetchMessagesFunction>(async (orderId) => {
-    if (!orderId) return;
-    setLoading(true);
+  const fetchMessages = async (orderId: string) => {
     try {
-      const { data, error: messagesError } = await supabase
+      setLoading(true);
+      const { data, error } = await supabase
         .from("messages")
-        .select("*")
+        .select(
+          `
+          *,
+          orders!inner(
+            user_id,
+            full_name
+          )
+        `
+        )
         .eq("order_id", orderId)
         .order("created_at", { ascending: true });
 
-      if (messagesError) throw messagesError;
-      setMessages(data || []);
-      requestAnimationFrame(scrollToBottom);
+      if (error) throw error;
+
+      setMessages(
+        data?.map((msg) => ({
+          ...msg,
+          is_admin: msg.user_id !== msg.orders.user_id,
+          orders: undefined,
+        })) || []
+      );
+      setTimeout(scrollToBottom, 100);
     } catch (error) {
       console.error("Error fetching messages:", error);
-      toast.error("Failed to load messages");
+      setError("Failed to load messages");
     } finally {
       setLoading(false);
     }
-  }, []);
+  };
 
   if (initialLoading) {
     return (
@@ -747,6 +745,18 @@ function ChatPage() {
       </main>
     </PageContainer>
   );
+}
+
+// Debounce utility
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
 }
 
 export default React.memo(ChatPage);
