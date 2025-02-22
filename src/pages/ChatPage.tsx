@@ -24,7 +24,6 @@ interface ChatProps {
 // Add these constants outside component
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
-const DEBOUNCE_DELAY = 100;
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -111,12 +110,6 @@ function ChatPage() {
       />
     ));
   }, [messages, sending, unreadMessages]);
-
-  // Debounced message input handler
-  const debouncedSetNewMessage = useCallback(
-    debounce((value: string) => setNewMessage(value), 100),
-    []
-  );
 
   // Initialize audio on mount
   useEffect(() => {
@@ -564,16 +557,17 @@ function ChatPage() {
     }
   }, [selectedOrderId, page, hasMore]);
 
-  // Add debounced scroll handler
-  const handleScroll = useMemo(
-    () =>
-      debounce((e: React.UIEvent<HTMLDivElement>) => {
-        const { scrollTop } = e.currentTarget;
-        if (scrollTop < SCROLL_THRESHOLD && hasMore) {
-          loadMoreMessages();
-        }
-      }, DEBOUNCE_DELAY),
-    [loadMoreMessages, hasMore]
+  // Add these new optimized scroll handlers
+  const handleScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (!e.currentTarget) return;
+
+      const { scrollTop } = e.currentTarget;
+      if (scrollTop < SCROLL_THRESHOLD && hasMore && !loading) {
+        loadMoreMessages();
+      }
+    },
+    [hasMore, loading, loadMoreMessages]
   );
 
   if (initialLoading) {
@@ -665,9 +659,9 @@ function ChatPage() {
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
                     onScroll={handleScroll}
                   >
-                    {hasMore && (
-                      <div ref={lastMessageRef} className="h-4">
-                        {loading && <LoadingSpinner size="sm" light />}
+                    {loading && (
+                      <div className="flex justify-center py-2">
+                        <LoadingSpinner size="sm" light />
                       </div>
                     )}
                     {messages.map((message, index) => (
@@ -682,6 +676,7 @@ function ChatPage() {
                         />
                       </div>
                     ))}
+                    {hasMore && <div ref={lastMessageRef} className="h-4" />}
                   </div>
 
                   {/* Message Input */}
@@ -741,18 +736,6 @@ function ChatPage() {
       </main>
     </PageContainer>
   );
-}
-
-// Debounce utility
-function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
-  func: T,
-  wait: number
-): (...args: Parameters<T>) => void {
-  let timeout: NodeJS.Timeout;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  };
 }
 
 export default React.memo(ChatPage);

@@ -38,9 +38,10 @@ export function useMessages(selectedOrderId: string | null) {
   }, [selectedOrderId]);
 
   const loadMore = useCallback(async () => {
-    if (!selectedOrderId || !hasMore) return;
+    if (!selectedOrderId || !hasMore || loading) return;
 
     try {
+      setLoading(true);
       const { data, error } = await supabase
         .from("messages")
         .select("*")
@@ -56,8 +57,10 @@ export function useMessages(selectedOrderId: string | null) {
     } catch (error) {
       console.error("Error loading more messages:", error);
       toast.error("Failed to load more messages");
+    } finally {
+      setLoading(false);
     }
-  }, [selectedOrderId, page, hasMore]);
+  }, [selectedOrderId, page, hasMore, loading]);
 
   return {
     messages,
