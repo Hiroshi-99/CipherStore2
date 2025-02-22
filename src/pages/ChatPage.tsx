@@ -7,12 +7,13 @@ import React, {
 } from "react";
 import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
-import { Send, RefreshCw } from "lucide-react";
+import { Send, RefreshCw, Image as ImageIcon } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster, toast } from "sonner";
+import { uploadImage } from "../lib/storage";
 
 interface Message {
   id: string;
@@ -23,6 +24,7 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
+  imageUrl?: string;
 }
 
 interface Order {
@@ -164,6 +166,8 @@ function ChatPage() {
   const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Add message queue for optimistic updates
   const messageQueue = useRef<Set<string>>(new Set());
@@ -431,6 +435,31 @@ function ChatPage() {
     },
     [handleSendMessage]
   );
+
+  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      setSelectedImage(file);
+    }
+  };
+
+  const handleImageUpload = async () => {
+    if (!selectedImage) return;
+    try {
+      const imageUrl = await uploadImage(selectedImage);
+      // Add your message sending logic here with the imageUrl
+      // Example:
+      sendMessage("", imageUrl); // Send message with empty content but with imageUrl
+      setSelectedImage(null);
+    } catch (error) {
+      console.error("Error uploading image:", error);
+    }
+  };
+
+  const sendMessage = async (content: string, imageUrl?: string) => {
+    // Update your existing sendMessage function to handle imageUrl
+    // ... existing message sending logic ...
+  };
 
   useEffect(() => {
     setPageTitle("Chat");
@@ -712,6 +741,21 @@ function ChatPage() {
                     className="border-t border-white/10 p-4"
                   >
                     <div className="flex gap-2">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        ref={fileInputRef}
+                        onChange={handleImageSelect}
+                      />
+
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-2 hover:bg-gray-700 rounded-full transition-colors"
+                      >
+                        <ImageIcon className="w-6 h-6 text-gray-400" />
+                      </button>
+
                       <input
                         type="text"
                         value={newMessage}
