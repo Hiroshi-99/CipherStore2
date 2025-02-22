@@ -499,7 +499,8 @@ function ChatPage() {
         .select("*")
         .eq("order_id", orderId)
         .order("created_at", { ascending: false })
-        .limit(MESSAGES_PER_PAGE);
+        .limit(MESSAGES_PER_PAGE)
+        .abortSignal(new AbortController().signal);
 
       if (error) throw error;
 
@@ -508,6 +509,9 @@ function ChatPage() {
       setPage(1);
     } catch (error) {
       console.error("Error fetching messages:", error);
+      toast.error("Failed to load messages. Please try again.");
+
+      // Show retry button
       setError("Failed to load messages");
     } finally {
       setLoading(false);
@@ -663,35 +667,54 @@ function ChatPage() {
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
                     onScroll={handleScroll}
                   >
-                    {hasMore && (
-                      <div className="h-4">
-                        {loading && (
-                          <div className="flex justify-center">
-                            <LoadingSpinner size="sm" light />
+                    {error ? (
+                      <div className="flex flex-col items-center justify-center h-full space-y-4">
+                        <p className="text-red-400">{error}</p>
+                        <button
+                          onClick={() => {
+                            setError(null);
+                            fetchMessages(selectedOrderId!);
+                          }}
+                          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-white transition-colors"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {hasMore && (
+                          <div className="h-4">
+                            {loading && (
+                              <div className="flex justify-center">
+                                <LoadingSpinner size="sm" light />
+                              </div>
+                            )}
                           </div>
                         )}
-                      </div>
+                        {messages.map((message, index) => (
+                          <div
+                            key={message.id}
+                            ref={
+                              index === messages.length - 1
+                                ? lastMessageRef
+                                : undefined
+                            }
+                            data-message-id={message.id}
+                          >
+                            <MessageBubble
+                              message={message}
+                              isLatest={index === messages.length - 1}
+                              sending={messageQueue.current.has(message.id)}
+                              isUnread={unreadMessages.has(message.id)}
+                              onRetry={() => retryMessage(message.id)}
+                              isPending={pendingMessages.current.has(
+                                message.id
+                              )}
+                            />
+                          </div>
+                        ))}
+                      </>
                     )}
-                    {messages.map((message, index) => (
-                      <div
-                        key={message.id}
-                        ref={
-                          index === messages.length - 1
-                            ? lastMessageRef
-                            : undefined
-                        }
-                        data-message-id={message.id}
-                      >
-                        <MessageBubble
-                          message={message}
-                          isLatest={index === messages.length - 1}
-                          sending={messageQueue.current.has(message.id)}
-                          isUnread={unreadMessages.has(message.id)}
-                          onRetry={() => retryMessage(message.id)}
-                          isPending={pendingMessages.current.has(message.id)}
-                        />
-                      </div>
-                    ))}
                   </div>
 
                   {/* Message Input */}
