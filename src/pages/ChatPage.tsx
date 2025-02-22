@@ -16,8 +16,10 @@ import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
 import type { Message, Order } from "../types/chat";
-import { useInView } from "react-intersection-observer";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useMessages } from "../hooks/useMessages";
+import { useInfiniteScroll } from "../hooks/useInfiniteScroll";
+import { useMessageSubscription } from "../hooks/useMessageSubscription";
+import { optimizeImage } from "../utils/imageOptimization";
 
 interface ChatProps {
   orderId: string;
@@ -26,12 +28,9 @@ interface ChatProps {
 // Add these constants outside component
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
-const SCROLL_PADDING = 40;
-const MESSAGE_HEIGHT = 80;
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -53,34 +52,29 @@ function ChatPage() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Add message queue for optimistic updates
-  const messageQueue = useRef<Set<string>>(new Set());
-  const pendingMessages = useRef<Map<string, Message>>(new Map());
+  // Replace message state with hook
+  const {
+    messages,
+    loading,
+    hasMore,
+    messageQueue,
+    pendingMessages,
+    fetchMessages,
+    loadMoreMessages,
+    addMessage,
+    updateMessage,
+    removeMessage,
+  } = useMessages(selectedOrderId);
 
-  // Add virtual scrolling state
-  const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
-  const messageListRef = useRef<HTMLDivElement>(null);
-  const observerRef = useRef<IntersectionObserver | null>(null);
+  // Add infinite scroll hook
+  const lastMessageRef = useInfiniteScroll(loadMoreMessages);
 
-  // Add audio ref to prevent multiple instances
-  const notificationSound = useRef<HTMLAudioElement | null>(null);
-
-  // Add pagination state
-  const [hasMore, setHasMore] = useState(true);
-  const [page, setPage] = useState(0);
-  const lastMessageRef = useRef<HTMLDivElement>(null);
-
-  // Add these refs and states
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-  const { ref: bottomRef, inView } = useInView();
-
-  // Add virtualization
-  const rowVirtualizer = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => chatContainerRef.current,
-    estimateSize: () => MESSAGE_HEIGHT,
-    overscan: 5,
+  // Add message subscription
+  useMessageSubscription(selectedOrderId, user?.id, (newMessage) => {
+    if (!messageQueue.current.has(newMessage.id)) {
+      addMessage(newMessage);
+      playNotificationSound();
+    }
   });
 
   const scrollToBottom = useCallback(() => {
@@ -371,7 +365,8 @@ function ChatPage() {
     if (!selectedImage) return;
     try {
       setSending(true);
-      const imageUrl = await uploadImage(selectedImage);
+      const optimizedImage = await optimizeImage(selectedImage);
+      const imageUrl = await uploadImage(optimizedImage);
       await handleSendMessage(new Event("submit") as any, imageUrl);
     } catch (error) {
       console.error("Error uploading image:", error);
@@ -580,28 +575,17 @@ function ChatPage() {
     }
   }, [selectedOrderId, page, hasMore]);
 
-  // Update scroll handling
-  const handleScroll = useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-      const atBottom = scrollHeight - scrollTop - clientHeight < SCROLL_PADDING;
-      setAutoScroll(atBottom);
-
-      // Load more messages when scrolling to top
-      if (scrollTop < SCROLL_THRESHOLD && hasMore) {
-        loadMoreMessages();
-      }
-    },
-    [hasMore, loadMoreMessages]
+  // Add debounced scroll handler
+  const handleScroll = useMemo(
+    () =>
+      debounce((e: React.UIEvent<HTMLDivElement>) => {
+        const { scrollTop } = e.currentTarget;
+        if (scrollTop < SCROLL_THRESHOLD && hasMore) {
+          loadMoreMessages();
+        }
+      }, 100),
+    [loadMoreMessages, hasMore]
   );
-
-  // Auto scroll on new messages
-  useEffect(() => {
-    if (autoScroll && chatContainerRef.current) {
-      chatContainerRef.current.scrollTop =
-        chatContainerRef.current.scrollHeight;
-    }
-  }, [messages, autoScroll]);
 
   if (initialLoading) {
     return (
@@ -615,185 +599,157 @@ function ChatPage() {
 
   return (
     <PageContainer title="CHAT" showBack user={user}>
-      <div className="h-[calc(100vh-4rem)] flex flex-col">
-        <main className="flex-1 container mx-auto px-4 py-4 md:py-8 flex flex-col">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative flex-1">
-            {/* Mobile Order Toggle */}
-            <button
-              className="md:hidden fixed bottom-20 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
-              onClick={() => setShowSidebar(!showSidebar)}
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
+          {notification}
+        </div>
+      )}
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
+          {/* Mobile Order Toggle */}
+          <button
+            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
+            onClick={() => setShowSidebar(!showSidebar)}
+          >
+            <svg
+              className="w-6 h-6 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              <svg
-                className="w-6 h-6 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 6h16M4 12h16m-7 6h7"
-                />
-              </svg>
-            </button>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 6h16M4 12h16m-7 6h7"
+              />
+            </svg>
+          </button>
 
-            {/* Orders Sidebar */}
-            <div
-              className={`md:col-span-1 fixed md:relative inset-0 z-30 md:z-0 transform ${
-                showSidebar ? "translate-x-0" : "-translate-x-full"
-              } md:translate-x-0 transition-transform duration-200 ease-in-out`}
-            >
-              <div className="backdrop-blur-xl bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4 shadow-xl">
-                {/* Mobile Close Button */}
-                <div className="flex justify-between items-center mb-4 md:hidden">
-                  <h2 className="text-lg font-medium text-white">
-                    {isAdmin ? "All Orders" : "Your Orders"}
-                  </h2>
-                  <button
-                    onClick={() => setShowSidebar(false)}
-                    className="p-2 hover:bg-white/10 rounded-lg"
+          {/* Orders Sidebar */}
+          <div
+            className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
+              showSidebar ? "translate-x-0" : "-translate-x-full"
+            } md:translate-x-0 transition-transform duration-200 ease-in-out`}
+          >
+            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
+              {/* Mobile Close Button */}
+              <div className="flex justify-between items-center mb-4 md:hidden">
+                <h2 className="text-lg font-medium text-white">
+                  {isAdmin ? "All Orders" : "Your Orders"}
+                </h2>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-2 hover:bg-white/10 rounded-lg"
+                >
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    <svg
-                      className="w-6 h-6 text-white"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* Orders List */}
-                <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                  {ordersList}
-                </div>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
               </div>
-            </div>
 
-            {/* Chat Area */}
-            <div className="md:col-span-3 h-full flex flex-col">
-              <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden flex flex-col h-full">
-                {selectedOrderId ? (
-                  <>
-                    <div
-                      ref={chatContainerRef}
-                      className="flex-1 overflow-y-auto p-4 md:p-6"
-                      onScroll={handleScroll}
-                    >
-                      {hasMore && (
-                        <div
-                          ref={lastMessageRef}
-                          className="h-4 flex justify-center"
-                        >
-                          {loading && <LoadingSpinner size="sm" light />}
-                        </div>
-                      )}
-
-                      <div
-                        style={{
-                          height: `${rowVirtualizer.getTotalSize()}px`,
-                          width: "100%",
-                          position: "relative",
-                        }}
-                      >
-                        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                          const message = messages[virtualRow.index];
-                          return (
-                            <div
-                              key={message.id}
-                              data-message-id={message.id}
-                              style={{
-                                position: "absolute",
-                                top: 0,
-                                left: 0,
-                                width: "100%",
-                                height: `${virtualRow.size}px`,
-                                transform: `translateY(${virtualRow.start}px)`,
-                              }}
-                            >
-                              <MessageBubble
-                                message={message}
-                                isLatest={
-                                  virtualRow.index === messages.length - 1
-                                }
-                                sending={messageQueue.current.has(message.id)}
-                                isUnread={unreadMessages.has(message.id)}
-                                onRetry={() => retryMessage(message.id)}
-                                isPending={pendingMessages.current.has(
-                                  message.id
-                                )}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div ref={bottomRef} />
-                    </div>
-
-                    <form
-                      onSubmit={handleFormSubmit}
-                      className="border-t border-white/10 p-4 bg-black/20 backdrop-blur-sm"
-                    >
-                      <div className="flex gap-2">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          ref={fileInputRef}
-                          onChange={handleImageSelect}
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="p-2 hover:bg-gray-700 rounded-full transition-colors"
-                        >
-                          <ImageIcon className="w-6 h-6 text-gray-400" />
-                        </button>
-
-                        <input
-                          type="text"
-                          value={newMessage}
-                          onChange={(e) => setNewMessage(e.target.value)}
-                          placeholder="Type your message..."
-                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                        />
-                        <button
-                          type="submit"
-                          disabled={
-                            (!newMessage.trim() && !selectedImage) || sending
-                          }
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {sending ? (
-                            <RefreshCw className="w-5 h-5 animate-spin" />
-                          ) : (
-                            <Send className="w-5 h-5" />
-                          )}
-                        </button>
-                      </div>
-                    </form>
-                  </>
-                ) : (
-                  <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
-                    <p>Select an order to start chatting</p>
-                    <p className="text-sm">
-                      Your conversations will appear here
-                    </p>
-                  </div>
-                )}
+              {/* Orders List */}
+              <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
+                {ordersList}
               </div>
             </div>
           </div>
-        </main>
-      </div>
+
+          {/* Chat Area */}
+          <div className="md:col-span-3">
+            <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+              {selectedOrderId ? (
+                <>
+                  {/* Messages Container */}
+                  <div
+                    ref={messageListRef}
+                    className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
+                    onScroll={handleScroll}
+                  >
+                    {hasMore && (
+                      <div ref={lastMessageRef} className="h-4">
+                        {loading && <LoadingSpinner size="sm" light />}
+                      </div>
+                    )}
+                    {messages.map((message, index) => (
+                      <div key={message.id} data-message-id={message.id}>
+                        <MessageBubble
+                          message={message}
+                          isLatest={index === messages.length - 1}
+                          sending={messageQueue.current.has(message.id)}
+                          isUnread={unreadMessages.has(message.id)}
+                          onRetry={() => retryMessage(message.id)}
+                          isPending={pendingMessages.current.has(message.id)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Message Input */}
+                  <form
+                    onSubmit={handleFormSubmit}
+                    className="border-t border-white/10 p-4"
+                  >
+                    <div className="flex gap-2">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        ref={fileInputRef}
+                        onChange={handleImageSelect}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-2 hover:bg-gray-700 rounded-full transition-colors"
+                      >
+                        <ImageIcon className="w-6 h-6 text-gray-400" />
+                      </button>
+
+                      <input
+                        type="text"
+                        value={newMessage}
+                        onChange={(e) => setNewMessage(e.target.value)}
+                        placeholder="Type your message..."
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          (!newMessage.trim() && !selectedImage) || sending
+                        }
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {sending ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Send className="w-5 h-5" />
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
+                  <p>Select an order to start chatting</p>
+                  <p className="text-sm">Your conversations will appear here</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
     </PageContainer>
   );
 }

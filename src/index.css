@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Add these to your existing CSS */
+.will-change-transform {
+  will-change: transform;
+}
+
+.backface-visibility-hidden {
+  backface-visibility: hidden;
+}
+
+.transform-gpu {
+  transform: translateZ(0);
+}
+
 @keyframes highlight-fade {
   0% {
     background-color: rgba(16, 185, 129, 0.2);
