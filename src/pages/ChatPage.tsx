@@ -16,6 +16,7 @@ import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
 import type { Message, Order } from "../types/chat";
+import { useMessageScroll } from "../hooks/useMessageScroll";
 
 interface ChatProps {
   orderId: string;
@@ -64,7 +65,12 @@ function ChatPage() {
   // Add pagination state
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(0);
-  const lastMessageRef = useRef<HTMLDivElement>(null);
+  const {
+    scrollRef,
+    lastMessageRef,
+    scrollToBottom,
+    handleScroll: handleScrollEvent,
+  } = useMessageScroll(messages, loading);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -258,15 +264,14 @@ function ChatPage() {
         order_id: selectedOrderId,
       };
 
-      // Add to pending queue
-      messageQueue.current.add(tempId);
-      pendingMessages.current.set(tempId, optimisticMessage);
-
-      // Optimistic update
-      setMessages((prev) => [...prev, optimisticMessage]);
-      requestAnimationFrame(scrollToBottom);
-
       try {
+        messageQueue.current.add(tempId);
+        pendingMessages.current.set(tempId, optimisticMessage);
+
+        // Add message and scroll
+        setMessages((prev) => [...prev, optimisticMessage]);
+        scrollToBottom();
+
         // Get order details first
         const { data: orderData } = await supabase
           .from("orders")
@@ -557,17 +562,21 @@ function ChatPage() {
     }
   }, [selectedOrderId, page, hasMore]);
 
-  // Add these new optimized scroll handlers
+  // Update the scroll handler to handle both pagination and scroll position
   const handleScroll = useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
       if (!e.currentTarget) return;
 
+      // Handle infinite scroll
       const { scrollTop } = e.currentTarget;
       if (scrollTop < SCROLL_THRESHOLD && hasMore && !loading) {
         loadMoreMessages();
       }
+
+      // Handle scroll position tracking
+      handleScrollEvent(e);
     },
-    [hasMore, loading, loadMoreMessages]
+    [hasMore, loading, loadMoreMessages, handleScrollEvent]
   );
 
   if (initialLoading) {
@@ -655,17 +664,29 @@ function ChatPage() {
                 <>
                   {/* Messages Container */}
                   <div
-                    ref={messageListRef}
+                    ref={scrollRef}
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
                     onScroll={handleScroll}
                   >
-                    {loading && (
-                      <div className="flex justify-center py-2">
-                        <LoadingSpinner size="sm" light />
+                    {hasMore && (
+                      <div className="h-4">
+                        {loading && (
+                          <div className="flex justify-center">
+                            <LoadingSpinner size="sm" light />
+                          </div>
+                        )}
                       </div>
                     )}
                     {messages.map((message, index) => (
-                      <div key={message.id} data-message-id={message.id}>
+                      <div
+                        key={message.id}
+                        ref={
+                          index === messages.length - 1
+                            ? lastMessageRef
+                            : undefined
+                        }
+                        data-message-id={message.id}
+                      >
                         <MessageBubble
                           message={message}
                           isLatest={index === messages.length - 1}
@@ -676,7 +697,6 @@ function ChatPage() {
                         />
                       </div>
                     ))}
-                    {hasMore && <div ref={lastMessageRef} className="h-4" />}
                   </div>
 
                   {/* Message Input */}
