@@ -26,5 +26,11 @@
   to = "/index.html"
   status = 200
 
+[[redirects]]
+  from = "/api/discord-add-member"
+  to = "/.netlify/functions/discord-add-member"
+  status = 200
+  force = true
+
 [build.environment]
   NODE_VERSION = "18.17.0" 

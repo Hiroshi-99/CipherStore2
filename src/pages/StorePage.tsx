@@ -42,14 +42,31 @@ function StorePage() {
 
   const handleDiscordLogin = async () => {
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "discord",
         options: {
           redirectTo: window.location.origin + window.location.pathname,
+          scopes: "identify guilds.join",
         },
       });
 
       if (error) throw error;
+
+      // After successful auth, try to add user to guild
+      if (data?.session) {
+        const headers = await getAuthHeaders();
+        const response = await fetch("/.netlify/functions/discord-add-member", {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!response.ok) {
+          console.error("Failed to add user to Discord guild");
+        }
+      }
     } catch (error) {
       console.error("Error logging in with Discord:", error);
     }
