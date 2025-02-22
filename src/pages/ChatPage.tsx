@@ -33,7 +33,6 @@ function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userOrders, setUserOrders] = useState<
     { id: string; full_name: string }[]
@@ -71,10 +70,6 @@ function ChatPage() {
     scrollToBottom,
     handleScroll: handleScrollEvent,
   } = useMessageScroll(messages, loading);
-
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
 
   // Memoize orders list
   const ordersList = useMemo(() => {
@@ -162,7 +157,7 @@ function ChatPage() {
             if (isFromOther) {
               // Play notification sound
               if (notificationSound.current) {
-                notificationSound.current.currentTime = 0; // Reset audio
+                notificationSound.current.currentTime = 0;
                 notificationSound.current.play().catch((error) => {
                   console.warn("Failed to play notification sound:", error);
                 });
@@ -185,7 +180,7 @@ function ChatPage() {
             return [...prev, newMessage];
           });
 
-          requestAnimationFrame(scrollToBottom);
+          scrollToBottom();
         }
       )
       .subscribe();
@@ -194,7 +189,7 @@ function ChatPage() {
       isSubscribed = false;
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
+  }, [selectedOrderId, user?.id, isTabFocused, scrollToBottom]);
 
   // Add virtual scrolling
   useEffect(() => {
