@@ -24,7 +24,7 @@ interface Message {
   created_at: string;
   order_id: string;
   user_id: string;
-  imageUrl?: string;
+  image_url?: string;
 }
 
 interface Order {
@@ -82,9 +82,19 @@ const MessageBubble = React.memo(function MessageBubble({
             {new Date(message.created_at).toLocaleString()}
           </span>
         </div>
-        <p className="text-white/90 whitespace-pre-wrap break-words">
-          {message.content}
-        </p>
+        {message.content && (
+          <p className="text-white/90 whitespace-pre-wrap break-words">
+            {message.content}
+          </p>
+        )}
+        {message.image_url && (
+          <img
+            src={message.image_url}
+            alt="Chat image"
+            className="max-w-full rounded-lg mt-2"
+            loading="lazy"
+          />
+        )}
         {isPending && (
           <button
             onClick={(e) => {
@@ -358,7 +368,7 @@ function ChatPage() {
       const optimisticMessage: Message = {
         id: tempId,
         content: messageContent,
-        imageUrl,
+        image_url: imageUrl,
         user_id: user.id,
         user_name: user.user_metadata.full_name || user.email,
         user_avatar: user.user_metadata.avatar_url,
@@ -391,7 +401,7 @@ function ChatPage() {
           .insert([
             {
               content: messageContent,
-              imageUrl,
+              image_url: imageUrl,
               user_id: user.id,
               is_admin: user.id !== orderData.user_id,
               user_name: user.user_metadata.full_name || user.email,
@@ -441,7 +451,7 @@ function ChatPage() {
       const content = message.content;
       pendingMessages.current.delete(tempId);
       setNewMessage(content);
-      await handleSendMessage(new Event("submit") as any, message.imageUrl);
+      await handleSendMessage(new Event("submit") as any, message.image_url);
     },
     [handleSendMessage]
   );
