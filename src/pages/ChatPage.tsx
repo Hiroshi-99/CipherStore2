@@ -110,20 +110,53 @@ function ChatPage() {
     };
   }, []);
 
+  const subscribeToMessages = useCallback(() => {
+    if (!selectedOrderId) return undefined;
+
+    let isSubscribed = true;
+    const channel = supabase
+      .channel(`messages:${selectedOrderId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `order_id=eq.${selectedOrderId}`,
+        },
+        (payload) => {
+          if (!isSubscribed || payload.eventType !== "INSERT") return;
+
+          const newMessage = payload.new as Message;
+          if (newMessage.user_id !== user?.id) {
+            addMessage(newMessage);
+            playNotificationSound();
+            scrollToBottom();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isSubscribed = false;
+      supabase.removeChannel(channel);
+    };
+  }, [
+    selectedOrderId,
+    user?.id,
+    addMessage,
+    playNotificationSound,
+    scrollToBottom,
+  ]);
+
+  // Update the useEffect that uses subscribeToMessages
   useEffect(() => {
     if (selectedOrderId) {
-      // Fetch messages first
       fetchMessages();
-
-      // Then set up subscription
       const cleanup = subscribeToMessages();
-      return () => {
-        if (cleanup && typeof cleanup === "function") {
-          cleanup();
-        }
-      };
+      return cleanup;
     }
-  }, [selectedOrderId, subscribeToMessages, fetchMessages]);
+  }, [selectedOrderId, fetchMessages, subscribeToMessages]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -177,111 +210,6 @@ function ChatPage() {
     []
   );
 
-  // Update message subscription with better sound handling
-  const subscribeToMessages = useCallback(() => {
-    if (!selectedOrderId) return undefined;
-
-    let isSubscribed = true;
-    const channel = supabase
-      .channel(`messages:${selectedOrderId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "messages",
-          filter: `order_id=eq.${selectedOrderId}`,
-        },
-        async (payload) => {
-          if (!isSubscribed || payload.eventType !== "INSERT") return;
-
-          const newMessage = payload.new as Message;
-          if (!newMessage || messageQueue.current.has(newMessage.id)) {
-            messageQueue.current.delete(newMessage.id);
-            pendingMessages.current.delete(newMessage.id);
-            return;
-          }
-
-          setMessages((prev) => {
-            if (prev.some((msg) => msg.id === newMessage.id)) return prev;
-
-            const isFromOther = newMessage.user_id !== user?.id;
-            if (isFromOther) {
-              // Play notification sound
-              if (notificationSoundRef.current) {
-                notificationSoundRef.current.currentTime = 0; // Reset audio
-                notificationSoundRef.current.play().catch((error) => {
-                  console.warn("Failed to play notification sound:", error);
-                });
-              }
-
-              // Show toast notification
-              toast.message("New message", {
-                description: `${
-                  newMessage.user_name
-                }: ${newMessage.content.slice(0, 60)}${
-                  newMessage.content.length > 60 ? "..." : ""
-                }`,
-              });
-
-              if (!isTabFocused) {
-                setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-              }
-            }
-
-            return [...prev, newMessage];
-          });
-
-          requestAnimationFrame(scrollToBottom);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      isSubscribed = false;
-      supabase.removeChannel(channel);
-    };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
-
-  // Add virtual scrolling
-  useEffect(() => {
-    if (!messageContainerRef.current) return;
-
-    const options = {
-      root: messageContainerRef.current,
-      rootMargin: "20px",
-      threshold: 0.1,
-    };
-
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const messageId = entry.target.getAttribute("data-message-id");
-          if (messageId) {
-            setVisibleMessages((prev) =>
-              [...prev, messages.find((m) => m.id === messageId)!].filter(
-                Boolean
-              )
-            );
-          }
-        }
-      });
-    }, options);
-
-    messages.forEach((message) => {
-      const element = document.querySelector(
-        `[data-message-id="${message.id}"]`
-      );
-      if (element) {
-        observer.observe(element);
-      }
-    });
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [messages]);
-
   // Optimized message sending with better error handling
   const handleSendMessage = useCallback(
     async (e: React.FormEvent, imageUrl?: string) => {
@@ -298,29 +226,7 @@ function ChatPage() {
       setNewMessage("");
       setSending(true);
 
-      const tempId = crypto.randomUUID();
-      const optimisticMessage: Message = {
-        id: tempId,
-        content: messageContent,
-        image_url: imageUrl,
-        user_id: user.id,
-        user_name: user.user_metadata.full_name || user.email,
-        user_avatar: user.user_metadata.avatar_url,
-        is_admin: isAdmin,
-        created_at: new Date().toISOString(),
-        order_id: selectedOrderId,
-      };
-
-      // Add to pending queue
-      messageQueue.current.add(tempId);
-      pendingMessages.current.set(tempId, optimisticMessage);
-
-      // Optimistic update
-      setMessages((prev) => [...prev, optimisticMessage]);
-      requestAnimationFrame(scrollToBottom);
-
       try {
-        // Get order details first
         const { data: orderData } = await supabase
           .from("orders")
           .select("user_id")
@@ -329,7 +235,6 @@ function ChatPage() {
 
         if (!orderData) throw new Error("Order not found");
 
-        // Send message
         const { data: messageData, error: messageError } = await supabase
           .from("messages")
           .insert([
@@ -348,47 +253,42 @@ function ChatPage() {
           .single();
 
         if (messageError) throw messageError;
-
-        // Update message with real ID
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, id: messageData.id } : msg
-          )
-        );
+        scrollToBottom();
       } catch (error) {
         console.error("Error sending message:", error);
-        // Remove optimistic message on error
-        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-        setError("Failed to send message");
+        toast.error("Failed to send message");
         if (!imageUrl) {
           setNewMessage(messageContent);
         }
       } finally {
-        messageQueue.current.delete(tempId);
-        pendingMessages.current.delete(tempId);
         setSending(false);
       }
     },
-    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
+    [user, newMessage, sending, selectedOrderId, scrollToBottom]
   );
 
-  // Add message retry functionality
-  const retryMessage = useCallback(
-    async (tempId: string) => {
-      const message = pendingMessages.current.get(tempId);
-      if (!message) return;
+  // Update the form submission handler
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || sending) return;
 
-      // Remove failed message
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-
-      // Retry sending
-      const content = message.content;
-      pendingMessages.current.delete(tempId);
-      setNewMessage(content);
-      await handleSendMessage(new Event("submit") as any, message.image_url);
-    },
-    [handleSendMessage]
-  );
+    try {
+      setSending(true);
+      if (selectedImage) {
+        const optimizedImage = await optimizeImage(selectedImage);
+        const imageUrl = await uploadImage(optimizedImage);
+        await handleSendMessage(e, imageUrl);
+        setSelectedImage(null);
+      } else if (newMessage.trim()) {
+        await handleSendMessage(e);
+      }
+    } catch (error) {
+      console.error("Error handling form submit:", error);
+      toast.error("Failed to send message");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -409,15 +309,6 @@ function ChatPage() {
       toast.error("Failed to upload image");
     } finally {
       setSelectedImage(null);
-    }
-  };
-
-  const handleFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (selectedImage) {
-      await handleImageUpload();
-    } else if (newMessage.trim()) {
-      await handleSendMessage(e);
     }
   };
 
@@ -643,7 +534,12 @@ function ChatPage() {
                           isLatest={index === messages.length - 1}
                           sending={messageQueue.current.has(message.id)}
                           isUnread={unreadMessages.has(message.id)}
-                          onRetry={() => retryMessage(message.id)}
+                          onRetry={() =>
+                            handleSendMessage(
+                              new Event("submit") as any,
+                              message.image_url
+                            )
+                          }
                           isPending={pendingMessages.current.has(message.id)}
                         />
                       </div>
