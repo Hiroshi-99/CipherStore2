@@ -6,30 +6,24 @@ import React, {
   useMemo,
 } from "react";
 import { supabase } from "../lib/supabase";
+import Header from "../components/Header";
 import { Send, RefreshCw, Image as ImageIcon } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { toast } from "sonner";
+import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
-import type { Message } from "../types/chat";
+import type { Message, Order } from "../types/chat";
+
+interface ChatProps {
+  orderId: string;
+}
 
 // Add these constants outside component
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
-
-interface AdminOrder {
-  id: string;
-  full_name: string;
-  messages: { id: string; created_at: string }[];
-}
-
-interface UserOrder {
-  id: string;
-  full_name: string;
-}
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -40,13 +34,18 @@ function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [userOrders, setUserOrders] = useState<UserOrder[]>([]);
-  const [adminOrders, setAdminOrders] = useState<AdminOrder[]>([]);
+  const [userOrders, setUserOrders] = useState<
+    { id: string; full_name: string }[]
+  >([]);
+  const [adminOrders, setAdminOrders] = useState<
+    { id: string; full_name: string }[]
+  >([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
   const [isTabFocused, setIsTabFocused] = useState(true);
+  const [notification, setNotification] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,35 +72,30 @@ function ChatPage() {
 
   // Memoize orders list
   const ordersList = useMemo(() => {
-    return (isAdmin ? adminOrders : userOrders).map((order) => {
-      const messageCount =
-        "messages" in order ? order.messages?.length ?? 0 : 0;
-
-      return (
-        <button
-          key={order.id}
-          onClick={() => {
-            setSelectedOrderId(order.id);
-            setShowSidebar(false);
-          }}
-          className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
-            selectedOrderId === order.id
-              ? "bg-emerald-500/20 text-emerald-400"
-              : "text-white/70 hover:bg-white/10"
-          }`}
-        >
-          <div className="font-medium">{order.full_name}</div>
-          <div className="text-sm text-white/50">
-            Order #{order.id.slice(0, 8)}
+    return (isAdmin ? adminOrders : userOrders).map((order) => (
+      <button
+        key={order.id}
+        onClick={() => {
+          setSelectedOrderId(order.id);
+          setShowSidebar(false);
+        }}
+        className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+          selectedOrderId === order.id
+            ? "bg-emerald-500/20 text-emerald-400"
+            : "text-white/70 hover:bg-white/10"
+        }`}
+      >
+        <div className="font-medium">{order.full_name}</div>
+        <div className="text-sm text-white/50">
+          Order #{order.id.slice(0, 8)}
+        </div>
+        {isAdmin && order.messages?.length && (
+          <div className="text-xs text-emerald-400 mt-1">
+            {order.messages.length} messages
           </div>
-          {isAdmin && messageCount > 0 && (
-            <div className="text-xs text-emerald-400 mt-1">
-              {messageCount} messages
-            </div>
-          )}
-        </button>
-      );
-    });
+        )}
+      </button>
+    ));
   }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
 
   // Memoize messages list
@@ -116,6 +110,12 @@ function ChatPage() {
       />
     ));
   }, [messages, sending, unreadMessages]);
+
+  // Debounced message input handler
+  const debouncedSetNewMessage = useCallback(
+    debounce((value: string) => setNewMessage(value), 100),
+    []
+  );
 
   // Initialize audio on mount
   useEffect(() => {
@@ -379,20 +379,19 @@ function ChatPage() {
   }, []);
 
   useEffect(() => {
-    let isSubscribed = true;
-
     if (selectedOrderId) {
+      // Fetch messages first
       fetchMessages(selectedOrderId);
-      const cleanup = subscribeToMessages();
 
+      // Then set up subscription
+      const cleanup = subscribeToMessages();
       return () => {
-        isSubscribed = false;
         if (cleanup && typeof cleanup === "function") {
           cleanup();
         }
       };
     }
-  }, [selectedOrderId, subscribeToMessages, fetchMessages]);
+  }, [selectedOrderId, subscribeToMessages]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -576,10 +575,6 @@ function ChatPage() {
     [loadMoreMessages, hasMore]
   );
 
-  const createSubmitEvent = () => {
-    return new Event("submit", { cancelable: true }) as React.FormEvent;
-  };
-
   if (initialLoading) {
     return (
       <PageContainer title="CHAT" user={null}>
@@ -592,9 +587,9 @@ function ChatPage() {
 
   return (
     <PageContainer title="CHAT" showBack user={user}>
-      {error && (
-        <div className="fixed top-4 right-4 z-50 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
-          {error}
+      {notification && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
+          {notification}
         </div>
       )}
       <main className="max-w-6xl mx-auto px-4 py-8">
