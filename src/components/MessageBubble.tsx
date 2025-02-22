@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import LoadingSpinner from "./LoadingSpinner";
 import type { Message } from "../types/chat";
 
@@ -19,14 +19,26 @@ export const MessageBubble = React.memo(function MessageBubble({
   onRetry,
   isPending,
 }: MessageBubbleProps) {
+  const formattedTime = useMemo(() => {
+    return new Date(message.created_at).toLocaleString();
+  }, [message.created_at]);
+
+  const bubbleClasses = useMemo(() => {
+    return `flex items-start gap-3 ${
+      message.is_admin ? "justify-start" : "justify-end"
+    } ${isLatest && sending ? "opacity-50" : ""} ${
+      isUnread ? "animate-highlight-fade" : ""
+    }`;
+  }, [message.is_admin, isLatest, sending, isUnread]);
+
+  const contentClasses = useMemo(() => {
+    return `max-w-[70%] ${
+      message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
+    } rounded-lg p-3 relative group`;
+  }, [message.is_admin]);
+
   return (
-    <div
-      className={`flex items-start gap-3 ${
-        message.is_admin ? "justify-start" : "justify-end"
-      } ${isLatest && sending ? "opacity-50" : ""} ${
-        isUnread ? "animate-highlight-fade" : ""
-      }`}
-    >
+    <div className={bubbleClasses}>
       {message.is_admin && (
         <img
           src={message.user_avatar || "/default-avatar.png"}
@@ -37,18 +49,12 @@ export const MessageBubble = React.memo(function MessageBubble({
           height={32}
         />
       )}
-      <div
-        className={`max-w-[70%] ${
-          message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
-        } rounded-lg p-3 relative group`}
-      >
+      <div className={contentClasses}>
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-medium text-white/90">
             {message.user_name}
           </span>
-          <span className="text-xs text-white/50">
-            {new Date(message.created_at).toLocaleString()}
-          </span>
+          <span className="text-xs text-white/50">{formattedTime}</span>
         </div>
         {message.content && (
           <p className="text-white/90 whitespace-pre-wrap break-words">
