@@ -14,47 +14,16 @@ import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
-import VirtualizedMessageList from "../components/VirtualizedMessageList";
-import { Message, Order } from "../types/chat";
-import MessageBubble from "../components/MessageBubble";
+import { MessageBubble } from "../components/MessageBubble";
+import type { Message, Order } from "../types/chat";
 
 interface ChatProps {
   orderId: string;
 }
 
-// Create separate components for better performance
-const OrderButton = React.memo(function OrderButton({
-  order,
-  isSelected,
-  isAdmin,
-  onClick,
-}: {
-  order: Order;
-  isSelected: boolean;
-  isAdmin: boolean;
-  onClick: () => void;
-}) {
-  const messageCount = order.messages?.length ?? 0;
-
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
-        isSelected
-          ? "bg-emerald-500/20 text-emerald-400"
-          : "text-white/70 hover:bg-white/10"
-      }`}
-    >
-      <div className="font-medium">{order.full_name}</div>
-      <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {isAdmin && messageCount > 0 && (
-        <div className="text-xs text-emerald-400 mt-1">
-          {messageCount} messages
-        </div>
-      )}
-    </button>
-  );
-});
+// Add these constants outside component
+const MESSAGES_PER_PAGE = 50;
+const SCROLL_THRESHOLD = 300;
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -92,6 +61,11 @@ function ChatPage() {
   // Add audio ref to prevent multiple instances
   const notificationSound = useRef<HTMLAudioElement | null>(null);
 
+  // Add pagination state
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
+  const lastMessageRef = useRef<HTMLDivElement>(null);
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
@@ -99,16 +73,28 @@ function ChatPage() {
   // Memoize orders list
   const ordersList = useMemo(() => {
     return (isAdmin ? adminOrders : userOrders).map((order) => (
-      <OrderButton
+      <button
         key={order.id}
-        order={order}
-        isSelected={selectedOrderId === order.id}
-        isAdmin={isAdmin}
         onClick={() => {
           setSelectedOrderId(order.id);
           setShowSidebar(false);
         }}
-      />
+        className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+          selectedOrderId === order.id
+            ? "bg-emerald-500/20 text-emerald-400"
+            : "text-white/70 hover:bg-white/10"
+        }`}
+      >
+        <div className="font-medium">{order.full_name}</div>
+        <div className="text-sm text-white/50">
+          Order #{order.id.slice(0, 8)}
+        </div>
+        {isAdmin && order.messages?.length && (
+          <div className="text-xs text-emerald-400 mt-1">
+            {order.messages.length} messages
+          </div>
+        )}
+      </button>
     ));
   }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
 
@@ -339,79 +325,42 @@ function ChatPage() {
     [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
   );
 
-  // Memoize the message list component
-  const messageListComponent = useMemo(() => {
-    if (loading) {
-      return (
-        <div className="flex items-center justify-center h-full">
-          <LoadingSpinner size="lg" light />
-        </div>
-      );
-    }
-
-    if (messages.length === 0) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-          <p>No messages yet.</p>
-          <p className="text-sm">Start the conversation!</p>
-        </div>
-      );
-    }
-
-    return (
-      <VirtualizedMessageList
-        messages={messages}
-        messageQueue={messageQueue}
-        pendingMessages={pendingMessages}
-        unreadMessages={unreadMessages}
-        onRetry={retryMessage}
-      />
-    );
-  }, [loading, messages, unreadMessages, retryMessage]);
-
-  // Fix the Event type casting
-  const createSubmitEvent = (): React.FormEvent => {
-    const event = new Event("submit", {
-      bubbles: true,
-      cancelable: true,
-    });
-    return event as unknown as React.FormEvent;
-  };
-
-  // Update retry message
+  // Add message retry functionality
   const retryMessage = useCallback(
     async (tempId: string) => {
       const message = pendingMessages.current.get(tempId);
       if (!message) return;
 
+      // Remove failed message
       setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+
+      // Retry sending
       const content = message.content;
       pendingMessages.current.delete(tempId);
       setNewMessage(content);
-      await handleSendMessage(createSubmitEvent(), message.image_url);
+      await handleSendMessage(new Event("submit") as any, message.image_url);
     },
     [handleSendMessage]
   );
-
-  // Update image upload
-  const handleImageUpload = async () => {
-    if (!selectedImage) return;
-    try {
-      setSending(true);
-      const imageUrl = await uploadImage(selectedImage);
-      await handleSendMessage(createSubmitEvent(), imageUrl);
-    } catch (error) {
-      console.error("Error uploading image:", error);
-      toast.error("Failed to upload image");
-    } finally {
-      setSelectedImage(null);
-    }
-  };
 
   const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && file.type.startsWith("image/")) {
       setSelectedImage(file);
+    }
+  };
+
+  const handleImageUpload = async () => {
+    if (!selectedImage) return;
+    try {
+      setSending(true);
+      const imageUrl = await uploadImage(selectedImage);
+      await handleSendMessage(new Event("submit") as any, imageUrl);
+    } catch (error) {
+      console.error("Error uploading image:", error);
+      toast.error("Failed to upload image");
+    } finally {
+      setSelectedImage(null);
     }
   };
 
@@ -547,40 +496,84 @@ function ChatPage() {
     }
   };
 
-  const fetchMessages = async (orderId: string) => {
+  // Update fetchMessages to use pagination
+  const fetchMessages = useCallback(async (orderId: string) => {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from("messages")
-        .select(
-          `
-          *,
-          orders!inner(
-            user_id,
-            full_name
-          )
-        `
-        )
+        .select("*")
         .eq("order_id", orderId)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false })
+        .limit(MESSAGES_PER_PAGE);
 
       if (error) throw error;
 
-      setMessages(
-        data?.map((msg) => ({
-          ...msg,
-          is_admin: msg.user_id !== msg.orders.user_id,
-          orders: undefined,
-        })) || []
-      );
-      setTimeout(scrollToBottom, 100);
+      setMessages(data.reverse());
+      setHasMore(data.length === MESSAGES_PER_PAGE);
+      setPage(1);
     } catch (error) {
       console.error("Error fetching messages:", error);
       setError("Failed to load messages");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  // Add intersection observer for infinite scroll
+  useEffect(() => {
+    if (!lastMessageRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (first.isIntersecting && hasMore) {
+          loadMoreMessages();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(lastMessageRef.current);
+    return () => observer.disconnect();
+  }, [hasMore]);
+
+  // Add function to load more messages
+  const loadMoreMessages = useCallback(async () => {
+    if (!selectedOrderId || !hasMore) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("order_id", selectedOrderId)
+        .order("created_at", { ascending: false })
+        .range(page * MESSAGES_PER_PAGE, (page + 1) * MESSAGES_PER_PAGE - 1);
+
+      if (error) throw error;
+
+      if (data.length < MESSAGES_PER_PAGE) {
+        setHasMore(false);
+      }
+
+      setMessages((prev) => [...prev, ...data.reverse()]);
+      setPage((p) => p + 1);
+    } catch (error) {
+      console.error("Error loading more messages:", error);
+    }
+  }, [selectedOrderId, page, hasMore]);
+
+  // Add debounced scroll handler
+  const handleScroll = useMemo(
+    () =>
+      debounce((e: React.UIEvent<HTMLDivElement>) => {
+        const { scrollTop } = e.currentTarget;
+        if (scrollTop < SCROLL_THRESHOLD && hasMore) {
+          loadMoreMessages();
+        }
+      }, 100),
+    [loadMoreMessages, hasMore]
+  );
 
   if (initialLoading) {
     return (
@@ -669,9 +662,25 @@ function ChatPage() {
                   <div
                     ref={messageListRef}
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
+                    onScroll={handleScroll}
                   >
-                    {messageListComponent}
-                    <div ref={messagesEndRef} />
+                    {hasMore && (
+                      <div ref={lastMessageRef} className="h-4">
+                        {loading && <LoadingSpinner size="sm" light />}
+                      </div>
+                    )}
+                    {messages.map((message, index) => (
+                      <div key={message.id} data-message-id={message.id}>
+                        <MessageBubble
+                          message={message}
+                          isLatest={index === messages.length - 1}
+                          sending={messageQueue.current.has(message.id)}
+                          isUnread={unreadMessages.has(message.id)}
+                          onRetry={() => retryMessage(message.id)}
+                          isPending={pendingMessages.current.has(message.id)}
+                        />
+                      </div>
+                    ))}
                   </div>
 
                   {/* Message Input */}

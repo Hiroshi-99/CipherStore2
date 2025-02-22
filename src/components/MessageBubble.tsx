@@ -1,6 +1,6 @@
 import React from "react";
 import LoadingSpinner from "./LoadingSpinner";
-import { Message } from "../types/chat";
+import type { Message } from "../types/chat";
 
 interface MessageBubbleProps {
   message: Message;
@@ -11,7 +11,7 @@ interface MessageBubbleProps {
   isPending: boolean;
 }
 
-const MessageBubble = React.memo(function MessageBubble({
+export const MessageBubble = React.memo(function MessageBubble({
   message,
   isLatest,
   sending,
@@ -33,6 +33,8 @@ const MessageBubble = React.memo(function MessageBubble({
           alt="Avatar"
           className="w-8 h-8 rounded-full"
           loading="lazy"
+          width={32}
+          height={32}
         />
       )}
       <div
@@ -84,10 +86,10 @@ const MessageBubble = React.memo(function MessageBubble({
           alt="Avatar"
           className="w-8 h-8 rounded-full"
           loading="lazy"
+          width={32}
+          height={32}
         />
       )}
     </div>
   );
 });
-
-export default MessageBubble;
