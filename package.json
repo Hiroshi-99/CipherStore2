@@ -12,6 +12,7 @@
   "dependencies": {
     "@netlify/functions": "^2.8.2",
     "@supabase/supabase-js": "^2.39.7",
+    "@tanstack/react-virtual": "^3.13.0",
     "discord.js": "^14.18.0",
     "framer-motion": "^12.4.7",
     "lucide-react": "^0.344.0",

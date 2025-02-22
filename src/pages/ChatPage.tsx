@@ -14,6 +14,7 @@ import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
+import VirtualizedMessageList from "../components/VirtualizedMessageList";
 
 interface Message {
   id: string;
@@ -440,42 +441,79 @@ function ChatPage() {
     [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
   );
 
-  // Add message retry functionality
+  // Memoize the message list component
+  const messageListComponent = useMemo(() => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <LoadingSpinner size="lg" light />
+        </div>
+      );
+    }
+
+    if (messages.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
+          <p>No messages yet.</p>
+          <p className="text-sm">Start the conversation!</p>
+        </div>
+      );
+    }
+
+    return (
+      <VirtualizedMessageList
+        messages={messages}
+        messageQueue={messageQueue}
+        pendingMessages={pendingMessages}
+        unreadMessages={unreadMessages}
+        onRetry={retryMessage}
+      />
+    );
+  }, [loading, messages, unreadMessages, retryMessage]);
+
+  // Fix the Event type casting
+  const createSubmitEvent = (): React.FormEvent => {
+    const event = new Event("submit", {
+      bubbles: true,
+      cancelable: true,
+    });
+    return event as unknown as React.FormEvent;
+  };
+
+  // Update retry message
   const retryMessage = useCallback(
     async (tempId: string) => {
       const message = pendingMessages.current.get(tempId);
       if (!message) return;
 
-      // Remove failed message
       setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-
-      // Retry sending
       const content = message.content;
       pendingMessages.current.delete(tempId);
       setNewMessage(content);
-      await handleSendMessage(new Event("submit") as any, message.image_url);
+      await handleSendMessage(createSubmitEvent(), message.image_url);
     },
     [handleSendMessage]
   );
 
-  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && file.type.startsWith("image/")) {
-      setSelectedImage(file);
-    }
-  };
-
+  // Update image upload
   const handleImageUpload = async () => {
     if (!selectedImage) return;
     try {
       setSending(true);
       const imageUrl = await uploadImage(selectedImage);
-      await handleSendMessage(new Event("submit") as any, imageUrl);
+      await handleSendMessage(createSubmitEvent(), imageUrl);
     } catch (error) {
       console.error("Error uploading image:", error);
       toast.error("Failed to upload image");
     } finally {
       setSelectedImage(null);
+    }
+  };
+
+  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      setSelectedImage(file);
     }
   };
 
@@ -734,31 +772,7 @@ function ChatPage() {
                     ref={messageListRef}
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
                   >
-                    {loading ? (
-                      <div className="flex items-center justify-center h-full">
-                        <LoadingSpinner size="lg" light />
-                      </div>
-                    ) : messages.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-full text-white/50 space-y-2">
-                        <p>No messages yet.</p>
-                        <p className="text-sm">Start the conversation!</p>
-                      </div>
-                    ) : (
-                      messages.map((message) => (
-                        <div key={message.id} data-message-id={message.id}>
-                          <MessageBubble
-                            message={message}
-                            isLatest={
-                              message.id === messages[messages.length - 1].id
-                            }
-                            sending={messageQueue.current.has(message.id)}
-                            isUnread={unreadMessages.has(message.id)}
-                            onRetry={() => retryMessage(message.id)}
-                            isPending={pendingMessages.current.has(message.id)}
-                          />
-                        </div>
-                      ))
-                    )}
+                    {messageListComponent}
                     <div ref={messagesEndRef} />
                   </div>
 
