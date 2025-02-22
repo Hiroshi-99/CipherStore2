@@ -16,6 +16,7 @@ import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
 import type { Message, Order } from "../types/chat";
+import { useInView } from "react-intersection-observer";
 
 interface ChatProps {
   orderId: string;
@@ -24,6 +25,7 @@ interface ChatProps {
 // Add these constants outside component
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
+const AUTO_SCROLL_THRESHOLD = 100; // pixels from bottom to trigger auto-scroll
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -66,9 +68,24 @@ function ChatPage() {
   const [page, setPage] = useState(0);
   const lastMessageRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
+  // Add new state and refs
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const { ref: bottomRef, inView } = useInView({
+    threshold: 0,
+  });
+
+  const scrollToBottom = useCallback(
+    (force = false) => {
+      if (!chatContainerRef.current || (!shouldAutoScroll && !force)) return;
+
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: force ? "auto" : "smooth",
+      });
+    },
+    [shouldAutoScroll]
+  );
 
   // Memoize orders list
   const ordersList = useMemo(() => {
@@ -130,7 +147,31 @@ function ChatPage() {
     };
   }, []);
 
-  // Update message subscription with better sound handling
+  // Add scroll position tracking
+  const handleChatScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+      const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+
+      // Update auto-scroll based on user's scroll position
+      setShouldAutoScroll(distanceFromBottom < AUTO_SCROLL_THRESHOLD);
+
+      // Handle infinite scroll
+      if (scrollTop < SCROLL_THRESHOLD && hasMore) {
+        loadMoreMessages();
+      }
+    },
+    [hasMore, loadMoreMessages]
+  );
+
+  // Add effect to handle auto-scrolling
+  useEffect(() => {
+    if (inView) {
+      setShouldAutoScroll(true);
+    }
+  }, [inView]);
+
+  // Update message subscription to use new scroll behavior
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
 
@@ -160,32 +201,15 @@ function ChatPage() {
 
             const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther) {
-              // Play notification sound
-              if (notificationSound.current) {
-                notificationSound.current.currentTime = 0; // Reset audio
-                notificationSound.current.play().catch((error) => {
-                  console.warn("Failed to play notification sound:", error);
-                });
-              }
-
-              // Show toast notification
-              toast.message("New message", {
-                description: `${
-                  newMessage.user_name
-                }: ${newMessage.content.slice(0, 60)}${
-                  newMessage.content.length > 60 ? "..." : ""
-                }`,
-              });
-
-              if (!isTabFocused) {
-                setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-              }
+              playNotification();
+              showMessageNotification(newMessage);
             }
 
             return [...prev, newMessage];
           });
 
-          requestAnimationFrame(scrollToBottom);
+          // Auto-scroll for new messages
+          requestAnimationFrame(() => scrollToBottom());
         }
       )
       .subscribe();
@@ -194,7 +218,7 @@ function ChatPage() {
       isSubscribed = false;
       supabase.removeChannel(channel);
     };
-  }, [selectedOrderId, user?.id, scrollToBottom, isTabFocused]);
+  }, [selectedOrderId, user?.id, scrollToBottom]);
 
   // Add virtual scrolling
   useEffect(() => {
@@ -654,15 +678,15 @@ function ChatPage() {
           </div>
 
           {/* Chat Area */}
-          <div className="md:col-span-3">
-            <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
+          <div className="md:col-span-3 flex flex-col h-[calc(100vh-16rem)] md:h-[600px]">
+            <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden flex flex-col flex-1">
               {selectedOrderId ? (
                 <>
                   {/* Messages Container */}
                   <div
-                    ref={messageListRef}
-                    className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
-                    onScroll={handleScroll}
+                    ref={chatContainerRef}
+                    className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4"
+                    onScroll={handleChatScroll}
                   >
                     {hasMore && (
                       <div ref={lastMessageRef} className="h-4">
@@ -681,13 +705,33 @@ function ChatPage() {
                         />
                       </div>
                     ))}
+                    <div ref={bottomRef} className="h-px" />
                   </div>
 
                   {/* Message Input */}
                   <form
                     onSubmit={handleFormSubmit}
-                    className="border-t border-white/10 p-4"
+                    className="border-t border-white/10 p-4 sticky bottom-0 bg-black/30 backdrop-blur-sm"
                   >
+                    {selectedImage && (
+                      <div className="absolute -top-20 left-4 bg-black/50 rounded-lg p-2 backdrop-blur-sm">
+                        <div className="relative">
+                          <img
+                            src={URL.createObjectURL(selectedImage)}
+                            alt="Selected"
+                            className="h-16 w-16 object-cover rounded-lg"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setSelectedImage(null)}
+                            className="absolute -top-2 -right-2 bg-red-500 rounded-full p-1"
+                          >
+                            <span className="text-white text-xs">×</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex gap-2">
                       <input
                         type="file"
