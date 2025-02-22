@@ -32,7 +32,6 @@ const SCROLL_THRESHOLD = 300;
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
   const [newMessage, setNewMessage] = useState("");
-  const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -51,23 +50,33 @@ function ChatPage() {
   const [notification, setNotification] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const notificationSoundRef = useRef<HTMLAudioElement | null>(null);
 
-  // Replace message state with hook
+  // Use the messages hook
   const {
     messages,
-    loading,
+    loading: messagesLoading,
     hasMore,
     messageQueue,
     pendingMessages,
-    fetchMessages,
-    loadMoreMessages,
+    fetchMessages: fetchMessagesFromHook,
+    loadMoreMessages: loadMoreMessagesFromHook,
     addMessage,
     updateMessage,
     removeMessage,
   } = useMessages(selectedOrderId);
 
   // Add infinite scroll hook
-  const lastMessageRef = useInfiniteScroll(loadMoreMessages);
+  const lastMessageRef = useInfiniteScroll(() => loadMoreMessagesFromHook());
+
+  const playNotificationSound = useCallback(() => {
+    if (notificationSoundRef.current) {
+      notificationSoundRef.current.currentTime = 0;
+      notificationSoundRef.current.play().catch((error) => {
+        console.warn("Failed to play notification sound:", error);
+      });
+    }
+  }, []);
 
   // Add message subscription
   useMessageSubscription(selectedOrderId, user?.id, (newMessage) => {
@@ -76,6 +85,34 @@ function ChatPage() {
       playNotificationSound();
     }
   });
+
+  // Initialize audio on mount
+  useEffect(() => {
+    notificationSoundRef.current = new Audio("/sounds/gg.mp3");
+    notificationSoundRef.current.volume = 0.5;
+
+    return () => {
+      if (notificationSoundRef.current) {
+        notificationSoundRef.current.pause();
+        notificationSoundRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedOrderId) {
+      // Fetch messages first
+      fetchMessagesFromHook();
+
+      // Then set up subscription
+      const cleanup = subscribeToMessages();
+      return () => {
+        if (cleanup && typeof cleanup === "function") {
+          cleanup();
+        }
+      };
+    }
+  }, [selectedOrderId, subscribeToMessages, fetchMessagesFromHook]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -128,19 +165,6 @@ function ChatPage() {
     []
   );
 
-  // Initialize audio on mount
-  useEffect(() => {
-    notificationSound.current = new Audio("/sounds/gg.mp3");
-    notificationSound.current.volume = 0.5;
-
-    return () => {
-      if (notificationSound.current) {
-        notificationSound.current.pause();
-        notificationSound.current = null;
-      }
-    };
-  }, []);
-
   // Update message subscription with better sound handling
   const subscribeToMessages = useCallback(() => {
     if (!selectedOrderId) return undefined;
@@ -172,9 +196,9 @@ function ChatPage() {
             const isFromOther = newMessage.user_id !== user?.id;
             if (isFromOther) {
               // Play notification sound
-              if (notificationSound.current) {
-                notificationSound.current.currentTime = 0; // Reset audio
-                notificationSound.current.play().catch((error) => {
+              if (notificationSoundRef.current) {
+                notificationSoundRef.current.currentTime = 0; // Reset audio
+                notificationSoundRef.current.play().catch((error) => {
                   console.warn("Failed to play notification sound:", error);
                 });
               }
@@ -391,21 +415,6 @@ function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedOrderId) {
-      // Fetch messages first
-      fetchMessages(selectedOrderId);
-
-      // Then set up subscription
-      const cleanup = subscribeToMessages();
-      return () => {
-        if (cleanup && typeof cleanup === "function") {
-          cleanup();
-        }
-      };
-    }
-  }, [selectedOrderId, subscribeToMessages]);
-
-  useEffect(() => {
     const handleVisibilityChange = () => {
       setIsTabFocused(document.visibilityState === "visible");
     };
@@ -508,83 +517,16 @@ function ChatPage() {
     }
   };
 
-  // Update fetchMessages to use pagination
-  const fetchMessages = useCallback(async (orderId: string) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: false })
-        .limit(MESSAGES_PER_PAGE);
-
-      if (error) throw error;
-
-      setMessages(data.reverse());
-      setHasMore(data.length === MESSAGES_PER_PAGE);
-      setPage(1);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Add intersection observer for infinite scroll
-  useEffect(() => {
-    if (!lastMessageRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const first = entries[0];
-        if (first.isIntersecting && hasMore) {
-          loadMoreMessages();
-        }
-      },
-      { threshold: 0.1 }
-    );
-
-    observer.observe(lastMessageRef.current);
-    return () => observer.disconnect();
-  }, [hasMore]);
-
-  // Add function to load more messages
-  const loadMoreMessages = useCallback(async () => {
-    if (!selectedOrderId || !hasMore) return;
-
-    try {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", selectedOrderId)
-        .order("created_at", { ascending: false })
-        .range(page * MESSAGES_PER_PAGE, (page + 1) * MESSAGES_PER_PAGE - 1);
-
-      if (error) throw error;
-
-      if (data.length < MESSAGES_PER_PAGE) {
-        setHasMore(false);
-      }
-
-      setMessages((prev) => [...prev, ...data.reverse()]);
-      setPage((p) => p + 1);
-    } catch (error) {
-      console.error("Error loading more messages:", error);
-    }
-  }, [selectedOrderId, page, hasMore]);
-
   // Add debounced scroll handler
   const handleScroll = useMemo(
     () =>
       debounce((e: React.UIEvent<HTMLDivElement>) => {
         const { scrollTop } = e.currentTarget;
         if (scrollTop < SCROLL_THRESHOLD && hasMore) {
-          loadMoreMessages();
+          loadMoreMessagesFromHook();
         }
       }, 100),
-    [loadMoreMessages, hasMore]
+    [loadMoreMessagesFromHook, hasMore]
   );
 
   if (initialLoading) {
@@ -678,7 +620,7 @@ function ChatPage() {
                   >
                     {hasMore && (
                       <div ref={lastMessageRef} className="h-4">
-                        {loading && <LoadingSpinner size="sm" light />}
+                        {messagesLoading && <LoadingSpinner size="sm" light />}
                       </div>
                     )}
                     {messages.map((message, index) => (
