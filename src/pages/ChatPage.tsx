@@ -24,6 +24,7 @@ interface ChatProps {
 // Add these constants outside component
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
+const DEBOUNCE_DELAY = 100;
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -571,7 +572,7 @@ function ChatPage() {
         if (scrollTop < SCROLL_THRESHOLD && hasMore) {
           loadMoreMessages();
         }
-      }, 100),
+      }, DEBOUNCE_DELAY),
     [loadMoreMessages, hasMore]
   );
 
