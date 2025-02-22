@@ -5,7 +5,7 @@ export async function uploadImage(file: File) {
   const fileName = `${crypto.randomUUID()}.${fileExt}`;
   const filePath = `chat-images/${fileName}`;
 
-  const { data, error } = await supabase.storage
+  const { error } = await supabase.storage
     .from("images")
     .upload(filePath, file);
 

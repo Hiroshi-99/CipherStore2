@@ -135,6 +135,8 @@ const OrderButton = React.memo(function OrderButton({
   isAdmin: boolean;
   onClick: () => void;
 }) {
+  const messageCount = order.messages?.length ?? 0;
+
   return (
     <button
       onClick={onClick}
@@ -146,9 +148,9 @@ const OrderButton = React.memo(function OrderButton({
     >
       <div className="font-medium">{order.full_name}</div>
       <div className="text-sm text-white/50">Order #{order.id.slice(0, 8)}</div>
-      {isAdmin && order.messages?.length > 0 && (
+      {isAdmin && messageCount > 0 && (
         <div className="text-xs text-emerald-400 mt-1">
-          {order.messages.length} messages
+          {messageCount} messages
         </div>
       )}
     </button>
@@ -477,9 +479,13 @@ function ChatPage() {
     }
   };
 
-  const sendMessage = async (content: string, imageUrl?: string) => {
-    // Update your existing sendMessage function to handle imageUrl
-    // ... existing message sending logic ...
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedImage) {
+      await handleImageUpload();
+    } else if (newMessage.trim()) {
+      await handleSendMessage(e);
+    }
   };
 
   useEffect(() => {
@@ -758,7 +764,7 @@ function ChatPage() {
 
                   {/* Message Input */}
                   <form
-                    onSubmit={handleSendMessage}
+                    onSubmit={handleFormSubmit}
                     className="border-t border-white/10 p-4"
                   >
                     <div className="flex gap-2">
@@ -771,6 +777,7 @@ function ChatPage() {
                       />
 
                       <button
+                        type="button"
                         onClick={() => fileInputRef.current?.click()}
                         className="p-2 hover:bg-gray-700 rounded-full transition-colors"
                       >
@@ -780,13 +787,15 @@ function ChatPage() {
                       <input
                         type="text"
                         value={newMessage}
-                        onChange={(e) => debouncedSetNewMessage(e.target.value)}
+                        onChange={(e) => setNewMessage(e.target.value)}
                         placeholder="Type your message..."
                         className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                       />
                       <button
                         type="submit"
-                        disabled={!newMessage.trim() || sending}
+                        disabled={
+                          (!newMessage.trim() && !selectedImage) || sending
+                        }
                         className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {sending ? (
@@ -813,7 +822,7 @@ function ChatPage() {
 }
 
 // Debounce utility
-function debounce<T extends (...args: any[]) => any>(
+function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {
