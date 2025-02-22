@@ -1,9 +1,8 @@
 import { supabase } from "./supabase";
-import { v4 as uuidv4 } from "uuid";
 
 export async function uploadImage(file: File) {
   const fileExt = file.name.split(".").pop();
-  const fileName = `${uuidv4()}.${fileExt}`;
+  const fileName = `${crypto.randomUUID()}.${fileExt}`;
   const filePath = `chat-images/${fileName}`;
 
   const { data, error } = await supabase.storage

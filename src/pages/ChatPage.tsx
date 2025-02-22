@@ -340,9 +340,15 @@ function ChatPage() {
 
   // Optimized message sending with better error handling
   const handleSendMessage = useCallback(
-    async (e: React.FormEvent) => {
+    async (e: React.FormEvent, imageUrl?: string) => {
       e.preventDefault();
-      if (!user || !newMessage.trim() || sending || !selectedOrderId) return;
+      if (
+        !user ||
+        (!newMessage.trim() && !imageUrl) ||
+        sending ||
+        !selectedOrderId
+      )
+        return;
 
       const messageContent = newMessage.trim();
       setNewMessage("");
@@ -352,6 +358,7 @@ function ChatPage() {
       const optimisticMessage: Message = {
         id: tempId,
         content: messageContent,
+        imageUrl,
         user_id: user.id,
         user_name: user.user_metadata.full_name || user.email,
         user_avatar: user.user_metadata.avatar_url,
@@ -384,6 +391,7 @@ function ChatPage() {
           .insert([
             {
               content: messageContent,
+              imageUrl,
               user_id: user.id,
               is_admin: user.id !== orderData.user_id,
               user_name: user.user_metadata.full_name || user.email,
@@ -408,7 +416,9 @@ function ChatPage() {
         // Remove optimistic message on error
         setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
         setError("Failed to send message");
-        setNewMessage(messageContent);
+        if (!imageUrl) {
+          setNewMessage(messageContent);
+        }
       } finally {
         messageQueue.current.delete(tempId);
         pendingMessages.current.delete(tempId);
@@ -431,7 +441,7 @@ function ChatPage() {
       const content = message.content;
       pendingMessages.current.delete(tempId);
       setNewMessage(content);
-      await handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
+      await handleSendMessage(new Event("submit") as any, message.imageUrl);
     },
     [handleSendMessage]
   );
@@ -446,13 +456,14 @@ function ChatPage() {
   const handleImageUpload = async () => {
     if (!selectedImage) return;
     try {
+      setSending(true);
       const imageUrl = await uploadImage(selectedImage);
-      // Add your message sending logic here with the imageUrl
-      // Example:
-      sendMessage("", imageUrl); // Send message with empty content but with imageUrl
-      setSelectedImage(null);
+      await handleSendMessage(new Event("submit") as any, imageUrl);
     } catch (error) {
       console.error("Error uploading image:", error);
+      toast.error("Failed to upload image");
+    } finally {
+      setSelectedImage(null);
     }
   };
 
