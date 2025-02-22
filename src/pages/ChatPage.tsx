@@ -424,6 +424,13 @@ function ChatPage() {
     }
   };
 
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError(null);
+    }
+  }, [error]);
+
   if (initialLoading) {
     return (
       <PageContainer title="CHAT" user={null}>
