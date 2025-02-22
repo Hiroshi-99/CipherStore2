@@ -15,7 +15,7 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import { Toaster, toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
-import type { Message, Order } from "../types/chat";
+import type { Message } from "../types/chat";
 import { useMessages } from "../hooks/useMessages";
 import { useInfiniteScroll } from "../hooks/useInfiniteScroll";
 import { useMessageSubscription } from "../hooks/useMessageSubscription";
@@ -40,7 +40,11 @@ function ChatPage() {
     { id: string; full_name: string }[]
   >([]);
   const [adminOrders, setAdminOrders] = useState<
-    { id: string; full_name: string }[]
+    Array<{
+      id: string;
+      full_name: string;
+      messages_count?: number;
+    }>
   >([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -52,22 +56,28 @@ function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const notificationSoundRef = useRef<HTMLAudioElement | null>(null);
 
-  // Use the messages hook
+  // Message list container ref
+  const messageContainerRef = useRef<HTMLDivElement>(null);
+
   const {
     messages,
     loading: messagesLoading,
     hasMore,
     messageQueue,
     pendingMessages,
-    fetchMessages: fetchMessagesFromHook,
-    loadMoreMessages: loadMoreMessagesFromHook,
+    fetchMessages,
+    loadMoreMessages,
     addMessage,
     updateMessage,
     removeMessage,
   } = useMessages(selectedOrderId);
 
   // Add infinite scroll hook
-  const lastMessageRef = useInfiniteScroll(() => loadMoreMessagesFromHook());
+  const lastMessageRef = useInfiniteScroll(() => {
+    if (hasMore && !messagesLoading) {
+      loadMoreMessages();
+    }
+  });
 
   const playNotificationSound = useCallback(() => {
     if (notificationSoundRef.current) {
@@ -78,11 +88,12 @@ function ChatPage() {
     }
   }, []);
 
-  // Add message subscription
-  useMessageSubscription(selectedOrderId, user?.id, (newMessage) => {
+  // Update message subscription
+  useMessageSubscription(selectedOrderId, user?.id ?? null, (newMessage) => {
     if (!messageQueue.current.has(newMessage.id)) {
       addMessage(newMessage);
       playNotificationSound();
+      scrollToBottom();
     }
   });
 
@@ -102,7 +113,7 @@ function ChatPage() {
   useEffect(() => {
     if (selectedOrderId) {
       // Fetch messages first
-      fetchMessagesFromHook();
+      fetchMessages();
 
       // Then set up subscription
       const cleanup = subscribeToMessages();
@@ -112,15 +123,16 @@ function ChatPage() {
         }
       };
     }
-  }, [selectedOrderId, subscribeToMessages, fetchMessagesFromHook]);
+  }, [selectedOrderId, subscribeToMessages, fetchMessages]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // Memoize orders list
+  // Update ordersList memo
   const ordersList = useMemo(() => {
-    return (isAdmin ? adminOrders : userOrders).map((order) => (
+    const orders = isAdmin ? adminOrders : userOrders;
+    return orders.map((order) => (
       <button
         key={order.id}
         onClick={() => {
@@ -137,9 +149,9 @@ function ChatPage() {
         <div className="text-sm text-white/50">
           Order #{order.id.slice(0, 8)}
         </div>
-        {isAdmin && order.messages?.length && (
+        {isAdmin && order.messages_count && order.messages_count > 0 && (
           <div className="text-xs text-emerald-400 mt-1">
-            {order.messages.length} messages
+            {order.messages_count} messages
           </div>
         )}
       </button>
@@ -233,15 +245,15 @@ function ChatPage() {
 
   // Add virtual scrolling
   useEffect(() => {
-    if (!messageListRef.current) return;
+    if (!messageContainerRef.current) return;
 
     const options = {
-      root: messageListRef.current,
+      root: messageContainerRef.current,
       rootMargin: "20px",
       threshold: 0.1,
     };
 
-    observerRef.current = new IntersectionObserver((entries) => {
+    const observer = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
           const messageId = entry.target.getAttribute("data-message-id");
@@ -261,12 +273,12 @@ function ChatPage() {
         `[data-message-id="${message.id}"]`
       );
       if (element) {
-        observerRef.current?.observe(element);
+        observer.observe(element);
       }
     });
 
     return () => {
-      observerRef.current?.disconnect();
+      observer.disconnect();
     };
   }, [messages]);
 
@@ -498,16 +510,20 @@ function ChatPage() {
           `
           id,
           full_name,
-          messages (
-            id,
-            created_at
-          )
+          messages:messages_count(count)
         `
         )
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setAdminOrders(ordersData || []);
+
+      setAdminOrders(
+        ordersData?.map((order) => ({
+          ...order,
+          messages_count: order.messages?.[0]?.count ?? 0,
+        })) || []
+      );
+
       if (ordersData?.length > 0) {
         setSelectedOrderId(ordersData[0].id);
       }
@@ -516,18 +532,6 @@ function ChatPage() {
       setError("Failed to load orders");
     }
   };
-
-  // Add debounced scroll handler
-  const handleScroll = useMemo(
-    () =>
-      debounce((e: React.UIEvent<HTMLDivElement>) => {
-        const { scrollTop } = e.currentTarget;
-        if (scrollTop < SCROLL_THRESHOLD && hasMore) {
-          loadMoreMessagesFromHook();
-        }
-      }, 100),
-    [loadMoreMessagesFromHook, hasMore]
-  );
 
   if (initialLoading) {
     return (
@@ -614,9 +618,18 @@ function ChatPage() {
                 <>
                   {/* Messages Container */}
                   <div
-                    ref={messageListRef}
+                    ref={messageContainerRef}
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
-                    onScroll={handleScroll}
+                    onScroll={(e) => {
+                      const { scrollTop } = e.currentTarget;
+                      if (
+                        scrollTop < SCROLL_THRESHOLD &&
+                        hasMore &&
+                        !messagesLoading
+                      ) {
+                        loadMoreMessages();
+                      }
+                    }}
                   >
                     {hasMore && (
                       <div ref={lastMessageRef} className="h-4">
@@ -635,6 +648,7 @@ function ChatPage() {
                         />
                       </div>
                     ))}
+                    <div ref={messagesEndRef} />
                   </div>
 
                   {/* Message Input */}
