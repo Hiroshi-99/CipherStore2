@@ -162,7 +162,9 @@ function InboxPage() {
   };
 
   const filteredConversations = conversations.filter((conv) =>
-    conv.full_name.toLowerCase().includes(searchTerm.toLowerCase())
+    conv && typeof conv.full_name === "string"
+      ? conv.full_name.toLowerCase().includes(searchTerm.toLowerCase())
+      : false
   );
 
   if (loading) {
