@@ -818,6 +818,12 @@ function ChatPage() {
           filter: `order_id=eq.${selectedOrderId}`,
         },
         (payload) => {
+          // Make sure payload and payload.new exist
+          if (!payload || !payload.new) {
+            console.error("Invalid message payload:", payload);
+            return;
+          }
+
           // Only add the message if it's not from the current user
           // This prevents duplicate messages since we already add them optimistically
           const newMessage = payload.new as Message;
@@ -838,7 +844,7 @@ function ChatPage() {
                   .catch((err) => console.log("Error playing sound:", err));
               }
 
-              // Add the new message
+              // Add the new message with safe fallbacks for user_name and user_avatar
               return [
                 ...prev,
                 {
@@ -860,10 +866,12 @@ function ChatPage() {
                 "Notification" in window &&
                 Notification.permission === "granted"
               ) {
+                // Use safe fallbacks for notification content
+                const senderName = newMessage.user_name || "Someone";
+                const messageContent = newMessage.content || "Sent a message";
+
                 new Notification("New Message", {
-                  body: `${newMessage.user_name || "Someone"}: ${
-                    newMessage.content
-                  }`,
+                  body: `${senderName}: ${messageContent}`,
                   icon: "/favicon.ico",
                 });
               }
@@ -912,44 +920,55 @@ function ChatPage() {
     };
   }, []);
 
-  // Fix the handleTyping function
-  const handleTyping = useCallback(() => {
+  // Add this effect to listen for typing events
+  useEffect(() => {
     if (!selectedOrderId || !user) return;
 
-    // Send typing event
-    supabase.channel(`typing-${selectedOrderId}`).send({
-      type: "broadcast",
-      event: "typing",
-      payload: {
-        user_id: user.id,
-        user_name:
-          user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
-        is_admin: isAdmin,
-      },
-    });
+    const typingChannel = supabase
+      .channel(`typing-${selectedOrderId}`)
+      .on("broadcast", { event: "typing" }, (payload) => {
+        // Make sure payload and payload.payload exist and have the expected properties
+        if (!payload || !payload.payload || !payload.payload.user_id) {
+          console.error("Invalid typing payload:", payload);
+          return;
+        }
 
-    // Clear previous timeout
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
+        // Ignore own typing events
+        if (payload.payload.user_id === user?.id) return;
 
-    // Set new timeout to stop typing after 3 seconds
-    typingTimeoutRef.current = setTimeout(() => {
-      supabase.channel(`typing-${selectedOrderId}`).send({
-        type: "broadcast",
-        event: "stop_typing",
-        payload: {
-          user_id: user.id,
-        },
-      });
-    }, 3000);
-  }, [selectedOrderId, user, isAdmin]);
+        // Make sure user_name exists before adding to typing users
+        const userName = payload.payload.user_name || "Someone";
 
-  // Fix the handleMessageChange function
-  const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewMessage(e.target.value);
-    handleTyping();
-  };
+        // Add user to typing users
+        setTypingUsers((prev) => {
+          const newSet = new Set(prev);
+          newSet.add(userName);
+          return newSet;
+        });
+      })
+      .on("broadcast", { event: "stop_typing" }, (payload) => {
+        // Make sure payload and payload.payload exist and have the expected properties
+        if (!payload || !payload.payload || !payload.payload.user_id) {
+          console.error("Invalid stop_typing payload:", payload);
+          return;
+        }
+
+        // Get the user name from the payload or use the user_id as fallback
+        const userName = payload.payload.user_name || payload.payload.user_id;
+
+        // Remove user from typing users
+        setTypingUsers((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(userName);
+          return newSet;
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(typingChannel);
+    };
+  }, [selectedOrderId, user]);
 
   // Initialize the sound in useEffect
   useEffect(() => {
@@ -1133,6 +1152,45 @@ function ChatPage() {
     setIsTabFocused(document.visibilityState === "visible");
   }, []);
 
+  // Fix for the typing channel subscription
+  const handleTyping = useCallback(() => {
+    if (!selectedOrderId || !user) return;
+
+    // Safely extract user name with fallbacks
+    const userName =
+      user.user_metadata?.full_name ||
+      user.user_metadata?.name ||
+      (user.email ? user.email.split("@")[0] : "User");
+
+    // Send typing event
+    supabase.channel(`typing-${selectedOrderId}`).send({
+      type: "broadcast",
+      event: "typing",
+      payload: {
+        user_id: user.id,
+        user_name: userName,
+        is_admin: isAdmin,
+      },
+    });
+
+    // Clear previous timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Set new timeout to stop typing after 3 seconds
+    typingTimeoutRef.current = setTimeout(() => {
+      supabase.channel(`typing-${selectedOrderId}`).send({
+        type: "broadcast",
+        event: "stop_typing",
+        payload: {
+          user_id: user.id,
+          user_name: userName,
+        },
+      });
+    }, 3000);
+  }, [selectedOrderId, user, isAdmin]);
+
   if (fallbackMode) {
     return (
       <PageContainer title="CHAT" user={user}>
@@ -1231,7 +1289,10 @@ function ChatPage() {
                   <input
                     type="text"
                     value={newMessage}
-                    onChange={handleMessageChange}
+                    onChange={(e) => {
+                      setNewMessage(e.target.value);
+                      handleTyping();
+                    }}
                     placeholder="Type your message..."
                     className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                   />
@@ -1465,7 +1526,10 @@ function ChatPage() {
                       <input
                         type="text"
                         value={newMessage}
-                        onChange={handleMessageChange}
+                        onChange={(e) => {
+                          setNewMessage(e.target.value);
+                          handleTyping();
+                        }}
                         placeholder="Type your message..."
                         className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                         disabled={sending}
