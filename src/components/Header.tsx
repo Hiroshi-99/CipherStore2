@@ -114,6 +114,15 @@ function Header({ title, showBack = false, user }: HeaderProps) {
                 </div>
               )}
             </div>
+
+            {user && (
+              <Link
+                to="/accounts"
+                className="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
+              >
+                My Accounts
+              </Link>
+            )}
           </div>
         )}
       </div>

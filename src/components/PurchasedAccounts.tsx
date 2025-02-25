@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Download, Eye, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import AccountDetailsView from "./AccountDetailsView";
 
 interface Account {
   id: string;
@@ -11,6 +12,12 @@ interface Account {
   created_at: string;
   viewed: boolean;
   order_id: string;
+  account_details?: {
+    accountId: string;
+    password: string;
+    characterId?: string;
+    loginMethod?: string;
+  };
 }
 
 interface PurchasedAccountsProps {
@@ -20,6 +27,7 @@ interface PurchasedAccountsProps {
 const PurchasedAccounts: React.FC<PurchasedAccountsProps> = ({ userId }) => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
 
   useEffect(() => {
     fetchAccounts();
@@ -98,6 +106,72 @@ const PurchasedAccounts: React.FC<PurchasedAccountsProps> = ({ userId }) => {
     toast.success("Downloading all accounts");
   };
 
+  const parseAccountDetails = async (account: Account) => {
+    try {
+      // First check if we have account details in the order metadata
+      const { data: orderData, error: orderError } = await supabase
+        .from("orders")
+        .select("account_metadata")
+        .eq("id", account.id)
+        .single();
+
+      if (!orderError && orderData?.account_metadata) {
+        return {
+          ...account,
+          account_details: orderData.account_metadata,
+        };
+      }
+
+      // If no metadata, try to extract from the URL if it's a JSON file
+      if (account.file_url.endsWith(".json")) {
+        const response = await fetch(account.file_url);
+        const data = await response.json();
+
+        return {
+          ...account,
+          account_details: {
+            accountId: data.accountId || data.email || data.username || "",
+            password: data.password || "",
+            characterId: data.characterId || data.character_id || "",
+            loginMethod: data.loginMethod || data.login_method || "",
+          },
+        };
+      }
+
+      // Default fallback
+      return {
+        ...account,
+        account_details: {
+          accountId: account.name.includes("#")
+            ? `account${account.name.split("#")[1]}@example.com`
+            : "",
+          password: "Use login method: Receive code from email",
+          characterId: "",
+          loginMethod: "Receive code from email",
+        },
+      };
+    } catch (error) {
+      console.error("Error parsing account details:", error);
+      return account;
+    }
+  };
+
+  const viewAccount = async (account: Account) => {
+    try {
+      // Mark as viewed
+      markAsViewed(account.id);
+
+      // Parse account details
+      const accountWithDetails = await parseAccountDetails(account);
+
+      // Set selected account
+      setSelectedAccount(accountWithDetails);
+    } catch (error) {
+      console.error("Error viewing account:", error);
+      toast.error("Failed to load account details");
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-4 text-center">
@@ -141,11 +215,12 @@ const PurchasedAccounts: React.FC<PurchasedAccountsProps> = ({ userId }) => {
                 <FileText className="text-blue-500" size={24} />
               </div>
               <a
-                href={account.file_url}
-                target="_blank"
-                rel="noopener noreferrer"
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  viewAccount(account);
+                }}
                 className="font-medium hover:text-blue-500 transition-colors"
-                onClick={() => markAsViewed(account.id)}
               >
                 {account.name}
               </a>
@@ -186,6 +261,27 @@ const PurchasedAccounts: React.FC<PurchasedAccountsProps> = ({ userId }) => {
           </motion.div>
         ))}
       </div>
+
+      {selectedAccount && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full max-h-[90vh] overflow-auto">
+            <div className="p-4">
+              <AccountDetailsView
+                account={{
+                  id: selectedAccount.id,
+                  name: selectedAccount.name,
+                  accountId: selectedAccount.account_details?.accountId || "",
+                  password: selectedAccount.account_details?.password || "",
+                  characterId: selectedAccount.account_details?.characterId,
+                  loginMethod: selectedAccount.account_details?.loginMethod,
+                  viewed: selectedAccount.viewed,
+                }}
+                onClose={() => setSelectedAccount(null)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

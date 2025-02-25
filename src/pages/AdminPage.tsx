@@ -52,6 +52,14 @@ type DateRange = {
 // Add batch action types
 type BatchAction = "approve" | "reject" | "export" | "delete";
 
+// Add this interface for account details
+interface AccountDetails {
+  accountId: string;
+  password: string;
+  characterId?: string;
+  loginMethod?: string;
+}
+
 function AdminPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,6 +97,12 @@ function AdminPage() {
   const searchDebounceRef = useRef<NodeJS.Timeout>();
   const [showImageModal, setShowImageModal] = useState(false);
   const [currentImageUrl, setCurrentImageUrl] = useState("");
+  const [accountDetails, setAccountDetails] = useState<AccountDetails>({
+    accountId: "",
+    password: "",
+    characterId: "",
+    loginMethod: "Receive code from email",
+  });
 
   // Use the custom hook for order filtering
   const {
@@ -668,6 +682,131 @@ function AdminPage() {
     );
   };
 
+  // Add this function to handle account details upload
+  const handleAccountDetailsUpload = async () => {
+    try {
+      if (!selectedOrderId) {
+        toast.error("Please select an order first");
+        return;
+      }
+
+      setActionInProgress("uploading");
+      const toastId = toast.loading("Uploading account details...");
+
+      // Get the selected order
+      const selectedOrder = orders.find(
+        (order) => order.id === selectedOrderId
+      );
+      if (!selectedOrder) {
+        toast.error("Order not found", { id: toastId });
+        return;
+      }
+
+      // Create a JSON representation of the account details
+      const accountData = {
+        accountId: accountDetails.accountId,
+        password: accountDetails.password,
+        characterId: accountDetails.characterId || "",
+        loginMethod: accountDetails.loginMethod || "Receive code from email",
+      };
+
+      // Convert to JSON string
+      const jsonData = JSON.stringify(accountData, null, 2);
+
+      // Create a Blob from the JSON string
+      const blob = new Blob([jsonData], { type: "application/json" });
+
+      // Create a File from the Blob
+      const file = new File([blob], `account_${Date.now()}.json`, {
+        type: "application/json",
+      });
+
+      // Upload the file
+      const url = await uploadDirectToSupabase(file);
+
+      if (!url) {
+        throw new Error("Failed to upload account details");
+      }
+
+      // Update the order with the account details
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          account_file_url: url,
+          account_uploaded_at: new Date().toISOString(),
+          account_metadata: accountData,
+        })
+        .eq("id", selectedOrder.id);
+
+      if (error) {
+        console.error("Error updating order:", error);
+        toast.error("Failed to update order with account details", {
+          id: toastId,
+        });
+        throw error;
+      }
+
+      // Get current user info for the message
+      const { data: userData } = await supabase.auth.getUser();
+      const userName = userData?.user?.user_metadata?.full_name || "Admin";
+      const userAvatar =
+        userData?.user?.user_metadata?.avatar_url ||
+        "/images/support-avatar.png";
+
+      // Create a message to notify the user
+      const { error: messageError } = await supabase.from("messages").insert({
+        order_id: selectedOrder.id,
+        user_id: userData?.user?.id,
+        content:
+          "Your account details have been uploaded and are now available in your Purchased Accounts section.",
+        is_admin: true,
+        created_at: new Date().toISOString(),
+        user_name: userName,
+        user_avatar: userAvatar,
+      });
+
+      if (messageError) {
+        console.error("Error creating message:", messageError);
+        // Continue anyway since the details were uploaded
+      }
+
+      // Update local state
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === selectedOrder.id
+            ? {
+                ...order,
+                account_file_url: url,
+                account_uploaded_at: new Date().toISOString(),
+                account_metadata: accountData,
+              }
+            : order
+        )
+      );
+
+      // Show success message
+      toast.success(
+        "Account details uploaded and attached to order successfully!",
+        {
+          id: toastId,
+        }
+      );
+
+      // Reset form
+      setAccountDetails({
+        accountId: "",
+        password: "",
+        characterId: "",
+        loginMethod: "Receive code from email",
+      });
+    } catch (err) {
+      console.error("Error handling account details upload:", err);
+      toast.error("Failed to upload account details. Please try again.");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -1078,6 +1217,113 @@ function AdminPage() {
                   >
                     {selectedOrder?.status || "Unknown"}
                   </span>
+                </div>
+              </div>
+
+              {/* Account Details section */}
+              <div className="bg-gray-800 rounded-lg p-4 mb-4">
+                <h4 className="font-medium text-white mb-3">Account Details</h4>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Account ID / Email
+                    </label>
+                    <input
+                      type="text"
+                      value={accountDetails.accountId}
+                      onChange={(e) =>
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          accountId: e.target.value,
+                        }))
+                      }
+                      placeholder="e.g., user123@example.com"
+                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Password
+                    </label>
+                    <input
+                      type="text"
+                      value={accountDetails.password}
+                      onChange={(e) =>
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          password: e.target.value,
+                        }))
+                      }
+                      placeholder="Enter password or leave blank to use login method"
+                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Login Method
+                    </label>
+                    <select
+                      value={accountDetails.loginMethod}
+                      onChange={(e) =>
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          loginMethod: e.target.value,
+                        }))
+                      }
+                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                    >
+                      <option value="Receive code from email">
+                        Receive code from email
+                      </option>
+                      <option value="Use password">Use password</option>
+                      <option value="Google login">Google login</option>
+                      <option value="Facebook login">Facebook login</option>
+                      <option value="Apple login">Apple login</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Character ID (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={accountDetails.characterId}
+                      onChange={(e) =>
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          characterId: e.target.value,
+                        }))
+                      }
+                      placeholder="Optional character ID"
+                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleAccountDetailsUpload}
+                    className="w-full px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
+                    disabled={
+                      actionInProgress === "uploading" ||
+                      !selectedOrderId ||
+                      !accountDetails.accountId
+                    }
+                  >
+                    {actionInProgress === "uploading" ? (
+                      <span className="flex items-center justify-center">
+                        <RefreshCw className="animate-spin mr-2 h-4 w-4" />
+                        Uploading...
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center">
+                        <Upload className="mr-2 h-4 w-4" />
+                        Upload Account Details
+                      </span>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
