@@ -79,6 +79,7 @@ function ChatPage() {
     typeof adminOrders
   >([]);
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
 
   // Authentication check
   useEffect(() => {
@@ -431,14 +432,24 @@ function ChatPage() {
     [isAdmin]
   );
 
-  // Add the handleImageSelect function
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Add these improved file handling functions
 
-    // Check file size (limit to 5MB)
+  // Enhanced file upload handler
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
+      return;
+    }
+
+    // Validate file size (5MB max)
     if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image too large. Maximum size is 5MB.");
+      toast.error("Image size must be less than 5MB");
       return;
     }
 
@@ -450,9 +461,51 @@ function ChatPage() {
       setImagePreview(e.target?.result as string);
     };
     reader.readAsDataURL(file);
+
+    // Reset the input so the same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
-  // Add the handleSendMessage function
+  // Enhanced file upload function
+  const uploadImageFile = async (file: File): Promise<string | null> => {
+    try {
+      // Show upload progress
+      toast.loading("Uploading image...");
+
+      // Generate a unique file name
+      const fileName = `${Date.now()}-${file.name.replace(
+        /[^a-zA-Z0-9.]/g,
+        "_"
+      )}`;
+
+      // Upload the file
+      const { data, error } = await uploadImage(file, fileName);
+
+      if (error) {
+        console.error("Error uploading image:", error);
+        toast.error("Failed to upload image. Please try again.");
+        return null;
+      }
+
+      // Get the public URL
+      const imageUrl = data?.path
+        ? `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${
+            data.path
+          }`
+        : null;
+
+      toast.success("Image uploaded successfully");
+      return imageUrl;
+    } catch (err) {
+      console.error("Error in uploadImageFile:", err);
+      toast.error("An error occurred while uploading the image");
+      return null;
+    }
+  };
+
+  // Update the send message function to handle image uploads
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -460,42 +513,34 @@ function ChatPage() {
       return;
     }
 
-    setSending(true);
+    // Generate a temporary ID for the message
+    const tempId = `temp-${Date.now()}`;
 
     try {
-      let imageUrl: string | null = null;
+      setSending(true);
 
       // Upload image if selected
+      let imageUrl: string | null = null;
       if (selectedImage) {
-        try {
-          imageUrl = await uploadImage(selectedImage);
-        } catch (err) {
-          console.error("Error uploading image:", err);
-          toast.error("Failed to upload image. Please try again.");
+        imageUrl = await uploadImageFile(selectedImage);
+        if (!imageUrl && !newMessage.trim()) {
+          // If image upload failed and there's no text message, abort
           setSending(false);
           return;
         }
       }
 
-      // Get user profile information
+      // Get user info
       const userName =
-        user.user_metadata?.full_name ||
-        user.user_metadata?.name ||
-        user.email?.split("@")[0] ||
-        "User";
+        user.user_metadata?.full_name || user.email?.split("@")[0] || "User";
+      const userAvatar = user.user_metadata?.avatar_url || "";
 
-      const userAvatar =
-        user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
-
-      // Create a temporary ID for optimistic UI
-      const tempId = `temp-${Date.now()}`;
-
-      // Add optimistic message with complete profile info
-      const optimisticMessage: Message = {
+      // Create message object
+      const messageData = {
         id: tempId,
         content: newMessage.trim(),
-        order_id: selectedOrderId,
         user_id: user.id,
+        order_id: selectedOrderId,
         is_admin: isAdmin,
         created_at: new Date().toISOString(),
         is_read: false,
@@ -504,109 +549,92 @@ function ChatPage() {
         user_avatar: userAvatar || "",
       };
 
-      // Add to messages
-      setMessages((prev) => [...prev, optimisticMessage]);
+      // Add message to UI immediately (optimistic update)
+      setMessages((prev) => [...prev, messageData as Message]);
 
-      // Store pending message for retry
-      pendingMessages.current.set(tempId, {
-        content: newMessage.trim(),
-        image_url: imageUrl,
-        user_name: userName,
-        user_avatar: userAvatar,
-      });
+      // Scroll to bottom
+      scrollToBottom(true);
 
       // Clear input
       setNewMessage("");
       setSelectedImage(null);
       setImagePreview(null);
 
-      // Send to database
-      try {
-        const { data, error } = await supabase
-          .from("messages")
-          .insert([
-            {
-              content: newMessage.trim(),
-              order_id: selectedOrderId,
-              user_id: user.id,
-              is_admin: isAdmin,
-              image_url: imageUrl,
-              user_name: userName,
-              user_avatar: userAvatar,
-            },
-          ])
-          .select()
-          .single();
+      // Send message to server
+      const { error } = await supabase.from("messages").insert(messageData);
 
-        if (error) throw error;
+      if (error) {
+        console.error("Error sending message:", error);
 
-        // Replace optimistic message with real one
-        setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
+        // Store the failed message for retry
+        pendingMessages.current.set(tempId, {
+          ...messageData,
+          error: error.message,
+        });
 
-        // Clear pending message
-        pendingMessages.current.delete(tempId);
-      } catch (err) {
-        console.error("Error sending message:", err);
-        toast.error("Failed to send message. Message saved as draft.");
+        // Update UI to show error
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === tempId ? { ...m, error: error.message } : m
+          )
+        );
+
+        toast.error("Failed to send message. You can retry sending.");
       }
     } catch (err) {
       console.error("Error in handleSendMessage:", err);
-      toast.error("Something went wrong. Please try again.");
+      toast.error("An error occurred while sending your message");
     } finally {
       setSending(false);
     }
   };
 
-  // Add the handleRetry function
+  // Add a retry function for failed uploads
   const handleRetry = async (messageId: string) => {
     const pendingMessage = pendingMessages.current.get(messageId);
-    if (!pendingMessage || !selectedOrderId || !user) return;
-
-    setSending(true);
+    if (!pendingMessage) return;
 
     try {
-      // Get user profile information
-      const userName =
-        pendingMessage.user_name ||
-        user.user_metadata?.full_name ||
-        user.user_metadata?.name ||
-        user.email?.split("@")[0] ||
-        "User";
+      setSending(true);
 
-      const userAvatar =
-        pendingMessage.user_avatar ||
-        user.user_metadata?.avatar_url ||
-        user.user_metadata?.picture ||
-        null;
+      // If there's an image that failed to upload, try again
+      let imageUrl = pendingMessage.image_url;
+      if (pendingMessage.selectedImage && !imageUrl) {
+        imageUrl = await uploadImageFile(pendingMessage.selectedImage);
+      }
 
-      // Send to database
-      const { data, error } = await supabase
-        .from("messages")
-        .insert([
-          {
-            content: pendingMessage.content,
-            order_id: selectedOrderId,
-            user_id: user.id,
-            is_admin: isAdmin,
-            image_url: pendingMessage.image_url,
-            user_name: userName,
-            user_avatar: userAvatar,
-          },
-        ])
-        .select()
-        .single();
+      // Update the message with the new image URL if applicable
+      const messageToSend = {
+        ...pendingMessage,
+        image_url: imageUrl,
+      };
 
-      if (error) throw error;
+      // Remove error from UI
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, error: undefined } : m))
+      );
 
-      // Replace pending message with real one
-      setMessages((prev) => prev.map((m) => (m.id === messageId ? data : m)));
+      // Send to server
+      const { error } = await supabase.from("messages").insert(messageToSend);
 
-      // Clear pending message
+      if (error) {
+        throw error;
+      }
+
+      // Remove from pending messages
       pendingMessages.current.delete(messageId);
 
-      toast.success("Message sent successfully!");
+      toast.success("Message sent successfully");
     } catch (err) {
       console.error("Error retrying message:", err);
+
+      // Update UI to show error
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, error: "Failed to send. Try again." } : m
+        )
+      );
+
       toast.error("Failed to send message. Please try again.");
     } finally {
       setSending(false);
@@ -1255,9 +1283,34 @@ function ChatPage() {
     };
   }, [orderSearchTerm]);
 
-  // Add this function to send an automatic welcome message
+  // Add this function to check the message schema
+  const checkMessageSchema = async () => {
+    try {
+      // Get information about the messages table
+      const { data, error } = await supabase.rpc("get_table_info", {
+        table_name: "messages",
+      });
+
+      if (error) {
+        console.error("Error getting message schema:", error);
+        return null;
+      }
+
+      console.log("Message schema:", data);
+      return data;
+    } catch (err) {
+      console.error("Error checking message schema:", err);
+      return null;
+    }
+  };
+
+  // Update the sendWelcomeMessage function with better error handling
   const sendWelcomeMessage = async (orderId: string) => {
     try {
+      // Check the message schema first
+      const schema = await checkMessageSchema();
+      console.log("Using message schema:", schema);
+
       // Check if there are any messages in this chat
       const { data: existingMessages, error: checkError } = await supabase
         .from("messages")
@@ -1272,19 +1325,34 @@ function ChatPage() {
 
       // Only send welcome message if this is the first message in the chat
       if (!existingMessages || existingMessages.length === 0) {
-        // Create the welcome message
+        // Get admin user to use as the sender
+        const { data: adminUsers, error: adminError } = await supabase
+          .from("users")
+          .select("id")
+          .eq("is_admin", true)
+          .limit(1);
+
+        // Use the first admin user or fall back to the current user's ID
+        const adminId =
+          adminUsers && adminUsers.length > 0
+            ? adminUsers[0].id
+            : user?.id || "00000000-0000-0000-0000-000000000000";
+
+        // Create the welcome message with proper UUID
         const welcomeMessage = {
-          id: `welcome-${Date.now()}`,
+          id: crypto.randomUUID(),
           content:
             "Thank you for your order! Our support team will be with you shortly. Feel free to ask any questions about your order here.",
-          user_id: "system", // Use a special ID for system messages
+          user_id: adminId,
           order_id: orderId,
           is_admin: true,
           created_at: new Date().toISOString(),
           is_read: false,
           user_name: "Support Team",
-          user_avatar: "/images/support-avatar.png", // Add a default support avatar
+          user_avatar: "/images/support-avatar.png",
         };
+
+        console.log("Sending welcome message:", welcomeMessage);
 
         // Insert the welcome message into the database
         const { error: insertError } = await supabase
@@ -1297,11 +1365,70 @@ function ChatPage() {
           console.log("Welcome message sent successfully");
 
           // Add the message to the UI
-          setMessages([welcomeMessage as Message]);
+          setMessages((prev) => [...prev, welcomeMessage as Message]);
         }
       }
     } catch (err) {
       console.error("Error in sendWelcomeMessage:", err);
+    }
+  };
+
+  // Add this simpler fallback approach
+  const sendSimpleWelcomeMessage = async (orderId: string) => {
+    try {
+      // Create a minimal welcome message with only required fields
+      const minimalMessage = {
+        content:
+          "Thank you for your order! Our support team will be with you shortly.",
+        user_id: user?.id || "00000000-0000-0000-0000-000000000000",
+        order_id: orderId,
+        is_admin: true,
+        created_at: new Date().toISOString(),
+      };
+
+      console.log("Sending minimal welcome message:", minimalMessage);
+
+      // Insert the minimal message
+      const { error: insertError } = await supabase
+        .from("messages")
+        .insert(minimalMessage);
+
+      if (insertError) {
+        console.error("Error sending minimal welcome message:", insertError);
+      } else {
+        console.log("Minimal welcome message sent successfully");
+
+        // Add the message to the UI with additional fields for display
+        setMessages((prev) => [
+          ...prev,
+          {
+            ...minimalMessage,
+            id: generateUUID(),
+            user_name: "Support Team",
+            user_avatar: "/images/support-avatar.png",
+            is_read: false,
+          } as Message,
+        ]);
+      }
+    } catch (err) {
+      console.error("Error in sendSimpleWelcomeMessage:", err);
+    }
+  };
+
+  // Try the main approach first, then fall back to the simpler approach
+  const sendWelcomeMessage = async (orderId: string) => {
+    try {
+      // ... existing code ...
+
+      // If the main approach fails, try the simpler approach
+      if (insertError) {
+        console.log("Falling back to simpler welcome message approach");
+        await sendSimpleWelcomeMessage(orderId);
+      }
+    } catch (err) {
+      console.error("Error in sendWelcomeMessage:", err);
+      // Try the simpler approach as a fallback
+      await sendSimpleWelcomeMessage(orderId);
     }
   };
 
@@ -1370,6 +1497,77 @@ function ChatPage() {
         await sendWelcomeMessage(orderId);
       }
     }
+  };
+
+  // Add this helper function for generating UUIDs
+  const generateUUID = () => {
+    // Use crypto.randomUUID if available
+    if (
+      typeof crypto !== "undefined" &&
+      typeof crypto.randomUUID === "function"
+    ) {
+      return crypto.randomUUID();
+    }
+
+    // Fallback implementation
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+      /[xy]/g,
+      function (c) {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      }
+    );
+  };
+
+  // Add these handlers for drag and drop
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please drop an image file");
+      return;
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image size must be less than 5MB");
+      return;
+    }
+
+    setSelectedImage(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
 
   if (fallbackMode) {
@@ -1754,7 +1952,23 @@ function ChatPage() {
                 </div>
 
                 {/* Message input */}
-                <div className="p-4 border-t border-white/10">
+                <div
+                  className={`p-4 border-t border-white/10 ${
+                    isDragging ? "bg-emerald-500/10" : ""
+                  }`}
+                  onDragEnter={handleDragEnter}
+                  onDragLeave={handleDragLeave}
+                  onDragOver={handleDragOver}
+                  onDrop={handleDrop}
+                >
+                  {isDragging && (
+                    <div className="absolute inset-0 bg-emerald-500/10 flex items-center justify-center z-10 pointer-events-none">
+                      <div className="bg-gray-800 rounded-lg p-4 shadow-lg text-white">
+                        <p>Drop image here</p>
+                      </div>
+                    </div>
+                  )}
+
                   <form onSubmit={handleSendMessage}>
                     {imagePreview && (
                       <div className="mb-4 relative inline-block">
@@ -1790,6 +2004,7 @@ function ChatPage() {
                         onClick={() => fileInputRef.current?.click()}
                         className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
                         disabled={sending}
+                        aria-label="Attach image"
                       >
                         <ImageIcon className="w-6 h-6" />
                       </button>
@@ -1812,6 +2027,7 @@ function ChatPage() {
                           (!newMessage.trim() && !selectedImage) || sending
                         }
                         className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        aria-label="Send message"
                       >
                         {sending ? (
                           <RefreshCw className="w-6 h-6 animate-spin" />
