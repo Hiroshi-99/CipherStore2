@@ -1304,13 +1304,10 @@ function ChatPage() {
     }
   };
 
-  // Update the sendWelcomeMessage function with better error handling
+  // Remove the duplicate sendWelcomeMessage function and combine the functionality
+  // Replace both functions with this single implementation
   const sendWelcomeMessage = async (orderId: string) => {
     try {
-      // Check the message schema first
-      const schema = await checkMessageSchema();
-      console.log("Using message schema:", schema);
-
       // Check if there are any messages in this chat
       const { data: existingMessages, error: checkError } = await supabase
         .from("messages")
@@ -1325,47 +1322,59 @@ function ChatPage() {
 
       // Only send welcome message if this is the first message in the chat
       if (!existingMessages || existingMessages.length === 0) {
-        // Get admin user to use as the sender
-        const { data: adminUsers, error: adminError } = await supabase
-          .from("users")
-          .select("id")
-          .eq("is_admin", true)
-          .limit(1);
+        try {
+          // Check the message schema first
+          const schema = await checkMessageSchema();
+          console.log("Using message schema:", schema);
 
-        // Use the first admin user or fall back to the current user's ID
-        const adminId =
-          adminUsers && adminUsers.length > 0
-            ? adminUsers[0].id
-            : user?.id || "00000000-0000-0000-0000-000000000000";
+          // Get admin user to use as the sender
+          const { data: adminUsers, error: adminError } = await supabase
+            .from("users")
+            .select("id")
+            .eq("is_admin", true)
+            .limit(1);
 
-        // Create the welcome message with proper UUID
-        const welcomeMessage = {
-          id: crypto.randomUUID(),
-          content:
-            "Thank you for your order! Our support team will be with you shortly. Feel free to ask any questions about your order here.",
-          user_id: adminId,
-          order_id: orderId,
-          is_admin: true,
-          created_at: new Date().toISOString(),
-          is_read: false,
-          user_name: "Support Team",
-          user_avatar: "/images/support-avatar.png",
-        };
+          // Use the first admin user or fall back to the current user's ID
+          const adminId =
+            adminUsers && adminUsers.length > 0
+              ? adminUsers[0].id
+              : user?.id || "00000000-0000-0000-0000-000000000000";
 
-        console.log("Sending welcome message:", welcomeMessage);
+          // Create the welcome message with proper UUID
+          const welcomeMessage = {
+            id: generateUUID(),
+            content:
+              "Thank you for your order! Our support team will be with you shortly. Feel free to ask any questions about your order here.",
+            user_id: adminId,
+            order_id: orderId,
+            is_admin: true,
+            created_at: new Date().toISOString(),
+            is_read: false,
+            user_name: "Support Team",
+            user_avatar: "/images/support-avatar.png",
+          };
 
-        // Insert the welcome message into the database
-        const { error: insertError } = await supabase
-          .from("messages")
-          .insert(welcomeMessage);
+          console.log("Sending welcome message:", welcomeMessage);
 
-        if (insertError) {
-          console.error("Error sending welcome message:", insertError);
-        } else {
-          console.log("Welcome message sent successfully");
+          // Insert the welcome message into the database
+          const { error: insertError } = await supabase
+            .from("messages")
+            .insert(welcomeMessage);
 
-          // Add the message to the UI
-          setMessages((prev) => [...prev, welcomeMessage as Message]);
+          if (insertError) {
+            console.error("Error sending welcome message:", insertError);
+            // If the main approach fails, try the simpler approach
+            await sendSimpleWelcomeMessage(orderId);
+          } else {
+            console.log("Welcome message sent successfully");
+
+            // Add the message to the UI
+            setMessages((prev) => [...prev, welcomeMessage as Message]);
+          }
+        } catch (err) {
+          console.error("Error in sendWelcomeMessage:", err);
+          // Try the simpler approach as a fallback
+          await sendSimpleWelcomeMessage(orderId);
         }
       }
     } catch (err) {
@@ -1412,23 +1421,6 @@ function ChatPage() {
       }
     } catch (err) {
       console.error("Error in sendSimpleWelcomeMessage:", err);
-    }
-  };
-
-  // Try the main approach first, then fall back to the simpler approach
-  const sendWelcomeMessage = async (orderId: string) => {
-    try {
-      // ... existing code ...
-
-      // If the main approach fails, try the simpler approach
-      if (insertError) {
-        console.log("Falling back to simpler welcome message approach");
-        await sendSimpleWelcomeMessage(orderId);
-      }
-    } catch (err) {
-      console.error("Error in sendWelcomeMessage:", err);
-      // Try the simpler approach as a fallback
-      await sendSimpleWelcomeMessage(orderId);
     }
   };
 
