@@ -311,3 +311,58 @@ export async function getLocalUsers(adminUserId: string) {
     };
   }
 }
+
+// Add this function to get all users from auth metadata
+export async function getAllUsersClientSide() {
+  try {
+    // First check if the current user is an admin
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return { success: false, error: "Not authenticated" };
+    }
+
+    const isAdmin = await checkIfAdmin(user.id);
+    if (!isAdmin) {
+      return {
+        success: false,
+        error: "Unauthorized: Only admins can view all users",
+      };
+    }
+
+    // Get all admin users
+    const { data: adminUsers, error: adminError } = await supabase
+      .from("admin_users")
+      .select("user_id");
+
+    if (adminError) {
+      console.error("Error fetching admin users:", adminError);
+      // Continue with just the current user
+    }
+
+    // Create a set of admin user IDs for quick lookup
+    const adminUserIds = new Set(
+      (adminUsers || []).map((admin) => admin.user_id)
+    );
+
+    // Always include the current user
+    return {
+      success: true,
+      data: [
+        {
+          id: user.id,
+          email: user.email || "",
+          fullName: user.user_metadata?.full_name || "",
+          isAdmin: true, // Current user is admin (we checked above)
+          lastSignIn: null,
+          createdAt: user.created_at,
+        },
+      ],
+    };
+  } catch (err) {
+    console.error("Error in getAllUsersClientSide:", err);
+    return { success: false, error: "Failed to get user information" };
+  }
+}

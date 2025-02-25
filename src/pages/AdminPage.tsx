@@ -44,6 +44,7 @@ import {
   revokeAdminPrivileges,
   fetchUsersWithAdminStatus,
   getLocalUsers,
+  getAllUsersClientSide,
 } from "../lib/adminService";
 
 interface Admin {
@@ -116,6 +117,7 @@ function AdminPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [selectedTab, setSelectedTab] = useState("users");
   const [fallbackMode, setFallbackMode] = useState(false);
+  const [newAdminEmail, setNewAdminEmail] = useState("");
 
   // This will define the selectedOrder based on the selectedOrderId
   const selectedOrder = selectedOrderId
@@ -704,32 +706,19 @@ Please keep these details secure. You can copy them by selecting the text.
     setLoading(true);
 
     try {
-      // Try the serverless function first
-      const result = await fetchUsersWithAdminStatus(adminUserId);
+      // Try the client-side approach first
+      const result = await getAllUsersClientSide();
 
-      if (result.success && result.data && result.data.length > 0) {
+      if (result.success && result.data) {
         setUsers(result.data);
-        setLoading(false);
-        return;
-      }
-    } catch (err) {
-      console.error("Error fetching users via function:", err);
-    }
-
-    // If we get here, try the local fallback
-    try {
-      const localResult = await getLocalUsers(adminUserId);
-
-      if (localResult.success && localResult.data) {
-        setUsers(localResult.data);
-        toast.info("Using local user data (limited functionality)");
+        toast.info("Using local user data");
       } else {
-        toast.error(localResult.error || "Failed to load users");
+        toast.error(result.error || "Failed to load users");
         setUsers([]);
       }
-    } catch (localErr) {
-      console.error("Error in local fallback:", localErr);
-      toast.error("Failed to load any user data");
+    } catch (err) {
+      console.error("Error fetching users:", err);
+      toast.error("Failed to load user data");
       setUsers([]);
     } finally {
       setLoading(false);
@@ -801,6 +790,44 @@ Please keep these details secure. You can copy them by selecting the text.
       user.id.toLowerCase().includes(searchLower)
     );
   });
+
+  const addAdminByEmail = async () => {
+    if (!newAdminEmail.trim()) {
+      toast.error("Please enter an email address");
+      return;
+    }
+
+    try {
+      // First get the user ID from the email
+      const { data: userWithEmail, error: userError } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", newAdminEmail.trim())
+        .single();
+
+      if (userError || !userWithEmail) {
+        toast.error("User not found with that email");
+        return;
+      }
+
+      // Grant admin privileges
+      const result = await grantAdminPrivileges(
+        currentUser.id,
+        userWithEmail.id
+      );
+
+      if (result.success) {
+        toast.success(`Admin privileges granted to ${newAdminEmail}`);
+        setNewAdminEmail("");
+        fetchUsers(currentUser.id);
+      } else {
+        toast.error(result.error || "Failed to grant admin privileges");
+      }
+    } catch (err) {
+      console.error("Error adding admin by email:", err);
+      toast.error("Failed to add admin");
+    }
+  };
 
   if (loading) {
     return (
@@ -1014,6 +1041,25 @@ Please keep these details secure. You can copy them by selecting the text.
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="mt-6 p-4 bg-white/5 rounded-lg">
+                <h3 className="text-lg font-medium mb-4">Add Admin User</h3>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={newAdminEmail}
+                    onChange={(e) => setNewAdminEmail(e.target.value)}
+                    placeholder="User email address"
+                    className="flex-1 px-3 py-2 bg-gray-800 rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={addAdminByEmail}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white transition-colors"
+                  >
+                    Add Admin
+                  </button>
+                </div>
               </div>
             </div>
           )}
