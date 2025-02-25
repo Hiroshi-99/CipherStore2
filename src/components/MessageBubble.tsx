@@ -39,9 +39,6 @@ export const MessageBubble = React.memo(function MessageBubble({
   // First, check if the message is an account details message
   const isAccountDetails = message.is_account_details;
 
-  // Add this check before the isAccountDetails check
-  const isSystemMessage = message.is_system;
-
   return (
     <div
       className={`flex items-start gap-3 ${
@@ -80,11 +77,7 @@ export const MessageBubble = React.memo(function MessageBubble({
             {relativeTime}
           </span>
         </div>
-        {isSystemMessage ? (
-          <div className="bg-red-50 p-3 rounded-lg border border-red-200">
-            <div className="text-red-800 text-sm">{message.content}</div>
-          </div>
-        ) : isAccountDetails ? (
+        {isAccountDetails ? (
           <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
             <div className="font-medium text-blue-800 mb-2">
               Account Details
@@ -135,7 +128,8 @@ export const MessageBubble = React.memo(function MessageBubble({
                   );
                 } else if (
                   line.trim() &&
-                  !line.includes("Please keep these details")
+                  !line.includes("Please keep these details") &&
+                  !line.startsWith("**")
                 ) {
                   return (
                     <p key={i} className="text-gray-700">
@@ -145,9 +139,29 @@ export const MessageBubble = React.memo(function MessageBubble({
                 }
                 return null;
               })}
-              <p className="text-xs text-gray-500 mt-2">
-                Please keep these details secure.
-              </p>
+              <div className="flex justify-between items-center mt-4 pt-2 border-t border-gray-200">
+                <p className="text-xs text-gray-500">
+                  Please keep these details secure.
+                </p>
+                <button
+                  onClick={() => {
+                    const accountId =
+                      message.content.match(
+                        /\*\*Account ID:\*\* (.*?)(\n|$)/
+                      )?.[1] || "";
+                    const password =
+                      message.content.match(
+                        /\*\*Password:\*\* (.*?)(\n|$)/
+                      )?.[1] || "";
+                    const fullDetails = `Account ID: ${accountId}\nPassword: ${password}`;
+                    navigator.clipboard.writeText(fullDetails);
+                    toast.success("All details copied to clipboard");
+                  }}
+                  className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-600 px-2 py-1 rounded"
+                >
+                  Copy All
+                </button>
+              </div>
             </div>
           </div>
         ) : (

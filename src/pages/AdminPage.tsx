@@ -25,6 +25,7 @@ import {
   Clock,
   User,
   Upload,
+  Trash,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
@@ -57,20 +58,6 @@ interface AccountDetails {
   accountId: string;
   password: string;
 }
-
-// Add account detail templates
-const accountTemplates = [
-  {
-    name: "Template 1",
-    accountId: "user@example.com",
-    password: "DemoPass123",
-  },
-  {
-    name: "Template 2",
-    accountId: "game_account",
-    password: "GamePass456",
-  },
-];
 
 function AdminPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -218,27 +205,14 @@ function AdminPage() {
         .order("created_at", { ascending: false });
 
       if (ordersError) throw ordersError;
+      setOrders(ordersData || []);
 
-      // Process orders data
-      const processedOrders = ordersData.map((order) => ({
-        ...order,
-        // Add any additional processing here
-      }));
-
-      setOrders(processedOrders);
-
-      // Calculate stats
-      const stats = {
-        total: processedOrders.length,
-        pending: processedOrders.filter((o) => o.status === "pending").length,
-        approved: processedOrders.filter((o) => o.status === "approved").length,
-        rejected: processedOrders.filter((o) => o.status === "rejected").length,
-      };
-
-      setStats(stats);
+      // Update stats
+      setStats(calculateStats(ordersData || []));
     } catch (error) {
       console.error("Error fetching orders:", error);
-      setError("Failed to load orders. Please try again.");
+      setError("Failed to load orders");
+      toast.error("Failed to load orders");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -267,11 +241,17 @@ function AdminPage() {
   };
 
   const handlePaymentAction = useCallback(
-    async (orderId: string, status: string) => {
+    async (orderId: string, status: "approved" | "rejected") => {
       try {
         setActionInProgress(orderId);
 
-        // Update order status
+        // If approving, use the handleApprove function instead
+        if (status === "approved") {
+          await handleApprove(orderId);
+          return;
+        }
+
+        // For rejection, update the order status
         const { error } = await supabase
           .from("orders")
           .update({ status })
@@ -286,82 +266,15 @@ function AdminPage() {
           )
         );
 
-        // If order is rejected, schedule auto-delete of chat after 5 minutes
-        if (status === "rejected") {
-          // Send a system message to inform the user
-          const systemMessage = `Your order has been rejected. This chat will be automatically deleted in 5 minutes. You will not be able to send new messages.`;
-
-          // Add system message to the chat
-          const { error: messageError } = await supabase
-            .from("messages")
-            .insert({
-              order_id: orderId,
-              content: systemMessage,
-              is_admin: true,
-              is_system: true, // Add this flag to identify system messages
-              created_at: new Date().toISOString(),
-              user_name: "System",
-              user_avatar: "/images/system-avatar.png",
-            });
-
-          if (messageError) {
-            console.error("Error sending system message:", messageError);
-          }
-
-          // Schedule deletion after 5 minutes (300000 ms)
-          // Note: In a real production app, you would use a server-side scheduled job
-          // This client-side timeout is just for demonstration
-          setTimeout(async () => {
-            try {
-              // Delete all messages for this order
-              const { error: deleteMessagesError } = await supabase
-                .from("messages")
-                .delete()
-                .eq("order_id", orderId);
-
-              if (deleteMessagesError) {
-                console.error("Error deleting messages:", deleteMessagesError);
-              }
-
-              // Update order to mark chat as deleted
-              const { error: updateOrderError } = await supabase
-                .from("orders")
-                .update({ chat_deleted: true })
-                .eq("id", orderId);
-
-              if (updateOrderError) {
-                console.error("Error updating order:", updateOrderError);
-              }
-
-              // Update local state
-              setOrders((prev) =>
-                prev.map((order) =>
-                  order.id === orderId
-                    ? { ...order, chat_deleted: true }
-                    : order
-                )
-              );
-
-              toast.success(`Chat for rejected order has been deleted.`);
-            } catch (err) {
-              console.error("Error in auto-delete process:", err);
-            }
-          }, 300000); // 5 minutes
-
-          toast.success(
-            `Order rejected. Chat will be automatically deleted in 5 minutes.`
-          );
-        } else {
-          toast.success(`Order ${status} successfully!`);
-        }
-      } catch (error) {
-        console.error(`Error ${status} order:`, error);
+        toast.success(`Order ${status} successfully`);
+      } catch (err) {
+        console.error(`Error ${status} order:`, err);
         toast.error(`Failed to ${status} order. Please try again.`);
       } finally {
         setActionInProgress(null);
       }
     },
-    []
+    [handleApprove]
   );
 
   const handleFileUploadSuccess = useCallback(
@@ -441,7 +354,7 @@ function AdminPage() {
   }, [filteredOrders]);
 
   // Add stats display component
-  const QuickStatsDashboard = () => (
+  const StatsDisplay = () => (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
       {Object.entries(stats).map(([key, value]) => (
         <div key={key} className="bg-white/5 p-4 rounded-lg">
@@ -455,15 +368,12 @@ function AdminPage() {
   // Add batch action handler
   const handleBatchAction = async (action: BatchAction) => {
     try {
+      if (selectedOrders.size === 0 || isBatchProcessing) return;
+
       setIsBatchProcessing(true);
 
       switch (action) {
         case "approve": {
-          if (selectedOrders.size === 0) {
-            toast.error("No orders selected");
-            return;
-          }
-
           // Get selected order IDs
           const orderIds = Array.from(selectedOrders);
 
@@ -531,103 +441,25 @@ function AdminPage() {
 
           // Clear selection
           setSelectedOrders(new Set());
-
           break;
         }
+
         case "reject": {
           await Promise.all(
-            Array.from(selectedOrders).map(async (orderId) => {
-              try {
-                // Update order status
-                const { error } = await supabase
-                  .from("orders")
-                  .update({ status: "rejected" })
-                  .eq("id", orderId);
-
-                if (error) throw error;
-
-                // Send a system message to inform the user
-                const systemMessage = `Your order has been rejected. This chat will be automatically deleted in 5 minutes. You will not be able to send new messages.`;
-
-                // Add system message to the chat
-                const { error: messageError } = await supabase
-                  .from("messages")
-                  .insert({
-                    order_id: orderId,
-                    content: systemMessage,
-                    is_admin: true,
-                    is_system: true,
-                    created_at: new Date().toISOString(),
-                    user_name: "System",
-                    user_avatar: "/images/system-avatar.png",
-                  });
-
-                if (messageError) {
-                  console.error("Error sending system message:", messageError);
-                }
-
-                // Schedule deletion after 5 minutes (300000 ms)
-                setTimeout(async () => {
-                  try {
-                    // Delete all messages for this order
-                    const { error: deleteMessagesError } = await supabase
-                      .from("messages")
-                      .delete()
-                      .eq("order_id", orderId);
-
-                    if (deleteMessagesError) {
-                      console.error(
-                        "Error deleting messages:",
-                        deleteMessagesError
-                      );
-                    }
-
-                    // Update order to mark chat as deleted
-                    const { error: updateOrderError } = await supabase
-                      .from("orders")
-                      .update({ chat_deleted: true })
-                      .eq("id", orderId);
-
-                    if (updateOrderError) {
-                      console.error("Error updating order:", updateOrderError);
-                    }
-
-                    // Update local state
-                    setOrders((prev) =>
-                      prev.map((order) =>
-                        order.id === orderId
-                          ? { ...order, chat_deleted: true }
-                          : order
-                      )
-                    );
-                  } catch (err) {
-                    console.error("Error in auto-delete process:", err);
-                  }
-                }, 300000); // 5 minutes
-              } catch (err) {
-                console.error("Error rejecting order:", err);
-                throw err;
-              }
-            })
+            Array.from(selectedOrders).map((orderId) =>
+              handlePaymentAction(orderId, "rejected")
+            )
           );
-
-          toast.success(
-            `Successfully rejected ${selectedOrders.size} orders. Chats will be automatically deleted in 5 minutes.`
-          );
+          toast.success(`Successfully rejected ${selectedOrders.size} orders`);
+          // Clear selection
+          setSelectedOrders(new Set());
           break;
         }
-        case "export": {
-          const selectedOrdersData = filteredOrders.filter((order) =>
-            selectedOrders.has(order.id)
-          );
-          handleExport();
-          break;
-        }
-        case "delete": {
-          if (!window.confirm(`Delete ${selectedOrders.size} orders?`)) return;
-          // Implement delete logic here
-          break;
-        }
+
+        // Add other cases as needed
+
+        default:
+          toast.error(`Action "${action}" not implemented`);
       }
     } catch (err) {
       console.error(`Failed to ${action} orders:`, err);
@@ -705,7 +537,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Simplified version that only sends a message without updating order metadata
+  // Simplified version that only sends a message
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -734,7 +566,7 @@ function AdminPage() {
       // Create account details object - simplified
       const accountData = {
         accountId: accountDetails.accountId,
-        password: accountDetails.password,
+        password: accountDetails.password || "[No password provided]",
       };
 
       // Get current user info for the message
@@ -752,7 +584,7 @@ function AdminPage() {
 **Password:** ${accountData.password}
 
 Please keep these details secure. You can copy them by selecting the text.
-      `.trim();
+`.trim();
 
       // Create a message to send the account details
       const { error: messageError } = await supabase.from("messages").insert({
@@ -763,6 +595,7 @@ Please keep these details secure. You can copy them by selecting the text.
         created_at: new Date().toISOString(),
         user_name: userName,
         user_avatar: userAvatar,
+        is_account_details: true, // Add this flag to identify account detail messages
       });
 
       if (messageError) {
@@ -776,7 +609,7 @@ Please keep these details secure. You can copy them by selecting the text.
         id: toastId,
       });
 
-      // Reset form - simplified
+      // Reset form
       setAccountDetails({
         accountId: "",
         password: "",
@@ -789,366 +622,42 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
-  // Improved filters component
-  const ImprovedFilters = () => {
-    return (
-      <div className="bg-gray-800 rounded-lg p-4 mb-6">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search
-              className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
-              size={18}
-            />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setFilteredSearchTerm(e.target.value)}
-              placeholder="Search by name or email..."
-              className="w-full pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setFilteredSelectedStatuses(["pending"])}
-              className={`px-3 py-1.5 rounded-md ${
-                filteredSelectedStatuses.includes("pending")
-                  ? "bg-yellow-500 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-              }`}
-            >
-              Pending
-            </button>
-            <button
-              onClick={() => setFilteredSelectedStatuses(["approved"])}
-              className={`px-3 py-1.5 rounded-md ${
-                filteredSelectedStatuses.includes("approved")
-                  ? "bg-green-500 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-              }`}
-            >
-              Approved
-            </button>
-            <button
-              onClick={() => setFilteredSelectedStatuses(["rejected"])}
-              className={`px-3 py-1.5 rounded-md ${
-                filteredSelectedStatuses.includes("rejected")
-                  ? "bg-red-500 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-              }`}
-            >
-              Rejected
-            </button>
-            <button
-              onClick={clearFilteredFilters}
-              className="px-3 py-1.5 bg-gray-700 text-gray-300 hover:bg-gray-600 rounded-md"
-            >
-              All
-            </button>
-          </div>
-
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="px-3 py-1.5 bg-gray-700 text-gray-300 hover:bg-gray-600 rounded-md flex items-center gap-1"
-          >
-            <Filter size={18} />
-            <span>More Filters</span>
-          </button>
-        </div>
-
-        {showFilters && (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Additional filters here */}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Add useEffect for keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent shortcuts when typing in input fields
+  // Add a function to clear order history
+  const handleClearHistory = useCallback(async (orderId: string) => {
+    try {
       if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        !confirm(
+          "Are you sure you want to clear all messages for this order? This cannot be undone."
+        )
       ) {
         return;
       }
 
-      // Shortcut for approving selected orders: Alt+A
-      if (e.altKey && e.key === "a" && selectedOrders.size > 0) {
-        handleBatchAction("approve");
-        e.preventDefault();
-      }
+      setActionInProgress(`clear-${orderId}`);
 
-      // Shortcut for rejecting selected orders: Alt+R
-      if (e.altKey && e.key === "r" && selectedOrders.size > 0) {
-        handleBatchAction("reject");
-        e.preventDefault();
-      }
+      // Delete all messages for this order
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("order_id", orderId);
 
-      // Shortcut for selecting all orders: Alt+S
-      if (e.altKey && e.key === "s") {
-        const allOrderIds = filteredOrders.map((order) => order.id);
-        if (selectedOrders.size === allOrderIds.length) {
-          setSelectedOrders(new Set());
-        } else {
-          setSelectedOrders(new Set(allOrderIds));
-        }
-        e.preventDefault();
-      }
+      if (error) throw error;
 
-      // Shortcut for clearing filters: Alt+C
-      if (e.altKey && e.key === "c") {
-        clearFilteredFilters();
-        e.preventDefault();
-      }
-    };
+      // Update local state
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === orderId ? { ...order, messages: [] } : order
+        )
+      );
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedOrders, filteredOrders, handleBatchAction, clearFilteredFilters]);
-
-  // Improved account details form
-  const ImprovedAccountDetailsForm = () => {
-    return (
-      <div
-        className="bg-gray-800 rounded-lg p-4 mb-4"
-        id="account-details-section"
-      >
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="font-medium text-white">Account Details</h4>
-          {selectedOrder?.account_details_sent && (
-            <span className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded-full">
-              Sent
-            </span>
-          )}
-        </div>
-
-        {selectedOrder?.status === "approved" &&
-          !selectedOrder?.account_details_sent && (
-            <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/30 rounded-md animate-pulse-slow">
-              <div className="flex items-center">
-                <MessageCircle className="text-blue-400 mr-2" size={20} />
-                <p className="text-blue-300 text-sm">
-                  <span className="font-medium">Action required:</span> Please
-                  enter the account details below to send them to the customer.
-                </p>
-              </div>
-            </div>
-          )}
-
-        {selectedOrder?.account_details_sent ? (
-          // Display sent account details
-          <div className="mb-4">
-            <div className="flex items-center mb-2">
-              <MessageCircle className="text-blue-400 mr-2" size={20} />
-              <span className="text-gray-300 text-sm">
-                Account details sent on{" "}
-                {new Date(
-                  selectedOrder.account_details_sent_at
-                ).toLocaleString()}
-              </span>
-            </div>
-
-            {/* Display the account details if available */}
-          </div>
-        ) : selectedOrder ? (
-          <div className="space-y-4">
-            {/* Templates dropdown */}
-            <div>
-              <label className="block text-gray-400 text-sm mb-1">
-                Use Template
-              </label>
-              <select
-                onChange={(e) => {
-                  const template = accountTemplates.find(
-                    (t) => t.name === e.target.value
-                  );
-                  if (template) {
-                    setAccountDetails({
-                      accountId: template.accountId,
-                      password: template.password,
-                    });
-                  }
-                }}
-                className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-              >
-                <option value="">Select a template...</option>
-                {accountTemplates.map((template) => (
-                  <option key={template.name} value={template.name}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Account ID field */}
-            <div>
-              <label className="block text-gray-400 text-sm mb-1">
-                Account ID / Email <span className="text-red-400">*</span>
-              </label>
-              <input
-                id="account-id-input"
-                type="text"
-                value={accountDetails.accountId}
-                onChange={(e) => {
-                  setAccountDetails((prev) => ({
-                    ...prev,
-                    accountId: e.target.value,
-                  }));
-                  // Clear error when typing
-                  if (e.target.value.trim()) {
-                    setFormErrors((prev) => ({
-                      ...prev,
-                      accountId: false,
-                    }));
-                  }
-                }}
-                placeholder="e.g., user123@example.com"
-                className={`w-full p-2 bg-gray-700 border ${
-                  formErrors.accountId ? "border-red-500" : "border-gray-600"
-                } rounded-md text-white`}
-              />
-              {formErrors.accountId && (
-                <p className="text-red-400 text-xs mt-1">
-                  Account ID is required
-                </p>
-              )}
-            </div>
-
-            {/* Password field */}
-            <div>
-              <label className="block text-gray-400 text-sm mb-1">
-                Password
-              </label>
-              <input
-                id="account-password-input"
-                type="text"
-                value={accountDetails.password}
-                onChange={(e) =>
-                  setAccountDetails((prev) => ({
-                    ...prev,
-                    password: e.target.value,
-                  }))
-                }
-                placeholder="Enter password"
-                className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-              />
-            </div>
-
-            {/* Message preview */}
-            <div>
-              <label className="block text-gray-400 text-sm mb-1">
-                Preview
-              </label>
-              <div className="p-3 bg-gray-700 border border-gray-600 rounded-md text-white text-sm">
-                <div className="font-medium mb-2">Account Details</div>
-                <div className="space-y-2">
-                  <div>
-                    <span className="text-gray-400">Account ID:</span>{" "}
-                    <span className="font-mono">
-                      {accountDetails.accountId || "[Account ID]"}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Password:</span>{" "}
-                    <span>{accountDetails.password || "[Password]"}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Send button */}
-            <button
-              onClick={handleAccountDetailsUpload}
-              className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
-              disabled={
-                actionInProgress === "uploading" ||
-                !selectedOrderId ||
-                !accountDetails.accountId
-              }
-            >
-              {actionInProgress === "uploading" ? (
-                <span className="flex items-center justify-center">
-                  <RefreshCw className="animate-spin mr-2 h-5 w-5" />
-                  Sending...
-                </span>
-              ) : (
-                <span className="flex items-center justify-center">
-                  <MessageCircle className="mr-2 h-5 w-5" />
-                  Send Account Details
-                </span>
-              )}
-            </button>
-          </div>
-        ) : (
-          <div className="text-center py-6 text-gray-400">
-            Select an order to enter account details
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Improved batch actions section
-  const ImprovedBatchActions = () => {
-    const selectedCount = selectedOrders.size;
-
-    if (selectedCount === 0) return null;
-
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 20 }}
-        className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-lg shadow-lg p-4 z-10 flex items-center gap-4"
-      >
-        <div className="text-white">
-          <span className="font-medium">{selectedCount}</span> orders selected
-        </div>
-
-        <div className="h-6 border-r border-gray-600"></div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleBatchAction("approve")}
-            disabled={isBatchProcessing}
-            className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white rounded flex items-center gap-1"
-            title="Approve selected orders (Alt+A)"
-          >
-            <CheckCircle size={18} />
-            <span>Approve</span>
-          </button>
-
-          <button
-            onClick={() => handleBatchAction("reject")}
-            disabled={isBatchProcessing}
-            className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded flex items-center gap-1"
-            title="Reject selected orders (Alt+R)"
-          >
-            <XCircle size={18} />
-            <span>Reject</span>
-          </button>
-
-          <button
-            onClick={() => setSelectedOrders(new Set())}
-            disabled={isBatchProcessing}
-            className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white rounded"
-          >
-            Clear
-          </button>
-        </div>
-
-        {isBatchProcessing && (
-          <div className="ml-2">
-            <LoadingSpinner size="sm" light />
-          </div>
-        )}
-      </motion.div>
-    );
-  };
+      toast.success("Order history cleared successfully");
+    } catch (err) {
+      console.error("Error clearing history:", err);
+      toast.error("Failed to clear history. Please try again.");
+    } finally {
+      setActionInProgress(null);
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -1159,225 +668,397 @@ Please keep these details secure. You can copy them by selecting the text.
   }
 
   return (
-    <PageContainer title="Admin Dashboard" user={null}>
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-white">Order Management</h1>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleRefresh}
-              className="p-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md transition-colors flex items-center gap-1"
-              disabled={refreshing}
-            >
-              <RefreshCw
-                className={refreshing ? "animate-spin" : ""}
-                size={18}
-              />
-              <span>Refresh</span>
-            </button>
+    <PageContainer title="ADMIN" user={null}>
+      <Toaster position="top-right" />
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <StatsDisplay />
+
+        <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
+          {/* Batch Actions */}
+          <AnimatePresence>
+            {selectedOrders.size > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="mb-4 p-4 bg-white/5 rounded-lg flex items-center justify-between"
+              >
+                <div className="text-white">
+                  {selectedOrders.size} orders selected
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleBatchAction("approve")}
+                    className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30"
+                    disabled={isBatchProcessing}
+                  >
+                    Approve All
+                  </button>
+                  <button
+                    onClick={() => handleBatchAction("reject")}
+                    className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30"
+                    disabled={isBatchProcessing}
+                  >
+                    Reject All
+                  </button>
+                  <button
+                    onClick={() => handleBatchAction("export")}
+                    className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30"
+                    disabled={isBatchProcessing}
+                  >
+                    Export Selected
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Update Controls section */}
+          <div className="flex flex-wrap items-center gap-4 mb-6">
+            <div className="flex-1 flex flex-wrap items-center gap-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 w-5 h-5" />
+                <input
+                  type="text"
+                  placeholder="Search orders..."
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Toggle filters"
+              >
+                <Filter className="w-5 h-5 text-white" />
+              </button>
+
+              <button
+                onClick={handleExport}
+                className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg flex items-center gap-2"
+                title="Export to CSV"
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
+            </div>
+
+            {/* View mode toggle */}
+            <div className="flex items-center gap-2 bg-white/5 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode("list")}
+                className={`p-2 rounded ${
+                  viewMode === "list" ? "bg-white/10" : ""
+                }`}
+              >
+                List
+              </button>
+              <button
+                onClick={() => setViewMode("grid")}
+                className={`p-2 rounded ${
+                  viewMode === "grid" ? "bg-white/10" : ""
+                }`}
+              >
+                Grid
+              </button>
+            </div>
           </div>
-        </div>
 
-        {/* Add keyboard shortcuts info */}
-        <div className="bg-blue-500/20 border border-blue-500/30 rounded-md p-3 mb-6">
-          <h3 className="text-blue-300 font-medium mb-1">Keyboard Shortcuts</h3>
-          <div className="grid grid-cols-2 gap-2 text-sm text-blue-200">
-            <div className="flex items-center">
-              <kbd className="px-2 py-1 bg-gray-700 rounded text-xs mr-2">
-                Alt+A
-              </kbd>
-              <span>Approve selected</span>
-            </div>
-            <div className="flex items-center">
-              <kbd className="px-2 py-1 bg-gray-700 rounded text-xs mr-2">
-                Alt+R
-              </kbd>
-              <span>Reject selected</span>
-            </div>
-            <div className="flex items-center">
-              <kbd className="px-2 py-1 bg-gray-700 rounded text-xs mr-2">
-                Alt+S
-              </kbd>
-              <span>Select/deselect all</span>
-            </div>
-            <div className="flex items-center">
-              <kbd className="px-2 py-1 bg-gray-700 rounded text-xs mr-2">
-                Alt+C
-              </kbd>
-              <span>Clear filters</span>
-            </div>
-          </div>
-        </div>
+          {/* Filters panel */}
+          {showFilters && (
+            <div className="mb-6 p-4 bg-white/5 rounded-lg">
+              <h3 className="text-white mb-4">Filters</h3>
+              <div className="flex flex-wrap gap-4">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-white/70" />
+                  <input
+                    type="date"
+                    onChange={(e) =>
+                      setFilteredDateRange((prev) => ({
+                        ...prev,
+                        start: e.target.value ? new Date(e.target.value) : null,
+                      }))
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  />
+                  <span className="text-white/70">to</span>
+                  <input
+                    type="date"
+                    onChange={(e) =>
+                      setFilteredDateRange((prev) => ({
+                        ...prev,
+                        end: e.target.value ? new Date(e.target.value) : null,
+                      }))
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  />
+                </div>
 
-        <QuickStatsDashboard />
-        <ImprovedFilters />
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-white/70" />
+                  <select
+                    multiple
+                    value={filteredSelectedStatuses}
+                    onChange={(e) =>
+                      setFilteredSelectedStatuses(
+                        Array.from(
+                          e.target.selectedOptions,
+                          (option) => option.value
+                        )
+                      )
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="active">Active</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-2">
-            <h2 className="text-xl font-semibold text-white mb-4">Orders</h2>
-
+          {/* Orders List/Grid */}
+          <div
+            className={
+              viewMode === "grid"
+                ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                : "space-y-6"
+            }
+          >
             {loading ? (
-              <div className="flex justify-center py-10">
-                <LoadingSpinner />
+              <div className="text-center py-12">
+                <LoadingSpinner size="lg" light />
               </div>
             ) : filteredOrders.length === 0 ? (
-              <div className="bg-gray-800 rounded-lg p-10 text-center">
-                <p className="text-gray-400">No orders found</p>
-                {filteredSelectedStatuses.length > 0 || searchTerm ? (
-                  <button
-                    onClick={clearFilteredFilters}
-                    className="mt-2 text-blue-400 hover:underline"
-                  >
-                    Clear filters
-                  </button>
-                ) : null}
+              <div className="text-center py-12">
+                <p className="text-white/70 text-lg">No orders found</p>
+                <p className="text-white/50 text-sm mt-2">
+                  {searchTerm || filter !== "all"
+                    ? "Try adjusting your search or filter"
+                    : "New orders will appear here"}
+                </p>
               </div>
             ) : (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-gray-400 text-sm">
-                    Showing {filteredOrders.length} of {orders.length} orders
-                  </p>
-
-                  <button
-                    onClick={() => {
-                      const allOrderIds = filteredOrders.map(
-                        (order) => order.id
-                      );
-                      if (selectedOrders.size === allOrderIds.length) {
-                        setSelectedOrders(new Set());
+              filteredOrders.map((order) => (
+                <OrderItem
+                  key={order.id}
+                  order={order}
+                  onPaymentAction={handlePaymentAction}
+                  onImageView={(imageUrl) => {
+                    setCurrentImageUrl(imageUrl);
+                    setShowImageModal(true);
+                  }}
+                  onFileUpload={handleFileUploadSuccess}
+                  isSelected={selectedOrders.has(order.id)}
+                  onSelect={(selected) => {
+                    setSelectedOrders((prev) => {
+                      const next = new Set(prev);
+                      if (selected) {
+                        next.add(order.id);
                       } else {
-                        setSelectedOrders(new Set(allOrderIds));
+                        next.delete(order.id);
                       }
-                    }}
-                    className="text-sm text-blue-400 hover:underline"
-                  >
-                    {selectedOrders.size === filteredOrders.length
-                      ? "Deselect all"
-                      : "Select all"}
-                  </button>
-                </div>
-
-                {filteredOrders.map((order) => (
-                  <ImprovedOrderItem
-                    key={order.id}
-                    order={order}
-                    onPaymentAction={handlePaymentAction}
-                    onImageView={(imageUrl) => {
-                      setCurrentImageUrl(imageUrl);
-                      setShowImageModal(true);
-                    }}
-                    isSelected={selectedOrders.has(order.id)}
-                    onSelect={(selected) => {
-                      setSelectedOrders((prev) => {
-                        const next = new Set(prev);
-                        if (selected) {
-                          next.add(order.id);
-                        } else {
-                          next.delete(order.id);
-                        }
-                        return next;
-                      });
-                    }}
-                    actionInProgress={actionInProgress}
-                    onApprove={handleApprove}
-                  />
-                ))}
-              </div>
+                      return next;
+                    });
+                  }}
+                  actionInProgress={actionInProgress}
+                  onApprove={handleApprove}
+                  onClearHistory={handleClearHistory}
+                />
+              ))
             )}
           </div>
 
-          <div>
-            <h2 className="text-xl font-semibold text-white mb-4">
-              Order Details
-            </h2>
+          {/* Order Details Section */}
+          <div className="mt-4 space-y-4">
+            <div className="mt-6 border-t border-gray-700 pt-4">
+              <h3 className="text-lg font-medium mb-3 text-white">
+                Account Management
+              </h3>
 
-            {selectedOrder ? (
-              <div>
-                <div className="bg-gray-800 rounded-lg p-4 mb-4">
-                  <h3 className="text-lg font-medium text-white mb-3">
-                    {selectedOrder.full_name}
-                  </h3>
+              <div
+                className="bg-gray-800 rounded-lg p-4 mb-4"
+                id="account-details-section"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-medium text-white">Account Details</h4>
+                  {selectedOrder?.account_details_sent && (
+                    <span className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded-full">
+                      Sent
+                    </span>
+                  )}
+                </div>
 
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-start">
-                      <span className="text-gray-400 w-24">Email:</span>
-                      <span className="text-white">{selectedOrder.email}</span>
+                {selectedOrder?.status === "approved" &&
+                  !selectedOrder?.account_details_sent && (
+                    <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/30 rounded-md animate-pulse-slow">
+                      <div className="flex items-center">
+                        <MessageCircle
+                          className="text-blue-400 mr-2"
+                          size={20}
+                        />
+                        <p className="text-blue-300 text-sm">
+                          <span className="font-medium">Action required:</span>{" "}
+                          Please enter the account details below to send them to
+                          the customer.
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex items-start">
-                      <span className="text-gray-400 w-24">Status:</span>
-                      <StatusBadge status={selectedOrder.status} />
-                    </div>
-                    <div className="flex items-start">
-                      <span className="text-gray-400 w-24">Created:</span>
-                      <span className="text-white">
-                        {new Date(selectedOrder.created_at).toLocaleString()}
+                  )}
+
+                {selectedOrder?.account_details_sent ? (
+                  <div className="mb-4">
+                    <div className="flex items-center mb-2">
+                      <MessageCircle className="text-blue-400 mr-2" size={20} />
+                      <span className="text-gray-300">
+                        Account details sent on{" "}
+                        {new Date(
+                          selectedOrder.account_details_sent_at
+                        ).toLocaleString()}
                       </span>
                     </div>
-                    <div className="flex items-start">
-                      <span className="text-gray-400 w-24">Messages:</span>
-                      <span className="text-white">
-                        {selectedOrder.messages?.length || 0}
-                      </span>
-                    </div>
+
+                    {selectedOrder.account_metadata && (
+                      <div className="mt-2 p-3 bg-gray-700/50 rounded-md text-sm">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-gray-400">Account ID:</span>
+                            <div className="text-white font-mono">
+                              {selectedOrder.account_metadata.accountId}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-gray-400">Password:</span>
+                            <div className="text-white">
+                              {selectedOrder.account_metadata.password}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
+                ) : (
+                  <p className="text-gray-400 text-sm mb-3">
+                    No account details have been sent for this order yet.
+                  </p>
+                )}
 
-                <ImprovedAccountDetailsForm />
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Account ID / Email <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      id="account-id-input"
+                      type="text"
+                      value={accountDetails.accountId}
+                      onChange={(e) => {
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          accountId: e.target.value,
+                        }));
+                        // Clear error when typing
+                        if (e.target.value.trim()) {
+                          setFormErrors((prev) => ({
+                            ...prev,
+                            accountId: false,
+                          }));
+                        }
+                      }}
+                      placeholder="e.g., user123@example.com"
+                      className={`w-full p-2 bg-gray-700 border ${
+                        formErrors.accountId
+                          ? "border-red-500"
+                          : "border-gray-600"
+                      } rounded-md text-white`}
+                    />
+                    {formErrors.accountId && (
+                      <p className="text-red-400 text-xs mt-1">
+                        Account ID is required
+                      </p>
+                    )}
+                  </div>
 
-                <div className="flex flex-col gap-2">
-                  <Link
-                    to={`/chat?order=${selectedOrder.id}`}
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Password
+                    </label>
+                    <input
+                      id="account-password-input"
+                      type="text"
+                      value={accountDetails.password}
+                      onChange={(e) =>
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          password: e.target.value,
+                        }))
+                      }
+                      placeholder="Enter password"
+                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleAccountDetailsUpload}
                     className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
+                    disabled={
+                      actionInProgress === "uploading" ||
+                      !selectedOrderId ||
+                      !accountDetails.accountId
+                    }
                   >
-                    <MessageCircle className="mr-2 h-5 w-5" />
-                    Open Chat
-                  </Link>
+                    {actionInProgress === "uploading" ? (
+                      <span className="flex items-center justify-center">
+                        <RefreshCw className="animate-spin mr-2 h-5 w-5" />
+                        Sending...
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center">
+                        <MessageCircle className="mr-2 h-5 w-5" />
+                        Send Account Details
+                      </span>
+                    )}
+                  </button>
                 </div>
               </div>
-            ) : (
-              <div className="bg-gray-800 rounded-lg p-10 text-center">
-                <p className="text-gray-400">Select an order to view details</p>
-              </div>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      </main>
 
-      {/* Batch actions */}
-      <AnimatePresence>
-        {selectedOrders.size > 0 && <ImprovedBatchActions />}
-      </AnimatePresence>
-
-      {/* Image modal */}
+      {/* Image Modal with zoom and navigation */}
       {showImageModal && (
         <ImageModal
           imageUrl={currentImageUrl}
           onClose={() => setShowImageModal(false)}
         />
       )}
-
-      <Toaster position="top-right" />
     </PageContainer>
   );
 }
 
-const ImprovedOrderItem = React.memo(function ImprovedOrderItem({
+const OrderItem = React.memo(function OrderItem({
   order,
   onPaymentAction,
   onImageView,
+  onFileUpload,
   isSelected,
   onSelect,
   actionInProgress,
   onApprove,
+  onClearHistory,
 }: {
   order: Order;
-  onPaymentAction: (orderId: string, status: string) => void;
+  onPaymentAction: (orderId: string, status: "approved" | "rejected") => void;
   onImageView: (imageUrl: string) => void;
+  onFileUpload: (orderId: string, fileUrl: string) => void;
   isSelected: boolean;
   onSelect: (selected: boolean) => void;
   actionInProgress: string | null;
   onApprove: (orderId: string) => void;
+  onClearHistory: (orderId: string) => void;
 }) {
   const messageCount = order.messages?.length || 0;
 
@@ -1387,87 +1068,98 @@ const ImprovedOrderItem = React.memo(function ImprovedOrderItem({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className={`relative bg-white/5 hover:bg-white/10 rounded-lg p-5 transition-colors ${
+      className={`relative bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors ${
         isSelected ? "ring-2 ring-emerald-500" : ""
       }`}
     >
+      <div className="absolute top-2 right-2">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => onSelect(e.target.checked)}
+          className="w-4 h-4 accent-emerald-500"
+        />
+      </div>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex-1">
-          <div className="flex items-center">
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={(e) => onSelect(e.target.checked)}
-              className="w-4 h-4 accent-emerald-500 mr-3"
-            />
-            <h3 className="text-lg font-semibold text-white">
-              {order.full_name}
-            </h3>
-          </div>
-          <p className="text-white/70 ml-7">{order.email}</p>
-          <div className="ml-7 mt-2 flex flex-wrap items-center gap-2">
+          <h3 className="text-lg font-semibold text-white">
+            {order.full_name}
+          </h3>
+          <p className="text-white/70">{order.email}</p>
+          <p className="text-sm text-white/50">
+            {new Date(order.created_at).toLocaleString()}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusBadge status={order.status} />
-            {messageCount > 0 && (
-              <Link
-                to={`/chat?order=${order.id}`}
-                className="inline-flex items-center bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs gap-1 hover:bg-blue-500/30 transition-colors"
-              >
-                <MessageCircle size={14} />
-                {messageCount} {messageCount === 1 ? "MESSAGE" : "MESSAGES"}
-              </Link>
+            {order.account_file_url && (
+              <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
+                HAS ACCOUNT FILE
+              </span>
             )}
-            <span className="text-gray-400 text-xs">
-              {new Date(order.created_at).toLocaleString()}
-            </span>
+            {messageCount > 0 && (
+              <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
+                {messageCount} MESSAGES
+              </span>
+            )}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {order.payment_proofs?.map((proof) => (
-            <div key={proof.id} className="flex items-center">
+            <div key={proof.id} className="flex items-center gap-2">
               <button
                 onClick={() => onImageView(proof.image_url)}
-                className="bg-gray-700 hover:bg-gray-600 p-2 rounded-l-md transition-colors flex items-center gap-1"
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
                 title="View payment proof"
               >
-                <Eye size={16} />
-                <span className="text-sm">View Proof</span>
+                <Eye className="text-white" size={20} />
               </button>
-              {order.status === "pending" && (
-                <>
-                  <button
+              {proof.status === "pending" && (
+                <div className="flex items-center gap-2">
+                  <ActionButton
+                    icon={<CheckCircle className="text-green-400" size={20} />}
                     onClick={() => onApprove(order.id)}
                     disabled={actionInProgress !== null}
-                    className="bg-green-600 hover:bg-green-500 disabled:opacity-50 p-2 transition-colors"
                     title="Approve order"
-                  >
-                    <CheckCircle size={16} />
-                  </button>
-                  <button
+                  />
+                  <ActionButton
+                    icon={<XCircle className="text-red-400" size={20} />}
                     onClick={() => onPaymentAction(order.id, "rejected")}
                     disabled={!!actionInProgress}
-                    className="bg-red-600 hover:bg-red-500 disabled:opacity-50 p-2 rounded-r-md transition-colors"
                     title="Reject payment"
-                  >
-                    <XCircle size={16} />
-                  </button>
-                </>
+                  />
+                </div>
               )}
             </div>
           ))}
 
-          {!order.payment_proofs?.length && (
-            <Link
-              to={`/chat?order=${order.id}`}
-              className="bg-blue-600 hover:bg-blue-500 p-2 rounded-md transition-colors flex items-center gap-1"
-              title="Open chat"
-            >
-              <MessageCircle size={16} />
-              <span className="text-sm">Chat</span>
-            </Link>
+          <Link
+            to={`/chat?order=${order.id}`}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            title="Open chat"
+          >
+            <MessageCircle className="text-white" size={20} />
+          </Link>
+
+          {messageCount > 0 && (
+            <ActionButton
+              icon={<Trash className="text-red-400" size={20} />}
+              onClick={() => onClearHistory(order.id)}
+              disabled={!!actionInProgress}
+              title="Clear message history"
+            />
           )}
         </div>
       </div>
+
+      {order.status === "active" && !order.account_file_url && (
+        <div className="mt-4">
+          <FileUpload
+            orderId={order.id}
+            onUploadSuccess={(fileUrl) => onFileUpload(order.id, fileUrl)}
+          />
+        </div>
+      )}
     </motion.div>
   );
 });
@@ -1492,6 +1184,29 @@ const StatusBadge = React.memo(function StatusBadge({
     <span className={`px-2 py-1 rounded text-xs ${getStatusStyle()}`}>
       {status.toUpperCase()}
     </span>
+  );
+});
+
+const ActionButton = React.memo(function ActionButton({
+  icon,
+  onClick,
+  disabled,
+  title,
+}: {
+  icon: React.ReactNode;
+  onClick: () => void;
+  disabled: boolean;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+      title={title}
+    >
+      {icon}
+    </button>
   );
 });
 
