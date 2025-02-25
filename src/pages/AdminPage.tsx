@@ -1012,7 +1012,7 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
-  // Add this function to handle batch actions on orders
+  // Replace the entire handleOrderBatchAction function with this corrected version
   const handleOrderBatchAction = async (action: BatchAction) => {
     if (selectedOrderIds.size === 0) {
       toast.error("No orders selected");
@@ -1020,135 +1020,142 @@ Please keep these details secure. You can copy them by selecting the text.
     }
     
     setIsOrderActionInProgress(true);
+    const toastId = toast.loading(`Processing ${action} action...`);
     
     try {
       const orderIds = Array.from(selectedOrderIds);
       
-      switch (action) {
-        case "approve": {
-          toast.info(`Approving ${orderIds.length} orders...`);
+      if (action === "approve") {
+        try {
+          toast.loading(`Approving ${orderIds.length} orders...`, { id: toastId });
           
-          try {
-            // Use a more efficient batch update
-            if (orderIds.length > 0) {
-              const { error } = await supabase
-                .from("orders")
-                .update({ status: "active" })
-                .in("id", orderIds);
-              
-              if (error) {
-                throw error;
-              }
-            }
+          // Use a more efficient batch update
+          if (orderIds.length > 0) {
+            const { error } = await supabase
+              .from("orders")
+              .update({ status: "active" })
+              .in("id", orderIds);
             
-            toast.success(`${orderIds.length} orders approved`);
-          } catch (error) {
-            console.error("Error approving orders:", error);
-            toast.error("Failed to approve orders. Please try again.", {
-              id: toastId,
-            });
+            if (error) {
+              throw error;
+            }
           }
-          break;
-        }
-        
-        case "reject": {
-          toast.info(`Rejecting ${orderIds.length} orders...`);
           
-          try {
-            // Use a more efficient batch update
-            if (orderIds.length > 0) {
-              const { error } = await supabase
-                .from("orders")
-                .update({ status: "rejected" })
-                .in("id", orderIds);
-              
-              if (error) {
-                throw error;
-              }
-            }
-            
-            toast.success(`${orderIds.length} orders rejected`);
-          } catch (error) {
-            console.error("Error rejecting orders:", error);
-            toast.error("Failed to reject orders. Please try again.");
-          }
-          break;
+          toast.success(`${orderIds.length} orders approved`, { id: toastId });
+        } catch (error) {
+          console.error("Error approving orders:", error);
+          toast.error("Failed to approve orders. Please try again.", { id: toastId });
+          return;
         }
-        
-        case "export":
-          toast.info("Preparing export...");
+      } 
+      else if (action === "reject") {
+        try {
+          toast.loading(`Rejecting ${orderIds.length} orders...`, { id: toastId });
+          
+          // Use a more efficient batch update
+          if (orderIds.length > 0) {
+            const { error } = await supabase
+              .from("orders")
+              .update({ status: "rejected" })
+              .in("id", orderIds);
+            
+            if (error) {
+              throw error;
+            }
+          }
+          
+          toast.success(`${orderIds.length} orders rejected`, { id: toastId });
+        } catch (error) {
+          console.error("Error rejecting orders:", error);
+          toast.error("Failed to reject orders. Please try again.", { id: toastId });
+          return;
+        }
+      }
+      else if (action === "export") {
+        try {
+          toast.loading("Preparing export...", { id: toastId });
           setIsExporting(true);
-
-          // Get the selected orders
-          const { data: selectedOrders } = await supabase
-            .from("orders")
-            .select("*")
-            .in("id", orderIds);
-
-          if (selectedOrders && selectedOrders.length > 0) {
-            // Format the data for export
-            const exportData = selectedOrders.map((order) => ({
-              ID: order.id,
-              Name: order.full_name,
-              Email: order.email,
-              Status: order.status,
-              Created: new Date(order.created_at).toLocaleString(),
-              // Add other fields as needed
-            }));
-
-            // Convert to CSV
-            const headers = Object.keys(exportData[0]);
+          
+          // Get full order details for selected orders
+          const selectedOrders = orders.filter(order => 
+            selectedOrderIds.has(order.id)
+          );
+          
+          if (selectedOrders.length > 0) {
+            // Create CSV content
+            const headers = [
+              "ID", 
+              "Name", 
+              "Email", 
+              "Status", 
+              "Created At", 
+              "Account Email", 
+              "Account Password"
+            ];
+            
+            const rows = selectedOrders.map(order => [
+              order.id,
+              order.full_name,
+              order.email,
+              order.status,
+              new Date(order.created_at).toLocaleString(),
+              order.account_email || "",
+              order.account_password || ""
+            ]);
+            
             const csvContent = [
               headers.join(","),
-              ...exportData.map((row) =>
-                headers
-                  .map((header) =>
-                    JSON.stringify(row[header as keyof typeof row])
-                  )
-                  .join(",")
-              ),
+              ...rows.map(row => row.join(","))
             ].join("\n");
-
+            
             // Create download link
             const blob = new Blob([csvContent], { type: "text/csv" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = `orders-export-${
-              new Date().toISOString().split("T")[0]
-            }.csv`;
+            a.download = `orders-export-${new Date().toISOString().split("T")[0]}.csv`;
             document.body.appendChild(a);
             a.click();
+            URL.revokeObjectURL(url);
             document.body.removeChild(a);
-
-            toast.success(`Exported ${selectedOrders.length} orders`);
+            
+            toast.success(`Exported ${selectedOrders.length} orders`, { id: toastId });
           } else {
-            toast.error("No orders found to export");
+            toast.error("No orders found to export", { id: toastId });
           }
-
+        } catch (error) {
+          console.error("Error exporting orders:", error);
+          toast.error("Failed to export orders", { id: toastId });
+          return;
+        } finally {
           setIsExporting(false);
-          break;
-
-        case "delete":
-          if (
-            confirm(
-              `Are you sure you want to delete ${orderIds.length} orders? This action cannot be undone.`
-            )
-          ) {
-            toast.info(`Deleting ${orderIds.length} orders...`);
-
+        }
+      }
+      else if (action === "delete") {
+        try {
+          if (confirm(`Are you sure you want to delete ${orderIds.length} orders? This action cannot be undone.`)) {
+            toast.loading(`Deleting ${orderIds.length} orders...`, { id: toastId });
+            
             const { error } = await supabase
               .from("orders")
               .delete()
               .in("id", orderIds);
-
+            
             if (error) {
-              toast.error(`Error deleting orders: ${error.message}`);
-            } else {
-              toast.success(`${orderIds.length} orders deleted`);
+              throw error;
             }
+            
+            toast.success(`${orderIds.length} orders deleted`, { id: toastId });
+          } else {
+            toast.dismiss(toastId);
+            setIsOrderActionInProgress(false);
+            return;
           }
-          break;
+        } catch (error) {
+          console.error("Error deleting orders:", error);
+          toast.error(`Error deleting orders: ${error.message || "Unknown error"}`, { id: toastId });
+          return;
+        }
       }
       
       // Refresh orders to get the latest data
@@ -1158,281 +1165,9 @@ Please keep these details secure. You can copy them by selecting the text.
       setSelectedOrderIds(new Set());
     } catch (err) {
       console.error(`Error performing batch action ${action}:`, err);
-      toast.error(`Failed to ${action} orders`);
+      toast.error(`Failed to ${action} orders`, { id: toastId });
     } finally {
       setIsOrderActionInProgress(false);
-    }
-  };
-
-  // Add this function to filter orders
-  const getFilteredOrders = () => {
-    return orders.filter((order) => {
-      // Filter by status
-      if (orderStatusFilter !== "all" && order.status !== orderStatusFilter) {
-        return false;
-      }
-      
-      // Filter by search query
-      if (
-        orderSearchQuery &&
-        !order.full_name.toLowerCase().includes(orderSearchQuery.toLowerCase()) &&
-        !order.email.toLowerCase().includes(orderSearchQuery.toLowerCase())
-      ) {
-        return false;
-      }
-      
-      // Filter by date range
-      if (orderDateRange.start && new Date(order.created_at) < orderDateRange.start) {
-        return false;
-      }
-      
-      if (orderDateRange.end) {
-        const endDate = new Date(orderDateRange.end);
-        endDate.setHours(23, 59, 59, 999); // Set to end of day
-        if (new Date(order.created_at) > endDate) {
-          return false;
-        }
-      }
-      
-      return true;
-    });
-  };
-
-  // Add this function to calculate order statistics
-  const calculateOrderStats = () => {
-    const total = orders.length;
-    const pending = orders.filter((order) => order.status === "pending").length;
-    const active = orders.filter((order) => order.status === "active").length;
-    const rejected = orders.filter((order) => order.status === "rejected").length;
-    
-    return { 
-      total, 
-      pending, 
-      approved: active, 
-      rejected 
-    };
-  };
-
-  // Add this function to view order details
-  const viewOrderDetails = (order: Order) => {
-    setSelectedOrderDetail(order);
-  };
-
-  // Add this component for the account delivery form
-  const AccountDeliveryForm = ({
-    orderId,
-    onSubmit,
-    onCancel,
-  }: {
-    orderId: string;
-    onSubmit: (details: { email: string; password: string }) => void;
-    onCancel: () => void;
-  }) => {
-    const [accountEmail, setAccountEmail] = useState("");
-    const [accountPassword, setAccountPassword] = useState("");
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [errors, setErrors] = useState({ email: false, password: false });
-
-    const handleSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
-
-      // Validate inputs
-      const newErrors = {
-        email: !accountEmail.trim(),
-        password: !accountPassword.trim(),
-      };
-
-      setErrors(newErrors);
-
-      if (newErrors.email || newErrors.password) {
-        toast.error("Please fill in all required fields");
-        return;
-      }
-
-      setIsSubmitting(true);
-
-      try {
-        onSubmit({ email: accountEmail, password: accountPassword });
-      } catch (err) {
-        console.error("Error submitting account details:", err);
-        toast.error("Failed to save account details");
-      } finally {
-        setIsSubmitting(false);
-      }
-    };
-
-  return (
-      <div className="bg-gray-800 rounded-lg p-6 mt-4">
-        <h3 className="text-lg font-medium text-white mb-4">
-          Deliver Account Details
-        </h3>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="account-email" className="block text-white/70 mb-1">
-              Account Email <span className="text-red-400">*</span>
-            </label>
-            <input
-              id="account-email"
-              type="text"
-              value={accountEmail}
-              onChange={(e) => setAccountEmail(e.target.value)}
-              className={`w-full bg-white/10 border ${
-                errors.email ? "border-red-500" : "border-white/20"
-              } rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40`}
-              placeholder="Enter account email"
-            />
-            {errors.email && (
-              <p className="text-red-400 text-sm mt-1">
-                Account email is required
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label
-              htmlFor="account-password"
-              className="block text-white/70 mb-1"
-            >
-              Account Password <span className="text-red-400">*</span>
-            </label>
-            <input
-              id="account-password"
-              type="text"
-              value={accountPassword}
-              onChange={(e) => setAccountPassword(e.target.value)}
-              className={`w-full bg-white/10 border ${
-                errors.password ? "border-red-500" : "border-white/20"
-              } rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40`}
-              placeholder="Enter account password"
-            />
-            {errors.password && (
-              <p className="text-red-400 text-sm mt-1">
-                Account password is required
-              </p>
-            )}
-                </div>
-
-          <div className="flex justify-end gap-3 mt-6">
-                  <button
-              type="button"
-              onClick={onCancel}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-              disabled={isSubmitting}
-            >
-              Cancel
-                  </button>
-                  <button
-              type="submit"
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center gap-2"
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" />
-                  Deliver Account
-                </>
-              )}
-                  </button>
-                </div>
-        </form>
-      </div>
-    );
-  };
-
-  // Add this function to handle delivering account details
-  const handleDeliverAccount = async (
-    orderId: string,
-    details: { email: string; password: string }
-  ) => {
-    try {
-      setActionInProgress(orderId);
-
-      // First, update the order with account details
-      const { error: updateError } = await supabase
-        .from("orders")
-        .update({
-          account_email: details.email,
-          account_password: details.password,
-          account_delivered_at: new Date().toISOString(),
-        })
-        .eq("id", orderId);
-
-      if (updateError) {
-        console.error(
-          "Error updating order with account details:",
-          updateError
-        );
-        toast.error("Failed to save account details");
-        return;
-      }
-
-      // Now send a message to the user with the account details
-      const { data: orderData } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("id", orderId)
-        .single();
-
-      if (!orderData) {
-        toast.error("Order not found");
-        return;
-      }
-
-      // Create a message with the account details
-      const message = {
-        id: generateUUID(),
-        order_id: orderId,
-        content: `Your account is ready!\n\nEmail: ${details.email}\nPassword: ${details.password}\n\nPlease let us know if you have any questions.`,
-        created_at: new Date().toISOString(),
-        user_id: currentUser?.id || null,
-        is_read: false,
-        user_name: "Support Team",
-        user_avatar: "https://i.imgur.com/eyaDC8l.png",
-      };
-
-      // Insert the message
-      const { error: messageError } = await supabase
-        .from("messages")
-        .insert(message);
-
-      if (messageError) {
-        console.error("Error sending account details message:", messageError);
-        toast.error("Account details saved but failed to send message to user");
-        return;
-      }
-
-      // Update local state
-      setOrders(
-        orders.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                account_email: details.email,
-                account_password: details.password,
-                account_delivered_at: new Date().toISOString(),
-              }
-            : order
-        )
-      );
-
-      toast.success("Account details delivered successfully");
-
-      // Clear the selected order ID
-      setSelectedOrderId(null);
-
-      // Refresh orders to get the latest data
-      fetchOrders();
-    } catch (err) {
-      console.error("Error in handleDeliverAccount:", err);
-      toast.error("Failed to deliver account details");
-    } finally {
-      setActionInProgress(null);
     }
   };
 
