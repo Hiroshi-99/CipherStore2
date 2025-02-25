@@ -126,48 +126,6 @@ export const MessageBubble = React.memo(function MessageBubble({
                       </button>
                     </div>
                   );
-                } else if (line.startsWith("**Login Method:**")) {
-                  const value = line.replace("**Login Method:**", "").trim();
-                  return (
-                    <div key={i} className="flex justify-between items-center">
-                      <div>
-                        <span className="text-gray-600 font-medium">
-                          Login Method:
-                        </span>
-                        <span className="ml-2">{value}</span>
-                      </div>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(value);
-                          toast.success("Login Method copied to clipboard");
-                        }}
-                        className="p-1 text-blue-500 hover:bg-blue-100 rounded"
-                      >
-                        <Copy size={16} />
-                      </button>
-                    </div>
-                  );
-                } else if (line.startsWith("**Character ID:**")) {
-                  const value = line.replace("**Character ID:**", "").trim();
-                  return (
-                    <div key={i} className="flex justify-between items-center">
-                      <div>
-                        <span className="text-gray-600 font-medium">
-                          Character ID:
-                        </span>
-                        <span className="ml-2 font-mono">{value}</span>
-                      </div>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(value);
-                          toast.success("Character ID copied to clipboard");
-                        }}
-                        className="p-1 text-blue-500 hover:bg-blue-100 rounded"
-                      >
-                        <Copy size={16} />
-                      </button>
-                    </div>
-                  );
                 } else if (
                   line.trim() &&
                   !line.includes("Please keep these details")

@@ -56,8 +56,6 @@ type BatchAction = "approve" | "reject" | "export" | "delete";
 interface AccountDetails {
   accountId: string;
   password: string;
-  characterId?: string;
-  loginMethod?: string;
 }
 
 function AdminPage() {
@@ -100,8 +98,6 @@ function AdminPage() {
   const [accountDetails, setAccountDetails] = useState<AccountDetails>({
     accountId: "",
     password: "",
-    characterId: "",
-    loginMethod: "Receive code from email",
   });
   const [formErrors, setFormErrors] = useState({
     accountId: false,
@@ -562,7 +558,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Update the handleAccountDetailsUpload function with validation
+  // Simplified version that only sends a message without updating order metadata
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -588,12 +584,10 @@ function AdminPage() {
         return;
       }
 
-      // Create account details object
+      // Create account details object - simplified
       const accountData = {
         accountId: accountDetails.accountId,
         password: accountDetails.password,
-        characterId: accountDetails.characterId || "",
-        loginMethod: accountDetails.loginMethod || "Receive code from email",
       };
 
       // Get current user info for the message
@@ -603,14 +597,12 @@ function AdminPage() {
         userData?.user?.user_metadata?.avatar_url ||
         "/images/support-avatar.png";
 
-      // Create a formatted message with account details
+      // Create a formatted message with account details - simplified
       const formattedMessage = `
 **Account Details**
 
 **Account ID:** ${accountData.accountId}
-**Password:** ${accountData.password || "Use login method"}
-**Login Method:** ${accountData.loginMethod}
-${accountData.characterId ? `**Character ID:** ${accountData.characterId}` : ""}
+**Password:** ${accountData.password}
 
 Please keep these details secure. You can copy them by selecting the text.
       `.trim();
@@ -624,7 +616,6 @@ Please keep these details secure. You can copy them by selecting the text.
         created_at: new Date().toISOString(),
         user_name: userName,
         user_avatar: userAvatar,
-        is_account_details: true, // Add this flag to identify account detail messages
       });
 
       if (messageError) {
@@ -633,47 +624,15 @@ Please keep these details secure. You can copy them by selecting the text.
         throw messageError;
       }
 
-      // Update the order to mark that account details were sent
-      const { error } = await supabase
-        .from("orders")
-        .update({
-          account_details_sent: true,
-          account_details_sent_at: new Date().toISOString(),
-          account_metadata: accountData,
-        })
-        .eq("id", selectedOrder.id);
-
-      if (error) {
-        console.error("Error updating order:", error);
-        toast.error("Failed to update order status", { id: toastId });
-        // Continue anyway since the message was sent
-      }
-
-      // Update local state
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === selectedOrder.id
-            ? {
-                ...order,
-                account_details_sent: true,
-                account_details_sent_at: new Date().toISOString(),
-                account_metadata: accountData,
-              }
-            : order
-        )
-      );
-
       // Show success message
       toast.success("Account details sent to customer successfully!", {
         id: toastId,
       });
 
-      // Reset form
+      // Reset form - simplified
       setAccountDetails({
         accountId: "",
         password: "",
-        characterId: "",
-        loginMethod: "Receive code from email",
       });
     } catch (err) {
       console.error("Error handling account details upload:", err);
@@ -953,24 +912,11 @@ Please keep these details secure. You can copy them by selecting the text.
                             </div>
                           </div>
                           <div>
-                            <span className="text-gray-400">
-                              Password/Method:
-                            </span>
+                            <span className="text-gray-400">Password:</span>
                             <div className="text-white">
-                              {selectedOrder.account_metadata.password ||
-                                selectedOrder.account_metadata.loginMethod}
+                              {selectedOrder.account_metadata.password}
                             </div>
                           </div>
-                          {selectedOrder.account_metadata.characterId && (
-                            <div className="col-span-2">
-                              <span className="text-gray-400">
-                                Character ID:
-                              </span>
-                              <div className="text-white font-mono">
-                                {selectedOrder.account_metadata.characterId}
-                              </div>
-                            </div>
-                          )}
                         </div>
                       </div>
                     )}
@@ -1031,49 +977,7 @@ Please keep these details secure. You can copy them by selecting the text.
                           password: e.target.value,
                         }))
                       }
-                      placeholder="Enter password or leave blank to use login method"
-                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-gray-400 text-sm mb-1">
-                      Login Method
-                    </label>
-                    <select
-                      value={accountDetails.loginMethod}
-                      onChange={(e) =>
-                        setAccountDetails((prev) => ({
-                          ...prev,
-                          loginMethod: e.target.value,
-                        }))
-                      }
-                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-                    >
-                      <option value="Receive code from email">
-                        Receive code from email
-                      </option>
-                      <option value="Use password">Use password</option>
-                      <option value="Google login">Google login</option>
-                      <option value="Facebook login">Facebook login</option>
-                      <option value="Apple login">Apple login</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-gray-400 text-sm mb-1">
-                      Character ID (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={accountDetails.characterId}
-                      onChange={(e) =>
-                        setAccountDetails((prev) => ({
-                          ...prev,
-                          characterId: e.target.value,
-                        }))
-                      }
-                      placeholder="Optional character ID"
+                      placeholder="Enter password"
                       className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
                     />
                   </div>
