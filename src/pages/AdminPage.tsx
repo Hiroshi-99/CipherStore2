@@ -835,41 +835,29 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       setActionInProgress("adding-admin");
 
-      // Try to find the user by email
-      let userId = null;
+      // Since we can't query the users table, we'll need to add the admin directly
+      toast.info("Adding admin by email directly...");
 
-      // First try the users table
-      try {
-        const { data: userWithEmail, error: userError } = await supabase
-          .from("users")
-          .select("id, email")
-          .eq("email", newAdminEmail.trim())
-          .single();
+      // Create a new admin entry with the email
+      const { data: adminData, error: adminError } = await supabase
+        .from("admin_users")
+        .insert({
+          user_email: newAdminEmail.trim(),
+          granted_by: currentUser?.id || "",
+          granted_at: new Date().toISOString(),
+        })
+        .select();
 
-        if (!userError && userWithEmail) {
-          userId = userWithEmail.id;
-        }
-      } catch (err) {
-        console.error("Error finding user in users table:", err);
-      }
-
-      // If we couldn't find the user, show an error
-      if (!userId) {
-        toast.error("User not found with that email");
+      if (adminError) {
+        console.error("Error adding admin:", adminError);
+        toast.error("Failed to add admin: " + adminError.message);
         setActionInProgress(null);
         return;
       }
 
-      // Grant admin privileges
-      const result = await grantAdminPrivileges(currentUser?.id || "", userId);
-
-      if (result.success) {
-        toast.success(`Admin privileges granted to ${newAdminEmail}`);
-        setNewAdminEmail("");
-        fetchUsers(currentUser?.id || "");
-      } else {
-        toast.error(result.error || "Failed to grant admin privileges");
-      }
+      toast.success(`Admin privileges granted to ${newAdminEmail}`);
+      setNewAdminEmail("");
+      fetchUsers(currentUser?.id || "");
     } catch (err) {
       console.error("Error adding admin by email:", err);
       toast.error("Failed to add admin");

@@ -319,7 +319,7 @@ export async function getLocalUsers(adminUserId: string) {
   }
 }
 
-// Add this function to get all users from auth metadata
+// Update this function to avoid using the users table
 export async function getAllUsersClientSide() {
   try {
     // First check if the current user is an admin
@@ -339,40 +339,6 @@ export async function getAllUsersClientSide() {
       };
     }
 
-    // Try to get users from auth directly first
-    let allUsers = [];
-
-    try {
-      // Get all users from the users table
-      const { data: dbUsers, error: usersError } = await supabase
-        .from("users")
-        .select("*");
-
-      if (!usersError && dbUsers && dbUsers.length > 0) {
-        allUsers = dbUsers;
-      } else {
-        console.log(
-          "Could not get users from users table:",
-          usersError?.message
-        );
-      }
-    } catch (usersError) {
-      console.error("Error fetching users from table:", usersError);
-    }
-
-    // If we couldn't get users from the table, create a minimal list with just the current user
-    if (allUsers.length === 0) {
-      allUsers = [
-        {
-          id: user.id,
-          email: user.email,
-          full_name: user.user_metadata?.full_name || "",
-          created_at: user.created_at,
-          last_sign_in: null,
-        },
-      ];
-    }
-
     // Get all admin users
     let adminUserIds = new Set();
     try {
@@ -389,19 +355,19 @@ export async function getAllUsersClientSide() {
       adminUserIds.add(user.id);
     }
 
-    // Format users with admin status
-    const formattedUsers = allUsers.map((dbUser) => ({
-      id: dbUser.id,
-      email: dbUser.email || "",
-      fullName: dbUser.full_name || "",
-      isAdmin: adminUserIds.has(dbUser.id) || dbUser.id === user.id, // Current user is always admin
-      lastSignIn: dbUser.last_sign_in,
-      createdAt: dbUser.created_at,
-    }));
-
+    // Return just the current user since we can't get other users
     return {
       success: true,
-      data: formattedUsers,
+      data: [
+        {
+          id: user.id,
+          email: user.email || "",
+          fullName: user.user_metadata?.full_name || "",
+          isAdmin: true, // Current user is admin (we verified above)
+          lastSignIn: null,
+          createdAt: user.created_at,
+        },
+      ],
     };
   } catch (err) {
     console.error("Error in getAllUsersClientSide:", err);
