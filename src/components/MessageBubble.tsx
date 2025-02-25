@@ -128,8 +128,7 @@ export const MessageBubble = React.memo(function MessageBubble({
                   );
                 } else if (
                   line.trim() &&
-                  !line.includes("Please keep these details") &&
-                  !line.startsWith("**")
+                  !line.includes("Please keep these details")
                 ) {
                   return (
                     <p key={i} className="text-gray-700">
@@ -139,29 +138,9 @@ export const MessageBubble = React.memo(function MessageBubble({
                 }
                 return null;
               })}
-              <div className="flex justify-between items-center mt-4 pt-2 border-t border-gray-200">
-                <p className="text-xs text-gray-500">
-                  Please keep these details secure.
-                </p>
-                <button
-                  onClick={() => {
-                    const accountId =
-                      message.content.match(
-                        /\*\*Account ID:\*\* (.*?)(\n|$)/
-                      )?.[1] || "";
-                    const password =
-                      message.content.match(
-                        /\*\*Password:\*\* (.*?)(\n|$)/
-                      )?.[1] || "";
-                    const fullDetails = `Account ID: ${accountId}\nPassword: ${password}`;
-                    navigator.clipboard.writeText(fullDetails);
-                    toast.success("All details copied to clipboard");
-                  }}
-                  className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-600 px-2 py-1 rounded"
-                >
-                  Copy All
-                </button>
-              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Please keep these details secure.
+              </p>
             </div>
           </div>
         ) : (

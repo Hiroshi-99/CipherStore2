@@ -25,7 +25,6 @@ import {
   Clock,
   User,
   Upload,
-  Trash,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
@@ -51,7 +50,7 @@ type DateRange = {
 };
 
 // Add batch action types
-type BatchAction = "approve" | "reject" | "export" | "delete";
+type BatchAction = "approve" | "reject" | "export" | "delete" | "clear-history";
 
 // Add this interface for account details
 interface AccountDetails {
@@ -242,39 +241,53 @@ function AdminPage() {
 
   const handlePaymentAction = useCallback(
     async (orderId: string, status: "approved" | "rejected") => {
+      if (actionInProgress) return;
+      setActionInProgress(orderId);
+
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === orderId
+            ? {
+                ...order,
+                status: status === "approved" ? "active" : "rejected",
+                payment_proofs: order.payment_proofs?.map((proof) => ({
+                  ...proof,
+                  status,
+                })),
+              }
+            : order
+        )
+      );
+
       try {
-        setActionInProgress(orderId);
-
-        // If approving, use the handleApprove function instead
-        if (status === "approved") {
-          await handleApprove(orderId);
-          return;
-        }
-
-        // For rejection, update the order status
-        const { error } = await supabase
-          .from("orders")
-          .update({ status })
-          .eq("id", orderId);
-
-        if (error) throw error;
-
-        // Update local state
-        setOrders((prev) =>
-          prev.map((order) =>
-            order.id === orderId ? { ...order, status } : order
-          )
+        const response = await fetch(
+          "/.netlify/functions/discord-update-payment",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              orderId,
+              status,
+              notes: `Payment ${status} by admin`,
+            }),
+          }
         );
 
-        toast.success(`Order ${status} successfully`);
-      } catch (err) {
-        console.error(`Error ${status} order:`, err);
-        toast.error(`Failed to ${status} order. Please try again.`);
+        if (!response.ok) throw new Error("Failed to update payment status");
+
+        toast.success(`Payment ${status} successfully`);
+        await fetchOrders();
+      } catch (error) {
+        console.error("Error updating payment status:", error);
+        await fetchOrders();
+        toast.error("Failed to update payment status");
       } finally {
         setActionInProgress(null);
       }
     },
-    [handleApprove]
+    [actionInProgress, fetchOrders]
   );
 
   const handleFileUploadSuccess = useCallback(
@@ -368,12 +381,15 @@ function AdminPage() {
   // Add batch action handler
   const handleBatchAction = async (action: BatchAction) => {
     try {
-      if (selectedOrders.size === 0 || isBatchProcessing) return;
-
       setIsBatchProcessing(true);
 
       switch (action) {
         case "approve": {
+          if (selectedOrders.size === 0) {
+            toast.error("No orders selected");
+            return;
+          }
+
           // Get selected order IDs
           const orderIds = Array.from(selectedOrders);
 
@@ -432,18 +448,20 @@ function AdminPage() {
                 { id: toastId, duration: 5000 }
               );
             }
+
+            // Clear selection
+            setSelectedOrders(new Set());
           } catch (error) {
             console.error("Error approving orders:", error);
             toast.error("Failed to approve orders. Please try again.", {
               id: toastId,
             });
+          } finally {
+            setIsBatchProcessing(false);
           }
 
-          // Clear selection
-          setSelectedOrders(new Set());
           break;
         }
-
         case "reject": {
           await Promise.all(
             Array.from(selectedOrders).map((orderId) =>
@@ -451,15 +469,70 @@ function AdminPage() {
             )
           );
           toast.success(`Successfully rejected ${selectedOrders.size} orders`);
-          // Clear selection
-          setSelectedOrders(new Set());
           break;
         }
+        case "export": {
+          const selectedOrdersData = filteredOrders.filter((order) =>
+            selectedOrders.has(order.id)
+          );
+          handleExport();
+          break;
+        }
+        case "delete": {
+          if (!window.confirm(`Delete ${selectedOrders.size} orders?`)) return;
+          // Implement delete logic here
+          break;
+        }
+        case "clear-history": {
+          if (selectedOrders.size === 0) {
+            toast.error("No orders selected");
+            return;
+          }
 
-        // Add other cases as needed
+          // Get selected order IDs
+          const orderIds = Array.from(selectedOrders);
 
-        default:
-          toast.error(`Action "${action}" not implemented`);
+          // Show loading toast
+          const toastId = toast.loading(
+            `Clearing chat history for ${orderIds.length} orders...`
+          );
+
+          try {
+            // Delete all messages for these orders
+            const { error } = await supabase
+              .from("messages")
+              .delete()
+              .in("order_id", orderIds);
+
+            if (error) throw error;
+
+            // Update local state to reflect the cleared chat
+            setOrders((prev) =>
+              prev.map((order) =>
+                selectedOrders.has(order.id)
+                  ? { ...order, messages: [] }
+                  : order
+              )
+            );
+
+            toast.success(
+              `Chat history cleared for ${orderIds.length} orders!`,
+              { id: toastId }
+            );
+
+            // Clear selection
+            setSelectedOrders(new Set());
+          } catch (error) {
+            console.error("Error clearing chat history:", error);
+            toast.error("Failed to clear chat history. Please try again.", {
+              id: toastId,
+            });
+          } finally {
+            setIsBatchProcessing(false);
+          }
+
+          break;
+        }
       }
     } catch (err) {
       console.error(`Failed to ${action} orders:`, err);
@@ -537,7 +610,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Simplified version that only sends a message
+  // Simplified version that only sends a message without updating order metadata
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -566,7 +639,7 @@ function AdminPage() {
       // Create account details object - simplified
       const accountData = {
         accountId: accountDetails.accountId,
-        password: accountDetails.password || "[No password provided]",
+        password: accountDetails.password,
       };
 
       // Get current user info for the message
@@ -584,7 +657,7 @@ function AdminPage() {
 **Password:** ${accountData.password}
 
 Please keep these details secure. You can copy them by selecting the text.
-`.trim();
+      `.trim();
 
       // Create a message to send the account details
       const { error: messageError } = await supabase.from("messages").insert({
@@ -609,7 +682,7 @@ Please keep these details secure. You can copy them by selecting the text.
         id: toastId,
       });
 
-      // Reset form
+      // Reset form - simplified
       setAccountDetails({
         accountId: "",
         password: "",
@@ -622,18 +695,13 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
-  // Add a function to clear order history
-  const handleClearHistory = useCallback(async (orderId: string) => {
+  // Add this function to the AdminPage component to clear chat history
+  const handleClearChatHistory = async (orderId: string) => {
     try {
-      if (
-        !confirm(
-          "Are you sure you want to clear all messages for this order? This cannot be undone."
-        )
-      ) {
-        return;
-      }
+      if (!orderId || actionInProgress) return;
 
       setActionInProgress(`clear-${orderId}`);
+      const toastId = toast.loading("Clearing chat history...");
 
       // Delete all messages for this order
       const { error } = await supabase
@@ -641,23 +709,27 @@ Please keep these details secure. You can copy them by selecting the text.
         .delete()
         .eq("order_id", orderId);
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error clearing chat history:", error);
+        toast.error("Failed to clear chat history", { id: toastId });
+        return;
+      }
 
-      // Update local state
+      // Update local state to reflect the cleared chat
       setOrders((prev) =>
         prev.map((order) =>
           order.id === orderId ? { ...order, messages: [] } : order
         )
       );
 
-      toast.success("Order history cleared successfully");
+      toast.success("Chat history cleared successfully", { id: toastId });
     } catch (err) {
-      console.error("Error clearing history:", err);
-      toast.error("Failed to clear history. Please try again.");
+      console.error("Error clearing chat history:", err);
+      toast.error("Failed to clear chat history");
     } finally {
       setActionInProgress(null);
     }
-  }, []);
+  };
 
   if (loading) {
     return (
@@ -675,43 +747,67 @@ Please keep these details secure. You can copy them by selecting the text.
 
         <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
           {/* Batch Actions */}
-          <AnimatePresence>
-            {selectedOrders.size > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="mb-4 p-4 bg-white/5 rounded-lg flex items-center justify-between"
+          <div className="relative">
+            <button
+              onClick={() => setShowBatchActions(!showBatchActions)}
+              disabled={selectedOrders.size === 0 || isBatchProcessing}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Batch Actions ({selectedOrders.size})
+              <span
+                className={`transition-transform ${
+                  showBatchActions ? "rotate-180" : ""
+                }`}
               >
-                <div className="text-white">
-                  {selectedOrders.size} orders selected
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleBatchAction("approve")}
-                    className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30"
-                    disabled={isBatchProcessing}
-                  >
-                    Approve All
-                  </button>
-                  <button
-                    onClick={() => handleBatchAction("reject")}
-                    className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30"
-                    disabled={isBatchProcessing}
-                  >
-                    Reject All
-                  </button>
-                  <button
-                    onClick={() => handleBatchAction("export")}
-                    className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30"
-                    disabled={isBatchProcessing}
-                  >
-                    Export Selected
-                  </button>
-                </div>
-              </motion.div>
+                ▼
+              </span>
+            </button>
+
+            {showBatchActions && (
+              <div className="absolute top-full left-0 mt-1 w-48 bg-gray-800 rounded-md shadow-lg z-10">
+                <button
+                  onClick={() => handleBatchAction("approve")}
+                  disabled={isBatchProcessing}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
+                >
+                  <CheckCircle size={16} className="text-green-400" />
+                  Approve
+                </button>
+                <button
+                  onClick={() => handleBatchAction("reject")}
+                  disabled={isBatchProcessing}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
+                >
+                  <XCircle size={16} className="text-red-400" />
+                  Reject
+                </button>
+                <button
+                  onClick={() => handleBatchAction("export")}
+                  disabled={isBatchProcessing}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
+                >
+                  <Download size={16} className="text-blue-400" />
+                  Export
+                </button>
+                <button
+                  onClick={() => handleBatchAction("clear-history")}
+                  disabled={isBatchProcessing}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
+                >
+                  <RefreshCw size={16} className="text-yellow-400" />
+                  Clear Chat History
+                </button>
+                <button
+                  onClick={() => handleBatchAction("delete")}
+                  disabled={isBatchProcessing}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2 border-t border-gray-600"
+                >
+                  <XCircle size={16} className="text-red-400" />
+                  Delete
+                </button>
+              </div>
             )}
-          </AnimatePresence>
+          </div>
 
           {/* Update Controls section */}
           <div className="flex flex-wrap items-center gap-4 mb-6">
@@ -865,7 +961,7 @@ Please keep these details secure. You can copy them by selecting the text.
                   }}
                   actionInProgress={actionInProgress}
                   onApprove={handleApprove}
-                  onClearHistory={handleClearHistory}
+                  onClearHistory={handleClearChatHistory}
                 />
               ))
             )}
@@ -1051,7 +1147,7 @@ const OrderItem = React.memo(function OrderItem({
   onClearHistory,
 }: {
   order: Order;
-  onPaymentAction: (orderId: string, status: "approved" | "rejected") => void;
+  onPaymentAction: (orderId: string, status: string) => void;
   onImageView: (imageUrl: string) => void;
   onFileUpload: (orderId: string, fileUrl: string) => void;
   isSelected: boolean;
@@ -1143,10 +1239,10 @@ const OrderItem = React.memo(function OrderItem({
 
           {messageCount > 0 && (
             <ActionButton
-              icon={<Trash className="text-red-400" size={20} />}
+              icon={<RefreshCw className="text-yellow-400" size={20} />}
               onClick={() => onClearHistory(order.id)}
-              disabled={!!actionInProgress}
-              title="Clear message history"
+              disabled={actionInProgress !== null}
+              title="Clear chat history"
             />
           )}
         </div>
