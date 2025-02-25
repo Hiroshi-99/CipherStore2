@@ -103,6 +103,9 @@ function AdminPage() {
     characterId: "",
     loginMethod: "Receive code from email",
   });
+  const [formErrors, setFormErrors] = useState({
+    accountId: false,
+  });
 
   // This will define the selectedOrder based on the selectedOrderId
   const selectedOrder = selectedOrderId
@@ -126,6 +129,63 @@ function AdminPage() {
     stats: filteredStats,
     clearFilters: clearFilteredFilters,
   } = useOrderFilters(orders);
+
+  // Define handleApprove early in the component
+  const handleApprove = useCallback(
+    async (orderId: string) => {
+      try {
+        if (actionInProgress) return;
+
+        setActionInProgress(orderId);
+
+        // Update order status directly without prompting for file upload
+        const { error } = await supabase
+          .from("orders")
+          .update({ status: "approved" })
+          .eq("id", orderId);
+
+        if (error) throw error;
+
+        // Update local state
+        setOrders((prev) =>
+          prev.map((order) =>
+            order.id === orderId ? { ...order, status: "approved" } : order
+          )
+        );
+
+        // Show success message with account details prompt
+        toast.success(
+          "Order approved! Please enter account details to send to the customer.",
+          { duration: 5000 }
+        );
+
+        // Select the order for account details entry
+        setSelectedOrderId(orderId);
+
+        // Scroll to the account details section
+        const accountDetailsSection = document.getElementById(
+          "account-details-section"
+        );
+        if (accountDetailsSection) {
+          accountDetailsSection.scrollIntoView({ behavior: "smooth" });
+
+          // Focus on the first input field after a short delay
+          setTimeout(() => {
+            const accountIdInput = document.getElementById("account-id-input");
+            if (accountIdInput) {
+              (accountIdInput as HTMLInputElement).focus();
+            }
+          }, 500);
+        }
+      } catch (error) {
+        console.error("Error approving order:", error);
+        toast.error("Failed to approve order. Please try again.");
+      } finally {
+        setActionInProgress(null);
+      }
+    },
+    [actionInProgress]
+  );
 
   useEffect(() => {
     setPageTitle("Admin");
@@ -181,57 +241,6 @@ function AdminPage() {
     if (refreshing) return;
     setRefreshing(true);
     await fetchOrders();
-  };
-
-  const handleApprove = async (orderId: string) => {
-    try {
-      setActionInProgress(orderId);
-
-      // Update order status directly without prompting for file upload
-      const { error } = await supabase
-        .from("orders")
-        .update({ status: "approved" })
-        .eq("id", orderId);
-
-      if (error) throw error;
-
-      // Update local state
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === orderId ? { ...order, status: "approved" } : order
-        )
-      );
-
-      // Show success message with account details prompt
-      toast.success(
-        "Order approved! Please enter account details to send to the customer.",
-        { duration: 5000 }
-      );
-
-      // Select the order for account details entry
-      setSelectedOrderId(orderId);
-
-      // Scroll to the account details section
-      const accountDetailsSection = document.getElementById(
-        "account-details-section"
-      );
-      if (accountDetailsSection) {
-        accountDetailsSection.scrollIntoView({ behavior: "smooth" });
-
-        // Focus on the first input field after a short delay
-        setTimeout(() => {
-          const accountIdInput = document.getElementById("account-id-input");
-          if (accountIdInput) {
-            (accountIdInput as HTMLInputElement).focus();
-          }
-        }, 500);
-      }
-    } catch (error) {
-      console.error("Error approving order:", error);
-      toast.error("Failed to approve order. Please try again.");
-    } finally {
-      setActionInProgress(null);
-    }
   };
 
   const handlePaymentAction = useCallback(
@@ -380,57 +389,74 @@ function AdminPage() {
 
       switch (action) {
         case "approve": {
+          if (selectedOrders.size === 0) {
+            toast.error("No orders selected");
+            return;
+          }
+
           // Get selected order IDs
           const orderIds = Array.from(selectedOrders);
 
-          // Update all selected orders to approved status
-          const { error } = await supabase
-            .from("orders")
-            .update({ status: "approved" })
-            .in("id", orderIds);
-
-          if (error) throw error;
-
-          // Update local state
-          setOrders((prev) =>
-            prev.map((order) =>
-              selectedOrders.has(order.id)
-                ? { ...order, status: "approved" }
-                : order
-            )
+          // Show loading toast
+          const toastId = toast.loading(
+            `Approving ${orderIds.length} orders...`
           );
 
-          // Show success message with account details prompt
-          if (orderIds.length === 1) {
-            toast.success(
-              "Order approved! Please enter account details to send to the customer.",
-              { duration: 5000 }
+          try {
+            // Update all selected orders to approved status
+            const { error } = await supabase
+              .from("orders")
+              .update({ status: "approved" })
+              .in("id", orderIds);
+
+            if (error) throw error;
+
+            // Update local state
+            setOrders((prev) =>
+              prev.map((order) =>
+                selectedOrders.has(order.id)
+                  ? { ...order, status: "approved" }
+                  : order
+              )
             );
 
-            // Select the single order for account details entry
-            setSelectedOrderId(orderIds[0]);
+            // Show success message with account details prompt
+            if (orderIds.length === 1) {
+              toast.success(
+                "Order approved! Please enter account details to send to the customer.",
+                { id: toastId, duration: 5000 }
+              );
 
-            // Scroll to the account details section
-            const accountDetailsSection = document.getElementById(
-              "account-details-section"
-            );
-            if (accountDetailsSection) {
-              accountDetailsSection.scrollIntoView({ behavior: "smooth" });
+              // Select the single order for account details entry
+              setSelectedOrderId(orderIds[0]);
 
-              // Focus on the first input field after a short delay
-              setTimeout(() => {
-                const accountIdInput =
-                  document.getElementById("account-id-input");
-                if (accountIdInput) {
-                  (accountIdInput as HTMLInputElement).focus();
-                }
-              }, 500);
+              // Scroll to the account details section
+              const accountDetailsSection = document.getElementById(
+                "account-details-section"
+              );
+              if (accountDetailsSection) {
+                accountDetailsSection.scrollIntoView({ behavior: "smooth" });
+
+                // Focus on the first input field after a short delay
+                setTimeout(() => {
+                  const accountIdInput =
+                    document.getElementById("account-id-input");
+                  if (accountIdInput) {
+                    (accountIdInput as HTMLInputElement).focus();
+                  }
+                }, 500);
+              }
+            } else {
+              toast.success(
+                `${orderIds.length} orders approved! Please enter account details for each order individually.`,
+                { id: toastId, duration: 5000 }
+              );
             }
-          } else {
-            toast.success(
-              `${orderIds.length} orders approved! Please enter account details for each order individually.`,
-              { duration: 5000 }
-            );
+          } catch (error) {
+            console.error("Error approving orders:", error);
+            toast.error("Failed to approve orders. Please try again.", {
+              id: toastId,
+            });
           }
 
           // Clear selection
@@ -526,11 +552,27 @@ function AdminPage() {
     }
   };
 
-  // Update the handleAccountDetailsUpload function
+  // Add validation function
+  const validateAccountDetails = () => {
+    const errors = {
+      accountId: !accountDetails.accountId.trim(),
+    };
+
+    setFormErrors(errors);
+    return !Object.values(errors).some(Boolean);
+  };
+
+  // Update the handleAccountDetailsUpload function with validation
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
         toast.error("Please select an order first");
+        return;
+      }
+
+      // Validate form
+      if (!validateAccountDetails()) {
+        toast.error("Please fill in all required fields");
         return;
       }
 
@@ -824,13 +866,15 @@ Please keep these details secure. You can copy them by selecting the text.
               </div>
             ) : (
               filteredOrders.map((order) => (
-                <OrderCard
+                <OrderItem
                   key={order.id}
                   order={order}
-                  onImageView={handleImagePreview}
                   onPaymentAction={handlePaymentAction}
+                  onImageView={(imageUrl) => {
+                    setCurrentImageUrl(imageUrl);
+                    setShowImageModal(true);
+                  }}
                   onFileUpload={handleFileUploadSuccess}
-                  actionInProgress={actionInProgress}
                   isSelected={selectedOrders.has(order.id)}
                   onSelect={(selected) => {
                     setSelectedOrders((prev) => {
@@ -843,6 +887,8 @@ Please keep these details secure. You can copy them by selecting the text.
                       return next;
                     });
                   }}
+                  actionInProgress={actionInProgress}
+                  onApprove={handleApprove}
                 />
               ))
             )}
@@ -938,21 +984,37 @@ Please keep these details secure. You can copy them by selecting the text.
                 <div className="space-y-4">
                   <div>
                     <label className="block text-gray-400 text-sm mb-1">
-                      Account ID / Email
+                      Account ID / Email <span className="text-red-400">*</span>
                     </label>
                     <input
                       id="account-id-input"
                       type="text"
                       value={accountDetails.accountId}
-                      onChange={(e) =>
+                      onChange={(e) => {
                         setAccountDetails((prev) => ({
                           ...prev,
                           accountId: e.target.value,
-                        }))
-                      }
+                        }));
+                        // Clear error when typing
+                        if (e.target.value.trim()) {
+                          setFormErrors((prev) => ({
+                            ...prev,
+                            accountId: false,
+                          }));
+                        }
+                      }}
                       placeholder="e.g., user123@example.com"
-                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                      className={`w-full p-2 bg-gray-700 border ${
+                        formErrors.accountId
+                          ? "border-red-500"
+                          : "border-gray-600"
+                      } rounded-md text-white`}
                     />
+                    {formErrors.accountId && (
+                      <p className="text-red-400 text-xs mt-1">
+                        Account ID is required
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -1055,22 +1117,24 @@ Please keep these details secure. You can copy them by selecting the text.
   );
 }
 
-const OrderCard = React.memo(function OrderCard({
+const OrderItem = React.memo(function OrderItem({
   order,
-  onImageView,
   onPaymentAction,
+  onImageView,
   onFileUpload,
-  actionInProgress,
   isSelected,
   onSelect,
+  actionInProgress,
+  onApprove,
 }: {
   order: Order;
-  onImageView: (url: string) => void;
-  onPaymentAction: (orderId: string, status: "approved" | "rejected") => void;
+  onPaymentAction: (orderId: string, status: string) => void;
+  onImageView: (imageUrl: string) => void;
   onFileUpload: (orderId: string, fileUrl: string) => void;
-  actionInProgress: string | null;
   isSelected: boolean;
   onSelect: (selected: boolean) => void;
+  actionInProgress: string | null;
+  onApprove: (orderId: string) => void;
 }) {
   const messageCount = order.messages?.length || 0;
 
@@ -1130,7 +1194,7 @@ const OrderCard = React.memo(function OrderCard({
                 <div className="flex items-center gap-2">
                   <ActionButton
                     icon={<CheckCircle className="text-green-400" size={20} />}
-                    onClick={() => handleApprove(order.id)}
+                    onClick={() => onApprove(order.id)}
                     disabled={actionInProgress !== null}
                     title="Approve order"
                   />
