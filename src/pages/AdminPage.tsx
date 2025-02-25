@@ -266,49 +266,19 @@ function AdminPage() {
     checkAdminStatus();
   }, []);
 
-  // Optimize the fetchOrders function with caching
+  // Optimize the fetchOrders function to properly retrieve all orders
   const fetchOrders = async () => {
     setRefreshing(true);
 
     try {
-      // Check if we have cached orders and they're less than 30 seconds old
-      const cachedOrders = localStorage.getItem("admin_orders_cache");
-      const cachedTimestamp = localStorage.getItem("admin_orders_timestamp");
-
-      if (cachedOrders && cachedTimestamp) {
-        const timestamp = parseInt(cachedTimestamp, 10);
-        const now = Date.now();
-
-        // If cache is less than 30 seconds old, use it
-        if (now - timestamp < 30000) {
-          const parsedOrders = JSON.parse(cachedOrders);
-          setOrders(parsedOrders);
-
-          // Calculate statistics efficiently
-          const statusCounts = parsedOrders.reduce((counts, order) => {
-            counts[order.status] = (counts[order.status] || 0) + 1;
-            return counts;
-          }, {} as Record<string, number>);
-
-          setStats({
-            total: parsedOrders.length,
-            pending: statusCounts.pending || 0,
-            approved: statusCounts.active || 0,
-            rejected: statusCounts.rejected || 0,
-          });
-
-          setRefreshing(false);
-          return;
-        }
-      }
-
-      // Use a more efficient query with pagination
+      // Use a more efficient query with pagination and proper relations
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
         .select(
           `
           *,
-          payment_proofs:payment_proofs(*)
+          payment_proofs:payment_proofs(*),
+          messages:messages(id)
         `
         )
         .order("created_at", { ascending: false })
@@ -321,6 +291,8 @@ function AdminPage() {
       }
 
       if (ordersData) {
+        console.log("Fetched orders:", ordersData); // Debug log
+
         // Cache the orders
         localStorage.setItem("admin_orders_cache", JSON.stringify(ordersData));
         localStorage.setItem("admin_orders_timestamp", Date.now().toString());
@@ -340,6 +312,8 @@ function AdminPage() {
           approved: statusCounts.active || 0,
           rejected: statusCounts.rejected || 0,
         });
+      } else {
+        console.log("No orders data returned"); // Debug log
       }
     } catch (err) {
       console.error("Error in fetchOrders:", err);
@@ -1625,8 +1599,7 @@ Please keep these details secure. You can copy them by selecting the text.
 
   // Add this function to render the orders tab
   const renderOrdersTab = () => {
-    const stats = calculateOrderStats();
-    const filteredOrders = getFilteredOrders();
+    const filteredOrdersToShow = filteredOrders || [];
 
     return (
       <div>
@@ -1644,17 +1617,16 @@ Please keep these details secure. You can copy them by selecting the text.
           ))}
         </div>
 
-        {/* Filters and Search */}
-        <div className="bg-white/5 rounded-lg p-4 mb-6">
-          <div className="flex flex-wrap gap-4">
+        {/* Search and Filter Controls */}
+        <div className="mb-6">
+          <div className="flex flex-wrap gap-4 items-center">
             <div className="flex-1 min-w-[200px]">
-              <label className="block text-white/70 mb-2 text-sm">Search</label>
               <div className="relative">
                 <input
                   type="text"
-                  value={orderSearchQuery}
-                  onChange={(e) => setOrderSearchQuery(e.target.value)}
-                  placeholder="Search by name or email"
+                  value={searchTerm}
+                  onChange={(e) => setFilteredSearchTerm(e.target.value)}
+                  placeholder="Search orders..."
                   className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                 />
                 <Search
@@ -1664,121 +1636,122 @@ Please keep these details secure. You can copy them by selecting the text.
               </div>
             </div>
 
-            <div>
-              <label className="block text-white/70 mb-2 text-sm">Status</label>
-              <select
-                value={orderStatusFilter}
-                onChange={(e) => setOrderStatusFilter(e.target.value)}
-                className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-white/40"
-              >
-                <option value="all">All Statuses</option>
-                <option value="pending">Pending</option>
-                <option value="active">Active</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
+            {/* Debug button */}
+            <button
+              onClick={checkDatabaseAccess}
+              className="px-4 py-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+            >
+              Check DB Access
+            </button>
+
+            <button
+              onClick={fetchOrders}
+              className="px-4 py-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors flex items-center gap-2"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`}
+              />
+              Refresh
+            </button>
           </div>
         </div>
 
-        {/* Batch Actions */}
-        {selectedOrderIds.size > 0 && (
-          <div className="bg-white/5 rounded-lg p-4 mb-6">
-            <div className="flex items-center justify-between">
-              <p className="text-white">
-                {selectedOrderIds.size}{" "}
-                {selectedOrderIds.size === 1 ? "order" : "orders"} selected
-              </p>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleOrderBatchAction("approve")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
-                >
-                  <CheckSquare className="w-4 h-4" />
-                  Approve
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("reject")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                >
-                  <XSquare className="w-4 h-4" />
-                  Reject
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("export")}
-                  disabled={isOrderActionInProgress || isExporting}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-                >
-                  {isExporting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  Export
-                </button>
-              </div>
-            </div>
+        {/* Orders List */}
+        {filteredOrdersToShow.length === 0 ? (
+          <div className="bg-white/5 rounded-lg p-8 text-center">
+            <p className="text-white/70 mb-4">No orders found</p>
+            <button
+              onClick={fetchOrders}
+              className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+            >
+              Refresh Orders
+            </button>
           </div>
-        )}
-
-        {/* Orders list */}
-        <div className="space-y-4">
-          {filteredOrders.length === 0 ? (
-            <div className="bg-white/5 rounded-lg p-8 text-center">
-              <p className="text-white/70">No orders found</p>
-            </div>
-          ) : (
-            filteredOrders.map((order) => (
+        ) : (
+          <div className="space-y-4">
+            {filteredOrdersToShow.map((order) => (
               <div
                 key={order.id}
-                className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
+                className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors"
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedOrderIds.has(order.id)}
-                      onChange={(e) => {
-                        const newSelected = new Set(selectedOrderIds);
-                        if (e.target.checked) {
-                          newSelected.add(order.id);
-                        } else {
-                          newSelected.delete(order.id);
-                        }
-                        setSelectedOrderIds(newSelected);
-                      }}
-                      className="mt-1 w-4 h-4 accent-emerald-500"
-                    />
-
-                    <div>
-                      <h3 className="text-lg font-medium text-white">
-                        {order.full_name}
-                      </h3>
-                      <p className="text-white/70">{order.email}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs ${
-                            order.status === "active"
-                              ? "bg-green-500/20 text-green-400"
-                              : order.status === "rejected"
-                              ? "bg-red-500/20 text-red-400"
-                              : "bg-yellow-500/20 text-yellow-400"
-                          }`}
-                        >
-                          {order.status.toUpperCase()}
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-white">
+                      {order.full_name}
+                    </h3>
+                    <p className="text-white/70">{order.email}</p>
+                    <p className="text-sm text-white/50">
+                      {new Date(order.created_at).toLocaleString()}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span
+                        className={`px-2 py-1 rounded text-xs ${
+                          order.status === "active"
+                            ? "bg-emerald-400/20 text-emerald-400"
+                            : order.status === "rejected"
+                            ? "bg-red-400/20 text-red-400"
+                            : order.status === "delivered"
+                            ? "bg-blue-400/20 text-blue-400"
+                            : "bg-yellow-400/20 text-yellow-400"
+                        }`}
+                      >
+                        {order.status.toUpperCase()}
+                      </span>
+                      {order.account_file_url && (
+                        <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
+                          HAS ACCOUNT FILE
                         </span>
-                        <span className="text-white/50 text-xs">
-                          {new Date(order.created_at).toLocaleString()}
+                      )}
+                      {order.messages && order.messages.length > 0 && (
+                        <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
+                          {order.messages.length} MESSAGES
                         </span>
-                      </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {order.payment_proofs &&
+                      order.payment_proofs.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setCurrentImageUrl(
+                                order.payment_proofs[0].image_url
+                              );
+                              setShowImageModal(true);
+                            }}
+                            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                            title="View payment proof"
+                          >
+                            <Eye className="text-white" size={20} />
+                          </button>
+                          {order.status === "pending" && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleApprove(order.id)}
+                                disabled={!!actionInProgress}
+                                className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+                                title="Approve order"
+                              >
+                                <CheckCircle
+                                  className="text-green-400"
+                                  size={20}
+                                />
+                              </button>
+                              <button
+                                onClick={() => handleReject(order.id)}
+                                disabled={!!actionInProgress}
+                                className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+                                title="Reject order"
+                              >
+                                <XCircle className="text-red-400" size={20} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                     <button
                       onClick={() => handleViewOrderDetails(order.id)}
                       className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
@@ -1787,51 +1760,30 @@ Please keep these details secure. You can copy them by selecting the text.
                       <Eye className="w-5 h-5" />
                     </button>
 
-                    {order.status === "pending" && (
-                      <>
-                        <button
-                          onClick={() => handleApprove(order.id)}
-                          disabled={!!actionInProgress}
-                          className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
-                          title="Approve order"
-                        >
-                          <CheckCircle className="w-5 h-5" />
-                        </button>
-
-                        <button
-                          onClick={() => handleReject(order.id)}
-                          disabled={!!actionInProgress}
-                          className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
-                          title="Reject order"
-                        >
-                          <XCircle className="w-5 h-5" />
-                        </button>
-                      </>
-                    )}
-
                     <Link
                       to={`/chat?order=${order.id}`}
-                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                      title="Chat with customer"
+                      className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                      title="Open chat"
                     >
-                      <MessageSquare className="w-5 h-5" />
+                      <MessageSquare className="text-white" size={20} />
                     </Link>
-
-                    {order.status === "active" && !order.account_file_url && (
-                      <button
-                        onClick={() => setSelectedOrderId(order.id)}
-                        className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
-                        title="Upload account file"
-                      >
-                        <Upload className="w-5 h-5" />
-                      </button>
-                    )}
                   </div>
                 </div>
+
+                {order.status === "active" && !order.account_file_url && (
+                  <div className="mt-4">
+                    <FileUpload
+                      orderId={order.id}
+                      onUploadSuccess={(fileUrl) =>
+                        onFileUpload(order.id, fileUrl)
+                      }
+                    />
+                  </div>
+                )}
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -2069,6 +2021,120 @@ Please keep these details secure. You can copy them by selecting the text.
       setSelectedOrderDetail(order);
     }
   };
+
+  // Add this function to check database tables and permissions
+  const checkDatabaseAccess = async () => {
+    try {
+      // Check if we can access the orders table
+      const { data: orderCheck, error: orderError } = await supabase
+        .from("orders")
+        .select("id")
+        .limit(1);
+
+      console.log("Order check:", { data: orderCheck, error: orderError });
+
+      // Check if we can access the payment_proofs table
+      const { data: proofCheck, error: proofError } = await supabase
+        .from("payment_proofs")
+        .select("id")
+        .limit(1);
+
+      console.log("Payment proof check:", {
+        data: proofCheck,
+        error: proofError,
+      });
+
+      // Check if we can access the messages table
+      const { data: messageCheck, error: messageError } = await supabase
+        .from("messages")
+        .select("id")
+        .limit(1);
+
+      console.log("Message check:", {
+        data: messageCheck,
+        error: messageError,
+      });
+
+      // Get the current user's role
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      console.log("Current user:", user);
+
+      toast.success("Database access check complete. See console for details.");
+    } catch (err) {
+      console.error("Error checking database access:", err);
+      toast.error("Failed to check database access");
+    }
+  };
+
+  // Add this effect to check database access on component mount
+  useEffect(() => {
+    const checkInitialAccess = async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          // Check if we can access the orders table
+          const { data: orderCheck, error: orderError } = await supabase
+            .from("orders")
+            .select("id")
+            .limit(1);
+
+          if (orderError) {
+            console.error("Error accessing orders table:", orderError);
+            toast.error(
+              "Error accessing orders table. Check console for details."
+            );
+          } else {
+            console.log("Successfully accessed orders table:", orderCheck);
+          }
+        }
+      } catch (err) {
+        console.error("Error in initial access check:", err);
+      }
+    };
+
+    checkInitialAccess();
+  }, []);
+
+  // Update the useEffect that fetches orders
+  useEffect(() => {
+    const fetchInitialData = async () => {
+      try {
+        setLoading(true);
+
+        // Check if the user is an admin
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          setIsAdmin(false);
+          setLoading(false);
+          return;
+        }
+
+        const isAdminResult = await checkIfAdmin(user.id);
+        setIsAdmin(isAdminResult.isAdmin);
+
+        if (isAdminResult.isAdmin) {
+          // Fetch orders
+          await fetchOrders();
+
+          // Fetch users
+          await fetchUsers(user.id);
+        }
+      } catch (err) {
+        console.error("Error fetching initial data:", err);
+        toast.error("Failed to load data. Please refresh the page.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInitialData();
+  }, []);
 
   if (loading) {
     return (
