@@ -71,6 +71,10 @@ function ChatPage() {
   const [lastScrollTop, setLastScrollTop] = useState(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [newMessagesBelowViewport, setNewMessagesBelowViewport] = useState(0);
+  const [orderSearchTerm, setOrderSearchTerm] = useState("");
+  const [filteredUserOrders, setFilteredUserOrders] = useState<typeof userOrders>([]);
+  const [filteredAdminOrders, setFilteredAdminOrders] = useState<typeof adminOrders>([]);
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
 
   // Authentication check
   useEffect(() => {
@@ -1188,8 +1192,75 @@ function ChatPage() {
           user_name: userName,
         },
       });
-    }, 3000);
+    }, [selectedOrderId, user, isAdmin]);
   }, [selectedOrderId, user, isAdmin]);
+
+  // Add this effect to filter orders based on search term
+  useEffect(() => {
+    // Filter user orders
+    if (userOrders.length > 0) {
+      if (!debouncedSearchTerm.trim()) {
+        setFilteredUserOrders(userOrders);
+      } else {
+        const searchTermLower = debouncedSearchTerm.toLowerCase();
+        const filtered = userOrders.filter(order => {
+          // Search by order ID
+          if (order.id.toLowerCase().includes(searchTermLower)) {
+            return true;
+          }
+          
+          // Search by full name
+          if (order.full_name && order.full_name.toLowerCase().includes(searchTermLower)) {
+            return true;
+          }
+          
+          return false;
+        });
+        
+        setFilteredUserOrders(filtered);
+      }
+    }
+    
+    // Filter admin orders
+    if (adminOrders.length > 0) {
+      if (!debouncedSearchTerm.trim()) {
+        setFilteredAdminOrders(adminOrders);
+      } else {
+        const searchTermLower = debouncedSearchTerm.toLowerCase();
+        const filtered = adminOrders.filter(order => {
+          // Search by order ID
+          if (order.id.toLowerCase().includes(searchTermLower)) {
+            return true;
+          }
+          
+          // Search by full name
+          if (order.full_name && order.full_name.toLowerCase().includes(searchTermLower)) {
+            return true;
+          }
+          
+          return false;
+        });
+        
+        setFilteredAdminOrders(filtered);
+      }
+    }
+  }, [debouncedSearchTerm, userOrders, adminOrders]);
+
+  // Add this function to handle search input changes
+  const handleOrderSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setOrderSearchTerm(e.target.value);
+  };
+
+  // Add this effect for debouncing
+  useEffect(() => {
+    const timerId = setTimeout(() => {
+      setDebouncedSearchTerm(orderSearchTerm);
+    }, 300); // 300ms delay
+
+    return () => {
+      clearTimeout(timerId);
+    };
+  }, [orderSearchTerm]);
 
   if (fallbackMode) {
     return (
@@ -1340,66 +1411,151 @@ function ChatPage() {
         <div className="flex h-[calc(100vh-5rem)]">
           {/* Sidebar */}
           <div
-            className={`fixed inset-y-0 left-0 z-20 w-80 bg-black/80 backdrop-blur-md transform transition-transform duration-300 ease-in-out ${
+            className={`fixed inset-y-0 left-0 w-80 bg-gray-900 transform transition-transform duration-300 ease-in-out z-20 ${
               showSidebar ? "translate-x-0" : "-translate-x-full"
-            } md:relative md:translate-x-0`}
+            } md:translate-x-0 md:static md:w-80 md:min-w-[320px] flex flex-col`}
           >
-            <div className="flex flex-col h-full p-4">
+            <div className="p-4 border-b border-white/10">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-white">Orders</h2>
+                <h2 className="text-lg font-medium text-white">
+                  Orders
+                  <span className="ml-2 text-sm text-white/50">
+                    ({isAdmin ? filteredAdminOrders.length : filteredUserOrders.length})
+                  </span>
+                </h2>
                 <button
                   onClick={() => setShowSidebar(false)}
-                  className="md:hidden text-white/70 hover:text-white"
+                  className="text-white/50 hover:text-white md:hidden"
                 >
                   <XIcon className="w-6 h-6" />
                 </button>
               </div>
-
-              <div className="mb-4">
+              
+              {/* Add search input */}
+              <div className="relative">
                 <input
                   type="text"
                   placeholder="Search orders..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  value={orderSearchTerm}
+                  onChange={handleOrderSearch}
                   className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                 />
+                <div className="absolute right-3 top-2.5 text-white/50">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
               </div>
+            </div>
 
-              <div className="flex-1 overflow-y-auto">
-                {filteredOrders.length === 0 ? (
-                  <div className="text-center text-white/50 py-8">
-                    No orders found
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {filteredOrders.map((order) => (
+            <div className="flex-1 overflow-y-auto">
+              {loading ? (
+                <div className="h-32 flex items-center justify-center">
+                  <LoadingSpinner size="md" light />
+                </div>
+              ) : isAdmin ? (
+                // Admin orders list
+                filteredAdminOrders.length > 0 ? (
+                  <div className="divide-y divide-white/10">
+                    {filteredAdminOrders.map((order) => (
                       <button
                         key={order.id}
                         onClick={() => {
                           setSelectedOrderId(order.id);
-                          fetchMessages(order.id);
                           setShowSidebar(false);
+                          fetchMessages(order.id);
                         }}
-                        className={`w-full text-left p-3 rounded-lg transition-colors ${
-                          selectedOrderId === order.id
-                            ? "bg-emerald-500/20 text-emerald-400"
-                            : "bg-white/5 text-white hover:bg-white/10"
+                        className={`w-full text-left p-4 hover:bg-white/5 transition-colors ${
+                          selectedOrderId === order.id ? "bg-white/10" : ""
                         }`}
                       >
-                        <div className="font-medium">
-                          Order #{order.id.slice(0, 8)}
-                        </div>
-                        {isAdmin && order.messages?.length && (
-                          <div className="text-xs text-emerald-400 mt-1">
-                            {order.messages.length} message
-                            {order.messages.length !== 1 ? "s" : ""}
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-white font-medium">
+                              {order.full_name || "Customer"}
+                            </p>
+                            <p className="text-white/50 text-sm">
+                              Order #{order.id.slice(0, 8)}
+                            </p>
                           </div>
-                        )}
+                          {order.messages && order.messages.length > 0 && (
+                            <span className="bg-emerald-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                              {order.messages.length}
+                            </span>
+                          )}
+                        </div>
                       </button>
-                    ))}
+                    ))
                   </div>
-                )}
-              </div>
+                ) : (
+                  <div className="p-8 text-center text-white/50">
+                    {orderSearchTerm ? (
+                      <>
+                        <p>No orders matching "{orderSearchTerm}"</p>
+                        <button
+                          onClick={() => setOrderSearchTerm("")}
+                          className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                        >
+                          Clear search
+                        </button>
+                      </>
+                    ) : (
+                      <p>No orders found</p>
+                    )}
+                  </div>
+                )
+              ) : (
+                // User orders list
+                filteredUserOrders.length > 0 ? (
+                  <div className="divide-y divide-white/10">
+                    {filteredUserOrders.map((order) => (
+                      <button
+                        key={order.id}
+                        onClick={() => {
+                          setSelectedOrderId(order.id);
+                          setShowSidebar(false);
+                          fetchMessages(order.id);
+                        }}
+                        className={`w-full text-left p-4 hover:bg-white/5 transition-colors ${
+                          selectedOrderId === order.id ? "bg-white/10" : ""
+                        }`}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-white font-medium">
+                              Order #{order.id.slice(0, 8)}
+                            </p>
+                            <p className="text-white/50 text-sm">
+                              {new Date().toLocaleDateString()}
+                            </p>
+                          </div>
+                          {order.messages && order.messages.length > 0 && (
+                            <span className="bg-emerald-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                              {order.messages.length}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ))
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-white/50">
+                    {orderSearchTerm ? (
+                      <>
+                        <p>No orders matching "{orderSearchTerm}"</p>
+                        <button
+                          onClick={() => setOrderSearchTerm("")}
+                          className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                        >
+                          Clear search
+                        </button>
+                      </>
+                    ) : (
+                      <p>No orders found</p>
+                    )}
+                  </div>
+                )
+              )}
             </div>
           </div>
 
