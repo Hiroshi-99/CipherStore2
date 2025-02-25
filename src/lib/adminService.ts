@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { safeInsert, safeUpdate } from "./database";
+import { safeInsert } from "./database";
 
 /**
  * Checks if a user has admin privileges
@@ -8,15 +8,7 @@ import { safeInsert, safeUpdate } from "./database";
  */
 export async function checkIfAdmin(userId: string) {
   try {
-    // Check user metadata first (fastest)
-    const { data: userData, error: userError } =
-      await supabase.auth.admin.getUserById(userId);
-
-    if (!userError && userData?.user?.user_metadata?.role === "admin") {
-      return true;
-    }
-
-    // Then check the admin_users table
+    // First check the admin_users table
     const { data: adminData, error: adminError } = await supabase
       .from("admin_users")
       .select("id")
@@ -25,6 +17,26 @@ export async function checkIfAdmin(userId: string) {
 
     if (!adminError && adminData) {
       return true;
+    }
+
+    // Then check user metadata through a serverless function
+    try {
+      const { data, error } = await fetch(
+        "/.netlify/functions/check-admin-status",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ userId }),
+        }
+      ).then((res) => res.json());
+
+      if (!error && data?.isAdmin) {
+        return true;
+      }
+    } catch (fnError) {
+      console.error("Error checking admin via function:", fnError);
     }
 
     // Check against known admin IDs as fallback
@@ -137,46 +149,73 @@ export async function fetchUsersWithAdminStatus(adminUserId: string) {
       };
     }
 
-    // Get all users from auth.users
-    const { data: users, error: usersError } =
-      await supabase.auth.admin.listUsers();
+    // Call the serverless function to get users
+    try {
+      const response = await fetch("/.netlify/functions/admin-list-users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ adminUserId }),
+      });
 
-    if (usersError) {
+      const result = await response.json();
+
+      if (result.error) {
+        return {
+          success: false,
+          error: result.error,
+        };
+      }
+
       return {
-        success: false,
-        error: `Failed to fetch users: ${usersError.message}`,
+        success: true,
+        data: result.data,
       };
+    } catch (fnError) {
+      console.error("Error fetching users via function:", fnError);
+
+      // Fallback to just getting admin status from the admin_users table
+      const { data: users, error: usersError } = await supabase
+        .from("profiles")
+        .select("id, email, full_name, created_at");
+
+      if (usersError) {
+        return {
+          success: false,
+          error: `Failed to fetch users: ${usersError.message}`,
+        };
+      }
+
+      // Get all admin users
+      const { data: adminUsers, error: adminError } = await supabase
+        .from("admin_users")
+        .select("user_id");
+
+      if (adminError) {
+        return {
+          success: false,
+          error: `Failed to fetch admin users: ${adminError.message}`,
+        };
+      }
+
+      // Create a set of admin user IDs for quick lookup
+      const adminUserIds = new Set(
+        (adminUsers || []).map((admin) => admin.user_id)
+      );
+
+      // Combine the data
+      const usersWithAdminStatus = (users || []).map((user) => ({
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name || "",
+        isAdmin: adminUserIds.has(user.id),
+        lastSignIn: null,
+        createdAt: user.created_at,
+      }));
+
+      return { success: true, data: usersWithAdminStatus };
     }
-
-    // Get all admin users
-    const { data: adminUsers, error: adminError } = await supabase
-      .from("admin_users")
-      .select("user_id");
-
-    if (adminError) {
-      return {
-        success: false,
-        error: `Failed to fetch admin users: ${adminError.message}`,
-      };
-    }
-
-    // Create a set of admin user IDs for quick lookup
-    const adminUserIds = new Set(
-      (adminUsers || []).map((admin) => admin.user_id)
-    );
-
-    // Combine the data
-    const usersWithAdminStatus = users.users.map((user) => ({
-      id: user.id,
-      email: user.email,
-      fullName: user.user_metadata?.full_name || "",
-      isAdmin:
-        adminUserIds.has(user.id) || user.user_metadata?.role === "admin",
-      lastSignIn: user.last_sign_in_at,
-      createdAt: user.created_at,
-    }));
-
-    return { success: true, data: usersWithAdminStatus };
   } catch (err) {
     console.error("Error fetching users with admin status:", err);
     return { success: false, error: "An unexpected error occurred" };
