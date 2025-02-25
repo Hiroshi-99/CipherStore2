@@ -1018,49 +1018,63 @@ Please keep these details secure. You can copy them by selecting the text.
       toast.error("No orders selected");
       return;
     }
-
+    
     setIsOrderActionInProgress(true);
-
+    
     try {
       const orderIds = Array.from(selectedOrderIds);
-
+      
       switch (action) {
-        case "approve":
+        case "approve": {
           toast.info(`Approving ${orderIds.length} orders...`);
-
-          // Use a more efficient batch update
-          if (orderIds.length > 0) {
-            const { error } = await supabase
-              .from("orders")
-              .update({ status: "active" })
-              .in("id", orderIds);
-
-            if (error) {
-              throw error;
+          
+          try {
+            // Use a more efficient batch update
+            if (orderIds.length > 0) {
+              const { error } = await supabase
+                .from("orders")
+                .update({ status: "active" })
+                .in("id", orderIds);
+              
+              if (error) {
+                throw error;
+              }
             }
+            
+            toast.success(`${orderIds.length} orders approved`);
+          } catch (error) {
+            console.error("Error approving orders:", error);
+            toast.error("Failed to approve orders. Please try again.", {
+              id: toastId,
+            });
           }
-
-          toast.success(`${orderIds.length} orders approved`);
           break;
-
-        case "reject":
+        }
+        
+        case "reject": {
           toast.info(`Rejecting ${orderIds.length} orders...`);
-
-          // Use a more efficient batch update
-          if (orderIds.length > 0) {
-            const { error } = await supabase
-              .from("orders")
-              .update({ status: "rejected" })
-              .in("id", orderIds);
-
-            if (error) {
-              throw error;
+          
+          try {
+            // Use a more efficient batch update
+            if (orderIds.length > 0) {
+              const { error } = await supabase
+                .from("orders")
+                .update({ status: "rejected" })
+                .in("id", orderIds);
+              
+              if (error) {
+                throw error;
+              }
             }
+            
+            toast.success(`${orderIds.length} orders rejected`);
+          } catch (error) {
+            console.error("Error rejecting orders:", error);
+            toast.error("Failed to reject orders. Please try again.");
           }
-
-          toast.success(`${orderIds.length} orders rejected`);
           break;
-
+        }
+        
         case "export":
           toast.info("Preparing export...");
           setIsExporting(true);
@@ -1136,10 +1150,10 @@ Please keep these details secure. You can copy them by selecting the text.
           }
           break;
       }
-
+      
       // Refresh orders to get the latest data
       fetchOrders();
-
+      
       // Clear selection after action
       setSelectedOrderIds(new Set());
     } catch (err) {
