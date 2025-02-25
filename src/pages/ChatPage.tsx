@@ -65,6 +65,12 @@ function ChatPage() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const messageSound = useRef<HTMLAudioElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [lastScrollHeight, setLastScrollHeight] = useState(0);
+  const [lastScrollTop, setLastScrollTop] = useState(0);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [newMessagesBelowViewport, setNewMessagesBelowViewport] = useState(0);
 
   // Authentication check
   useEffect(() => {
@@ -949,8 +955,7 @@ function ChatPage() {
           user_id: user.id,
         },
       });
-    }, 3000);
-  }, [selectedOrderId, user, isAdmin]);
+    }, [selectedOrderId, user, isAdmin]);
 
   // Add this effect to listen for typing events
   useEffect(() => {
@@ -997,17 +1002,88 @@ function ChatPage() {
     messageSound.current.volume = 0.5;
   }, []);
 
-  // Add this function to scroll to bottom
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Replace the simple scrollToBottom function with this improved version
+  const scrollToBottom = (force = false) => {
+    if (!messagesContainerRef.current) return;
+    
+    // Only auto-scroll if we're near the bottom or if forced
+    if (shouldAutoScroll || force) {
+      // Use requestAnimationFrame to ensure the DOM has updated
+      requestAnimationFrame(() => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({
+            behavior: force ? 'auto' : 'smooth',
+            block: 'end'
+          });
+        }
+      });
+    }
   };
 
-  // Call this function when messages change
-  useEffect(() => {
-    if (messages.length > 0) {
-      scrollToBottom();
+  // Update the checkIfNearBottom function to also check for new messages
+  const checkIfNearBottom = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const scrollBottom = scrollHeight - scrollTop - clientHeight;
+    
+    // Consider "near bottom" if within 100px of the bottom
+    const nearBottom = scrollBottom < 100;
+    setIsNearBottom(nearBottom);
+    setShouldAutoScroll(nearBottom);
+    
+    // If we're not near bottom and there are unread messages, show indicator
+    if (!nearBottom && unreadMessages.size > 0) {
+      // Count messages that are below the viewport
+      let count = 0;
+      const visibleBottom = scrollTop + clientHeight;
+      
+      // This is a simplified approach - for a more accurate count,
+      // you'd need to measure each message element's position
+      const approximateMessageHeight = 80; // pixels
+      const totalMessagesHeight = messages.length * approximateMessageHeight;
+      const visibleRatio = clientHeight / totalMessagesHeight;
+      const visibleMessages = Math.floor(messages.length * visibleRatio);
+      const messagesBelow = messages.length - visibleMessages - Math.floor(scrollTop / approximateMessageHeight);
+      
+      count = Math.max(0, messagesBelow);
+      setNewMessagesBelowViewport(count);
+    } else {
+      setNewMessagesBelowViewport(0);
     }
-  }, [messages]);
+  };
+
+  // Add this component for the new message indicator
+  const NewMessagesIndicator = () => {
+    if (newMessagesBelowViewport <= 0) return null;
+    
+    return (
+      <button
+        onClick={() => scrollToBottom(true)}
+        className="absolute bottom-24 right-4 bg-blue-500 text-white rounded-full px-3 py-1 shadow-lg hover:bg-blue-600 transition-all z-10 flex items-center gap-2"
+      >
+        <span>{newMessagesBelowViewport} new message{newMessagesBelowViewport > 1 ? 's' : ''}</span>
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        </svg>
+      </button>
+    );
+  };
+
+  // Add this component to your messages container
+  <div 
+    className="flex-1 overflow-y-auto p-4 relative" 
+    ref={messagesContainerRef}
+  >
+    {/* ... existing content ... */}
+    
+    {/* Scroll to bottom button */}
+    <ScrollToBottomButton />
+    
+    {/* New messages indicator */}
+    <NewMessagesIndicator />
+  </div>
 
   if (fallbackMode) {
     return (
@@ -1240,7 +1316,10 @@ function ChatPage() {
             {/* Messages area */}
             {selectedOrderId ? (
               <>
-                <div className="flex-1 overflow-y-auto p-4">
+                <div 
+                  className="flex-1 overflow-y-auto p-4 relative" 
+                  ref={messagesContainerRef}
+                >
                   {loading ? (
                     <div className="h-full flex items-center justify-center">
                       <LoadingSpinner size="lg" light />
@@ -1268,22 +1347,32 @@ function ChatPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      {messages.map((message, index) => (
-                        <MessageBubble
-                          key={message.id}
-                          message={message}
-                          isLatest={index === messages.length - 1}
-                          sending={false}
-                          isUnread={unreadMessages.has(message.id)}
-                          onRetry={() => handleRetry(message.id)}
-                          isPending={pendingMessages.current.has(message.id)}
-                        />
-                      ))}
-                    </div>
+                    <>
+                      <div className="space-y-4">
+                        {messages.map((message, index) => (
+                          <MessageBubble
+                            key={message.id}
+                            message={message}
+                            isLatest={index === messages.length - 1}
+                            sending={false}
+                            isUnread={unreadMessages.has(message.id)}
+                            onRetry={() => handleRetry(message.id)}
+                            isPending={pendingMessages.current.has(message.id)}
+                          />
+                        ))}
+                      </div>
+                      {/* Messages end ref */}
+                      <div ref={messagesEndRef} />
+                    </>
                   )}
+                  
+                  {/* Scroll to bottom button */}
+                  <ScrollToBottomButton />
+                  
+                  {/* New messages indicator */}
+                  <NewMessagesIndicator />
                 </div>
-
+                
                 {/* Message input */}
                 <div className="p-4 border-t border-white/10">
                   <form onSubmit={handleSendMessage}>
@@ -1363,9 +1452,6 @@ function ChatPage() {
                     </span>
                   </div>
                 )}
-
-                {/* Messages end ref */}
-                <div ref={messagesEndRef} />
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center">
