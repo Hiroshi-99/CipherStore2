@@ -325,16 +325,68 @@ function AdminPage() {
 
   const checkAdminStatus = async () => {
     try {
-      const { data: adminData, error: adminError } = await supabase
-        .from("admin_users")
-        .select("*");
+      setLoading(true);
 
-      if (adminError) throw adminError;
-      setAdmins(adminData || []);
-      setIsOwner(adminData?.some((admin) => admin.is_owner));
-    } catch (error) {
-      console.error("Error checking admin status:", error);
-      setError("Failed to verify admin status");
+      // Get the current user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        console.error("No user found");
+        setIsAdmin(false);
+        setLoading(false);
+        return;
+      }
+
+      console.log("Current user:", user);
+
+      // Check if the user is an admin
+      const adminResult = await checkIfAdmin(user.id);
+      console.log("Admin check result:", adminResult);
+
+      if (adminResult.isAdmin) {
+        setIsAdmin(true);
+
+        // Set current user
+        setCurrentUser({
+          id: user.id,
+          email: user.email || "",
+          fullName: user.user_metadata?.full_name || "",
+          isAdmin: true,
+          lastSignIn: null,
+          createdAt: user.created_at,
+        });
+
+        // Fetch orders and users
+        await fetchOrders();
+        await fetchUsers(user.id);
+      } else {
+        setIsAdmin(false);
+        toast.error("You don't have admin privileges");
+
+        // Try to grant admin privileges if this is the first user
+        if (adminResult.error && adminResult.error.includes("first user")) {
+          const grantResult = await grantAdminPrivileges(
+            user.id,
+            user.email || ""
+          );
+
+          if (grantResult.success) {
+            setIsAdmin(true);
+            toast.success("Admin privileges granted automatically");
+
+            // Fetch orders and users
+            await fetchOrders();
+            await fetchUsers(user.id);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error checking admin status:", err);
+      toast.error("Failed to check admin status");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -2136,6 +2188,195 @@ Please keep these details secure. You can copy them by selecting the text.
     fetchInitialData();
   }, []);
 
+  // Add this function to create necessary database tables
+  const createRequiredTables = async () => {
+    try {
+      toast.info("Creating required database tables...");
+
+      // Create admin_users table if it doesn't exist
+      const { error: adminTableError } = await supabase.rpc(
+        "create_admin_users_table"
+      );
+
+      if (adminTableError) {
+        console.error("Error creating admin_users table:", adminTableError);
+
+        // Try direct SQL as fallback
+        const { error: sqlError } = await supabase.rpc("execute_sql", {
+          sql: `
+            CREATE TABLE IF NOT EXISTS admin_users (
+              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+              user_id UUID NOT NULL,
+              granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+              UNIQUE(user_id)
+            );
+          `,
+        });
+
+        if (sqlError) {
+          console.error("Error creating admin_users table via SQL:", sqlError);
+        }
+      }
+
+      // Create users table if it doesn't exist
+      const { error: usersTableError } = await supabase.rpc(
+        "create_users_table"
+      );
+
+      if (usersTableError) {
+        console.error("Error creating users table:", usersTableError);
+
+        // Try direct SQL as fallback
+        const { error: sqlError } = await supabase.rpc("execute_sql", {
+          sql: `
+            CREATE TABLE IF NOT EXISTS users (
+              id UUID PRIMARY KEY,
+              email TEXT,
+              full_name TEXT,
+              is_admin BOOLEAN DEFAULT FALSE,
+              created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+          `,
+        });
+
+        if (sqlError) {
+          console.error("Error creating users table via SQL:", sqlError);
+        }
+      }
+
+      toast.success("Database tables created successfully");
+
+      // Add current user to users table
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        const { error: insertError } = await supabase.from("users").upsert(
+          {
+            id: user.id,
+            email: user.email,
+            full_name: user.user_metadata?.full_name || "",
+            is_admin: true,
+            created_at: user.created_at,
+          },
+          { onConflict: "id" }
+        );
+
+        if (insertError) {
+          console.error(
+            "Error adding current user to users table:",
+            insertError
+          );
+        }
+      }
+
+      // Refresh the page to apply changes
+      window.location.reload();
+    } catch (err) {
+      console.error("Error creating required tables:", err);
+      toast.error("Failed to create database tables");
+    }
+  };
+
+  // Add this function to debug and fix admin permissions
+  const debugAdminPermissions = async () => {
+    try {
+      toast.info("Checking admin permissions...");
+
+      // Get the current user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        toast.error("No user found. Please log in.");
+        return;
+      }
+
+      console.log("Current user:", user);
+
+      // Check if the user exists in the users table
+      const { data: existingUser, error: userError } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
+      if (userError) {
+        console.error("Error checking user in users table:", userError);
+
+        // Add the user to the users table
+        const { error: insertError } = await supabase.from("users").insert({
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata?.full_name || "",
+          is_admin: true,
+          created_at: user.created_at,
+        });
+
+        if (insertError) {
+          console.error("Error adding user to users table:", insertError);
+          toast.error("Failed to add user to users table");
+        } else {
+          toast.success("Added user to users table");
+        }
+      } else {
+        console.log("User found in users table:", existingUser);
+
+        // Update the user's admin status
+        const { error: updateError } = await supabase
+          .from("users")
+          .update({ is_admin: true })
+          .eq("id", user.id);
+
+        if (updateError) {
+          console.error("Error updating user admin status:", updateError);
+          toast.error("Failed to update user admin status");
+        } else {
+          toast.success("Updated user admin status");
+        }
+      }
+
+      // Check if the user exists in the admin_users table
+      const { data: adminUser, error: adminError } = await supabase
+        .from("admin_users")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+
+      if (adminError) {
+        console.error("Error checking user in admin_users table:", adminError);
+
+        // Add the user to the admin_users table
+        const { error: insertError } = await supabase
+          .from("admin_users")
+          .insert({
+            user_id: user.id,
+            granted_at: new Date().toISOString(),
+          });
+
+        if (insertError) {
+          console.error("Error adding user to admin_users table:", insertError);
+          toast.error("Failed to add user to admin_users table");
+        } else {
+          toast.success("Added user to admin_users table");
+        }
+      } else {
+        console.log("User found in admin_users table:", adminUser);
+        toast.success("User already has admin privileges");
+      }
+
+      // Refresh the page to apply changes
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } catch (err) {
+      console.error("Error debugging admin permissions:", err);
+      toast.error("Failed to debug admin permissions");
+    }
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -2150,17 +2391,32 @@ Please keep these details secure. You can copy them by selecting the text.
     return (
       <PageContainer title="ADMIN">
         <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
-          <div className="text-center">
+          <div className="text-center max-w-md">
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
             <p className="text-white/70 mb-6">
-              You don't have permission to access this page.
+              You don't have permission to access this page. If you believe this
+              is an error, you can try to set up the admin database tables.
             </p>
-            <button
-              onClick={() => navigate("/")}
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
-            >
-              Go Home
-            </button>
+            <div className="flex flex-col gap-4 items-center">
+              <button
+                onClick={createRequiredTables}
+                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors w-full"
+              >
+                Set Up Admin Tables
+              </button>
+              <button
+                onClick={() => navigate("/")}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors w-full"
+              >
+                Go Home
+              </button>
+              <button
+                onClick={debugAdminPermissions}
+                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors w-full mt-2"
+              >
+                Debug Admin Permissions
+              </button>
+            </div>
           </div>
         </div>
       </PageContainer>
