@@ -377,12 +377,15 @@ function AdminPage() {
       }
 
       // Show progress
-      const toastId = toast.loading("Updating order with file...");
+      const toastId = toast.loading("Updating order with account file...");
 
       // Update the order with the file URL
       const { error } = await supabase
         .from("orders")
-        .update({ account_file_url: url })
+        .update({
+          account_file_url: url,
+          account_uploaded_at: new Date().toISOString(),
+        })
         .eq("id", selectedOrder.id);
 
       if (error) {
@@ -402,7 +405,8 @@ function AdminPage() {
       const { error: messageError } = await supabase.from("messages").insert({
         order_id: selectedOrder.id,
         user_id: userData?.user?.id,
-        content: "Your account file has been uploaded and is now available.",
+        content:
+          "Your account file has been uploaded and is now available in your Purchased Accounts section.",
         is_admin: true,
         created_at: new Date().toISOString(),
         user_name: userName,
@@ -419,15 +423,22 @@ function AdminPage() {
       setOrders((prev) =>
         prev.map((order) =>
           order.id === selectedOrder.id
-            ? { ...order, account_file_url: url }
+            ? {
+                ...order,
+                account_file_url: url,
+                account_uploaded_at: new Date().toISOString(),
+              }
             : order
         )
       );
 
       // Show success message
-      toast.success("File uploaded and attached to order successfully!", {
-        id: toastId,
-      });
+      toast.success(
+        "Account file uploaded and attached to order successfully!",
+        {
+          id: toastId,
+        }
+      );
 
       // Close any open modals
       setShowImageModal(false);
@@ -439,67 +450,41 @@ function AdminPage() {
     }
   };
 
-  // Enhance the direct upload function to be more reliable
+  // Add this function for direct upload to Supabase
   const uploadDirectToSupabase = async (file: File): Promise<string | null> => {
     try {
       // Generate a unique file name
-      const fileName = `${Date.now()}-${file.name.replace(
+      const fileName = `account_${Date.now()}-${file.name.replace(
         /[^a-zA-Z0-9.]/g,
         "_"
       )}`;
 
       // Show progress in the toast
-      const toastId = toast.loading("Uploading file...");
+      const toastId = toast.loading("Uploading account file...");
 
-      // Get the current user session
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        toast.error("You must be logged in to upload files", { id: toastId });
+      // Upload directly to Supabase storage
+      const { data, error } = await supabase.storage
+        .from("account_files")
+        .upload(`accounts/${fileName}`, file, {
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (error) {
+        console.error("Error uploading to Supabase storage:", error);
+        toast.error("Upload failed. Please try again.", {
+          id: toastId,
+        });
         return null;
       }
 
-      // Try multiple buckets in case one fails
-      const buckets = ["images", "account_files", "uploads"];
-      let uploadedUrl = null;
+      // Get the public URL
+      const { data: urlData } = supabase.storage
+        .from("account_files")
+        .getPublicUrl(`accounts/${fileName}`);
 
-      for (const bucket of buckets) {
-        try {
-          toast.loading(`Uploading to ${bucket}...`, { id: toastId });
-          console.log(`Trying upload to ${bucket} bucket`);
-
-          // Upload directly to Supabase storage
-          const { data, error } = await supabase.storage
-            .from(bucket)
-            .upload(`uploads/${fileName}`, file, {
-              cacheControl: "3600",
-              upsert: true,
-            });
-
-          if (!error) {
-            // Get the public URL
-            const { data: urlData } = supabase.storage
-              .from(bucket)
-              .getPublicUrl(`uploads/${fileName}`);
-
-            uploadedUrl = urlData.publicUrl;
-            console.log(`Upload successful to ${bucket}:`, uploadedUrl);
-            toast.success(`Upload successful!`, { id: toastId });
-            break;
-          } else {
-            console.error(`Error uploading to ${bucket}:`, error);
-          }
-        } catch (bucketError) {
-          console.error(`Error with bucket ${bucket}:`, bucketError);
-        }
-      }
-
-      if (!uploadedUrl) {
-        toast.error("Failed to upload file. Please try again.", {
-          id: toastId,
-        });
-      }
-
-      return uploadedUrl;
+      toast.success("Account file uploaded successfully!", { id: toastId });
+      return urlData.publicUrl;
     } catch (err) {
       console.error("Error in direct Supabase upload:", err);
       toast.error("Upload failed. Please try again.");
@@ -517,6 +502,170 @@ function AdminPage() {
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  // Add this simple image upload component
+  const SimpleImageUpload = ({
+    onUpload,
+  }: {
+    onUpload: (url: string) => void;
+  }) => {
+    const [isDragging, setIsDragging] = useState(false);
+    const [preview, setPreview] = useState<string | null>(null);
+
+    const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(true);
+    };
+
+    const handleDragLeave = () => {
+      setIsDragging(false);
+    };
+
+    const handleDrop = async (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        await handleFile(files[0]);
+      }
+    };
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        await handleFile(file);
+      }
+    };
+
+    const handleFile = async (file: File) => {
+      // Check file type
+      if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+        toast.error("Please upload an image or PDF file");
+        return;
+      }
+
+      // Check file size
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error("File too large. Maximum size is 10MB.");
+        return;
+      }
+
+      // Show preview for images
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          setPreview(e.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // Upload the file
+      const toastId = toast.loading("Uploading file...");
+
+      try {
+        // Generate a unique file name
+        const fileName = `${Date.now()}-${file.name.replace(
+          /[^a-zA-Z0-9.]/g,
+          "_"
+        )}`;
+
+        // Upload directly to Supabase storage
+        const { data, error } = await supabase.storage
+          .from("images")
+          .upload(`uploads/${fileName}`, file, {
+            cacheControl: "3600",
+            upsert: true,
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        // Get the public URL
+        const { data: urlData } = supabase.storage
+          .from("images")
+          .getPublicUrl(`uploads/${fileName}`);
+
+        toast.success("File uploaded successfully!", { id: toastId });
+        onUpload(urlData.publicUrl);
+      } catch (err) {
+        console.error("Upload error:", err);
+
+        // Try fallback to local preview if direct upload fails
+        try {
+          toast.loading("Trying local preview as fallback...", { id: toastId });
+
+          // Convert to base64
+          const base64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsDataURL(file);
+          });
+
+          toast.success("Created local preview as fallback", { id: toastId });
+          onUpload(base64);
+        } catch (fallbackErr) {
+          console.error("Fallback error:", fallbackErr);
+          toast.error("All upload methods failed. Please try again.", {
+            id: toastId,
+          });
+        }
+      }
+    };
+
+    return (
+      <div
+        className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+          isDragging
+            ? "border-blue-400 bg-blue-50/10"
+            : "border-gray-300/30 hover:border-gray-300/50"
+        }`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {preview ? (
+          <div className="relative mb-4">
+            <img
+              src={preview}
+              alt="Preview"
+              className="max-h-40 mx-auto rounded"
+            />
+            <button
+              onClick={() => setPreview(null)}
+              className="absolute top-0 right-0 bg-black/50 rounded-full p-1 text-white"
+            >
+              <XCircle size={16} />
+            </button>
+          </div>
+        ) : (
+          <Upload className="mx-auto h-12 w-12 text-gray-400/50" />
+        )}
+
+        <div className="mt-4">
+          <input
+            type="file"
+            id="simple-file-upload"
+            onChange={handleFileChange}
+            accept="image/*,application/pdf"
+            className="hidden"
+          />
+
+          <label
+            htmlFor="simple-file-upload"
+            className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors cursor-pointer inline-block"
+          >
+            Choose File
+          </label>
+
+          <p className="mt-2 text-sm text-gray-400">
+            or drag and drop a file here
+          </p>
+        </div>
+      </div>
+    );
   };
 
   if (loading) {
@@ -728,95 +877,56 @@ function AdminPage() {
 
           {/* Order Details Section */}
           <div className="mt-4 space-y-4">
-            <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <h3 className="text-lg font-medium mb-2 text-blue-400">
-                Upload Account File
+            <div className="mt-6 border-t border-gray-700 pt-4">
+              <h3 className="text-lg font-medium mb-3 text-white">
+                Account Management
               </h3>
-              <p className="text-sm text-white/70 mb-4">
-                Upload an account file to share with the customer. Supported
-                formats: images and PDF.
-              </p>
 
-              <button
-                onClick={async () => {
-                  if (!selectedOrderId) {
-                    toast.error("Please select an order first");
-                    return;
-                  }
-
-                  const input = document.createElement("input");
-                  input.type = "file";
-                  input.accept = "image/*,application/pdf";
-
-                  input.onchange = async (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (!file) return;
-
-                    // Check file size
-                    if (file.size > 10 * 1024 * 1024) {
-                      toast.error("File too large. Maximum size is 10MB.");
-                      return;
-                    }
-
-                    setActionInProgress("uploading");
-
-                    try {
-                      const url = await uploadDirectToSupabase(file);
-                      if (url) {
-                        handleFileUpload(url);
-                      } else {
-                        throw new Error("Upload failed");
-                      }
-                    } catch (err) {
-                      console.error("Upload error:", err);
-                      toast.error("Failed to upload file. Please try again.");
-                      setActionInProgress(null);
-                    }
-                  };
-
-                  input.click();
-                }}
-                className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
-                disabled={actionInProgress === "uploading" || !selectedOrderId}
-              >
-                {actionInProgress === "uploading" ? (
-                  <span className="flex items-center justify-center">
-                    <RefreshCw className="animate-spin mr-2 h-5 w-5" />
-                    Uploading...
-                  </span>
-                ) : (
-                  <span className="flex items-center justify-center">
-                    <Upload className="mr-2 h-5 w-5" />
-                    Upload Account File
-                  </span>
-                )}
-              </button>
-
-              {orders.find((order) => order.id === selectedOrderId) && (
-                <div className="mt-4 p-3 bg-white/5 rounded-lg">
-                  <p className="text-sm text-white/70 mb-2">Current file:</p>
-                  <a
-                    href={
-                      orders.find((order) => order.id === selectedOrderId)
-                        ?.account_file_url
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 flex items-center"
-                  >
-                    <Download size={16} className="mr-2" />
-                    View uploaded file
-                  </a>
+              <div className="bg-gray-800 rounded-lg p-4 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-medium text-white">Account File</h4>
+                  {selectedOrder?.account_file_url && (
+                    <span className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded-full">
+                      Uploaded
+                    </span>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {/* Alternative upload methods (for testing) */}
-            <div className="p-4 bg-gray-800 rounded-lg border border-gray-700">
-              <h4 className="text-sm font-medium mb-2 text-gray-400">
-                Alternative Upload Methods
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {selectedOrder?.account_file_url ? (
+                  <div className="mb-4">
+                    <div className="flex items-center mb-2">
+                      <FileText className="text-blue-400 mr-2" size={20} />
+                      <a
+                        href={selectedOrder.account_file_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        View account file
+                      </a>
+                    </div>
+
+                    <div className="text-xs text-gray-400">
+                      {selectedOrder.viewed_at ? (
+                        <div className="flex items-center text-green-400">
+                          <Eye size={14} className="mr-1" />
+                          Viewed by customer on{" "}
+                          {new Date(selectedOrder.viewed_at).toLocaleString()}
+                        </div>
+                      ) : (
+                        <div className="flex items-center text-yellow-400">
+                          <Eye size={14} className="mr-1" />
+                          Not viewed by customer yet
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-gray-400 text-sm mb-3">
+                    No account file has been uploaded for this order yet.
+                  </p>
+                )}
+
                 <button
                   onClick={async () => {
                     if (!selectedOrderId) {
@@ -832,88 +942,143 @@ function AdminPage() {
                       const file = (e.target as HTMLInputElement).files?.[0];
                       if (!file) return;
 
-                      toast.loading("Creating local file preview...");
+                      // Check file size
+                      if (file.size > 10 * 1024 * 1024) {
+                        toast.error("File too large. Maximum size is 10MB.");
+                        return;
+                      }
+
                       setActionInProgress("uploading");
 
                       try {
-                        // Convert to base64
-                        const base64 = await new Promise<string>((resolve) => {
-                          const reader = new FileReader();
-                          reader.onload = () =>
-                            resolve(reader.result as string);
-                          reader.readAsDataURL(file);
-                        });
-
-                        // Get current user ID or use a fallback
-                        let userId = "unknown";
-                        try {
-                          const { data: userData } =
-                            await supabase.auth.getUser();
-                          userId = userData?.user?.id || "unknown";
-                        } catch (userError) {
-                          console.error("Error getting user ID:", userError);
+                        const url = await uploadDirectToSupabase(file);
+                        if (url) {
+                          handleFileUpload(url);
+                        } else {
+                          throw new Error("Upload failed");
                         }
-
-                        // Store in a temporary table
-                        const { data, error } = await supabase
-                          .from("file_uploads")
-                          .insert({
-                            file_name: fileName,
-                            file_data: base64,
-                            file_type: file.type,
-                            user_id: userId,
-                            created_at: new Date().toISOString(),
-                          })
-                          .select("id")
-                          .single();
-
-                        if (error) {
-                          console.error("Error storing file:", error);
-                          throw error;
-                        }
-
-                        // Use the data URL directly
-                        handleFileUpload(data.file_data);
                       } catch (err) {
-                        toast.dismiss();
-                        toast.error("Failed to create preview");
+                        console.error("Upload error:", err);
+                        toast.error("Failed to upload file. Please try again.");
                         setActionInProgress(null);
                       }
                     };
 
                     input.click();
                   }}
-                  className="px-3 py-2 bg-purple-500/30 text-purple-300 rounded-md hover:bg-purple-500/40 transition-colors text-sm"
+                  className="w-full px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
                   disabled={
                     actionInProgress === "uploading" || !selectedOrderId
                   }
                 >
-                  <span className="flex items-center justify-center">
-                    <Upload className="mr-1 h-4 w-4" />
-                    Local Preview
-                  </span>
+                  {actionInProgress === "uploading" ? (
+                    <span className="flex items-center justify-center">
+                      <RefreshCw className="animate-spin mr-2 h-4 w-4" />
+                      Uploading...
+                    </span>
+                  ) : (
+                    <span className="flex items-center justify-center">
+                      <Upload className="mr-2 h-4 w-4" />
+                      {selectedOrder?.account_file_url
+                        ? "Replace Account File"
+                        : "Upload Account File"}
+                    </span>
+                  )}
                 </button>
+              </div>
 
-                <button
-                  onClick={() => {
-                    if (!selectedOrderId) {
-                      toast.error("Please select an order first");
-                      return;
-                    }
+              {/* Account status section */}
+              <div className="bg-gray-800 rounded-lg p-4">
+                <h4 className="font-medium text-white mb-3">Account Status</h4>
 
-                    // Show help message
-                    toast.info(
-                      "If you're having issues uploading files, try using a smaller file or a different file format.",
-                      { duration: 5000 }
-                    );
-                  }}
-                  className="px-3 py-2 bg-blue-500/30 text-blue-300 rounded-md hover:bg-blue-500/40 transition-colors text-sm"
-                >
-                  <span className="flex items-center justify-center">
-                    <MessageCircle className="mr-1 h-4 w-4" />
-                    Upload Help
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <button
+                    onClick={async () => {
+                      if (!selectedOrderId) return;
+
+                      try {
+                        setActionInProgress("updating");
+                        const { error } = await supabase
+                          .from("orders")
+                          .update({ status: "completed" })
+                          .eq("id", selectedOrderId);
+
+                        if (error) throw error;
+
+                        // Update local state
+                        setOrders((prev) =>
+                          prev.map((order) =>
+                            order.id === selectedOrderId
+                              ? { ...order, status: "completed" }
+                              : order
+                          )
+                        );
+
+                        toast.success("Order marked as completed");
+                      } catch (err) {
+                        console.error("Error updating status:", err);
+                        toast.error("Failed to update status");
+                      } finally {
+                        setActionInProgress(null);
+                      }
+                    }}
+                    className="px-3 py-2 bg-green-500/20 text-green-400 rounded-md hover:bg-green-500/30 transition-colors"
+                    disabled={actionInProgress !== null || !selectedOrderId}
+                  >
+                    Mark as Completed
+                  </button>
+
+                  <button
+                    onClick={async () => {
+                      if (!selectedOrderId) return;
+
+                      try {
+                        setActionInProgress("updating");
+                        const { error } = await supabase
+                          .from("orders")
+                          .update({ status: "pending" })
+                          .eq("id", selectedOrderId);
+
+                        if (error) throw error;
+
+                        // Update local state
+                        setOrders((prev) =>
+                          prev.map((order) =>
+                            order.id === selectedOrderId
+                              ? { ...order, status: "pending" }
+                              : order
+                          )
+                        );
+
+                        toast.success("Order marked as pending");
+                      } catch (err) {
+                        console.error("Error updating status:", err);
+                        toast.error("Failed to update status");
+                      } finally {
+                        setActionInProgress(null);
+                      }
+                    }}
+                    className="px-3 py-2 bg-yellow-500/20 text-yellow-400 rounded-md hover:bg-yellow-500/30 transition-colors"
+                    disabled={actionInProgress !== null || !selectedOrderId}
+                  >
+                    Mark as Pending
+                  </button>
+                </div>
+
+                <div className="text-xs text-gray-400">
+                  Current status:
+                  <span
+                    className={`ml-1 font-medium ${
+                      selectedOrder?.status === "completed"
+                        ? "text-green-400"
+                        : selectedOrder?.status === "rejected"
+                        ? "text-red-400"
+                        : "text-yellow-400"
+                    }`}
+                  >
+                    {selectedOrder?.status || "Unknown"}
                   </span>
-                </button>
+                </div>
               </div>
             </div>
           </div>
