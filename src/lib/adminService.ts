@@ -151,13 +151,23 @@ export async function fetchUsersWithAdminStatus(adminUserId: string) {
 
     // Call the serverless function to get users
     try {
-      const response = await fetch("/.netlify/functions/admin-list-users", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ adminUserId }),
-      });
+      const response = await fetch(
+        "/.netlify/functions/admin-list-users-simple",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ adminUserId }),
+        }
+      );
+
+      // Add error handling for non-200 responses
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Function returned error:", response.status, errorText);
+        throw new Error(`Function returned ${response.status}: ${errorText}`);
+      }
 
       const result = await response.json();
 

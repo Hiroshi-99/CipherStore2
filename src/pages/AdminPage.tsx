@@ -114,6 +114,7 @@ function AdminPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [selectedTab, setSelectedTab] = useState("users");
+  const [fallbackMode, setFallbackMode] = useState(false);
 
   // This will define the selectedOrder based on the selectedOrderId
   const selectedOrder = selectedOrderId
@@ -707,11 +708,32 @@ Please keep these details secure. You can copy them by selecting the text.
       if (result.success) {
         setUsers(result.data);
       } else {
-        toast.error(result.error);
+        console.error("Error fetching users:", result.error);
+        toast.error("Failed to load users: " + result.error);
+        setFallbackMode(true);
+
+        // Load basic user data as fallback
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, email, full_name, created_at");
+
+        if (profiles) {
+          setUsers(
+            profiles.map((profile) => ({
+              id: profile.id,
+              email: profile.email,
+              fullName: profile.full_name || "",
+              isAdmin: false, // We don't know in fallback mode
+              lastSignIn: null,
+              createdAt: profile.created_at,
+            }))
+          );
+        }
       }
     } catch (err) {
       console.error("Error fetching users:", err);
       toast.error("Failed to load users");
+      setFallbackMode(true);
     } finally {
       setLoading(false);
     }

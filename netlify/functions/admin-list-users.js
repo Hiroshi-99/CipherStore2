@@ -29,9 +29,14 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Initialize Supabase client with service role key (from environment variables)
+    console.log("Function invoked with adminUserId:", adminUserId);
+
+    // Initialize Supabase client with service role key
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    console.log("Supabase URL available:", !!supabaseUrl);
+    console.log("Supabase service key available:", !!supabaseServiceKey);
 
     if (!supabaseUrl || !supabaseServiceKey) {
       return {
@@ -142,11 +147,15 @@ exports.handler = async (event, context) => {
       body: JSON.stringify({ data: usersWithAdminStatus }),
     };
   } catch (error) {
-    console.error("Function error:", error);
+    console.error("Function error details:", error.message, error.stack);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "Internal server error" }),
+      body: JSON.stringify({
+        error: "Internal server error",
+        details: error.message,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      }),
     };
   }
 };
