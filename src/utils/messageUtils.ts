@@ -1,13 +1,19 @@
+import { supabase } from "../lib/supabase";
+import { uuidCache } from "./uuidUtils";
+
 // Add this utility function to generate proper UUIDs for messages
-export const createMessage = (
+export const createMessage = async (
   content: string,
   user: any,
   orderId: string,
   isAdmin: boolean,
   imageUrl?: string
 ) => {
+  // Get a UUID from the cache
+  const messageId = await uuidCache.getUUID();
+
   return {
-    id: crypto.randomUUID(), // Generate a proper UUID
+    id: messageId,
     content,
     user_name: user?.user_metadata?.full_name || (isAdmin ? "Support" : "User"),
     user_avatar: user?.user_metadata?.avatar_url || "",
@@ -21,7 +27,12 @@ export const createMessage = (
 };
 
 // Add a function to generate a proper message object for insertion
-export const createMessageForInsert = (message: any) => {
+export const createMessageForInsert = async (message: any) => {
+  // If the message doesn't have an ID, generate one
+  if (!message.id) {
+    message.id = await uuidCache.getUUID();
+  }
+
   // Only include fields that exist in the database schema
   return {
     id: message.id,

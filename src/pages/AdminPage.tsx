@@ -36,6 +36,7 @@ import PageContainer from "../components/PageContainer";
 import { motion, AnimatePresence } from "framer-motion";
 import { useOrderFilters } from "../hooks/useOrderFilters";
 import type { Order } from "../hooks/useOrderFilters";
+import { uuidCache } from "../utils/uuidUtils";
 
 interface Admin {
   id: string;
@@ -713,7 +714,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Update the handleAccountDetailsUpload function to use proper UUIDs
+  // Update the handleAccountDetailsUpload function to use async UUID generation
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -763,7 +764,7 @@ Please keep these details secure. You can copy them by selecting the text.
       `.trim();
 
       // Generate a proper UUID for the message
-      const messageId = crypto.randomUUID();
+      const messageId = await uuidCache.getUUID();
 
       // Create a message to send the account details
       const { error: messageError } = await supabase.from("messages").insert({
