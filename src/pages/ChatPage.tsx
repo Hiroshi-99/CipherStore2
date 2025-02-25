@@ -81,37 +81,16 @@ function ChatPage() {
 
         setUser(session.user);
 
-        // Check if user is admin
-        const checkIfAdmin = async (userId: string) => {
-          try {
-            // Since both users and admins tables don't exist, rely on user metadata
-            // or hardcoded admin IDs for testing
-
-            // Option 1: Check user metadata
-            if (session.user.user_metadata?.role === "admin") {
-              return true;
-            }
-
-            // Option 2: Check against known admin IDs (for testing)
-            const knownAdminIds = [
-              "febded26-f3f6-4aec-9668-b6898de96ca3", // Add your test admin IDs here
-              // Add more admin IDs as needed
-            ];
-
-            return knownAdminIds.includes(userId);
-          } catch (err) {
-            console.error("Error checking admin status:", err);
-            return false;
-          }
-        };
-
-        setIsAdmin(await checkIfAdmin(session.user.id));
+        // Improved admin check
+        const adminStatus = await checkIfAdmin(session.user.id);
+        setIsAdmin(adminStatus);
+        console.log("User is admin:", adminStatus);
 
         // Fetch orders based on user role
-        if (isAdmin) {
-          fetchAdminOrders();
+        if (adminStatus) {
+          await fetchAdminOrders();
         } else {
-          fetchUserOrders(session.user.id);
+          await fetchUserOrders(session.user.id);
         }
       } catch (err) {
         console.error("Authentication error:", err);
@@ -125,9 +104,13 @@ function ChatPage() {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!session) {
         navigate("/");
+      } else {
+        setUser(session.user);
+        const adminStatus = await checkIfAdmin(session.user.id);
+        setIsAdmin(adminStatus);
       }
     });
 
@@ -231,17 +214,19 @@ function ChatPage() {
   // Fetch admin orders
   const fetchAdminOrders = async () => {
     try {
+      // For admin, fetch all orders regardless of user_id
       const { data, error: ordersError } = await supabase
         .from("orders")
-        .select("id, full_name")
+        .select("id, full_name, user_id")
         .order("created_at", { ascending: false });
 
       if (ordersError && ordersError.code === "42P01") {
         // Table doesn't exist error
         setError(
-          "Chat system is currently unavailable. The orders table doesn't exist in the database."
+          "Order system is currently unavailable. The orders table doesn't exist in the database."
         );
         console.error("Database schema error: orders table doesn't exist");
+        setLoading(false);
         return;
       }
 
@@ -251,10 +236,18 @@ function ChatPage() {
       const ordersWithMessageCounts = await Promise.all(
         (data || []).map(async (order) => {
           try {
-            const { count } = await supabase
+            const { count, error: countError } = await supabase
               .from("messages")
               .select("id", { count: "exact", head: true })
               .eq("order_id", order.id);
+
+            if (countError) {
+              console.error(
+                `Error counting messages for order ${order.id}:`,
+                countError
+              );
+              return order;
+            }
 
             return {
               ...order,
@@ -598,6 +591,63 @@ function ChatPage() {
   const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
     isAdmin ? adminOrders : userOrders
   );
+
+  // Add this function to check and create database tables
+  const setupDatabaseTables = async () => {
+    try {
+      // Check if messages table exists
+      const { error: messagesTableError } = await supabase
+        .from("messages")
+        .select("id", { count: "exact", head: true })
+        .limit(1);
+
+      if (messagesTableError?.code === "42P01") {
+        console.log("Messages table doesn't exist, attempting to create it");
+
+        // Try to create the messages table
+        const { error: createError } = await supabase.rpc(
+          "create_messages_table"
+        );
+
+        if (createError) {
+          console.error("Failed to create messages table:", createError);
+          setFallbackMode(true);
+        } else {
+          console.log("Messages table created successfully");
+        }
+      }
+
+      // Check if orders table exists
+      const { error: ordersTableError } = await supabase
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .limit(1);
+
+      if (ordersTableError?.code === "42P01") {
+        console.log("Orders table doesn't exist, attempting to create it");
+
+        // Try to create the orders table
+        const { error: createError } = await supabase.rpc(
+          "create_orders_table"
+        );
+
+        if (createError) {
+          console.error("Failed to create orders table:", createError);
+          setFallbackMode(true);
+        } else {
+          console.log("Orders table created successfully");
+        }
+      }
+    } catch (err) {
+      console.error("Error setting up database tables:", err);
+      setFallbackMode(true);
+    }
+  };
+
+  // Call this function in your useEffect
+  useEffect(() => {
+    setupDatabaseTables();
+  }, []);
 
   if (fallbackMode) {
     return (
