@@ -71,7 +71,6 @@ function ChatPage() {
   const [lastScrollTop, setLastScrollTop] = useState(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [newMessagesBelowViewport, setNewMessagesBelowViewport] = useState(0);
-  const [soundEnabled, setSoundEnabled] = useState(true);
 
   // Authentication check
   useEffect(() => {
@@ -531,33 +530,33 @@ function ChatPage() {
       setImagePreview(null);
 
       // Send to database
-      const { data, error } = await supabase
-        .from("messages")
-        .insert([
-          {
-            content: newMessage.trim(),
-            order_id: selectedOrderId,
-            user_id: user.id,
-            is_admin: isAdmin,
-            image_url: imageUrl,
-            user_name: userName,
-            user_avatar: userAvatar,
-          },
-        ])
-        .select()
-        .single();
+      try {
+        const { data, error } = await supabase
+          .from("messages")
+          .insert([
+            {
+              content: newMessage.trim(),
+              order_id: selectedOrderId,
+              user_id: user.id,
+              is_admin: isAdmin,
+              image_url: imageUrl,
+              user_name: userName,
+              user_avatar: userAvatar,
+            },
+          ])
+          .select()
+          .single();
 
-      if (error) throw error;
+        if (error) throw error;
 
-      // Replace optimistic message with real one
-      setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
+        // Replace optimistic message with real one
+        setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
 
-      // Clear pending message
-      pendingMessages.current.delete(tempId);
-
-      // Play a sound when message is successfully sent
-      if (!isAdmin) {
-        playMessageSound();
+        // Clear pending message
+        pendingMessages.current.delete(tempId);
+      } catch (err) {
+        console.error("Error sending message:", err);
+        toast.error("Failed to send message. Message saved as draft.");
       }
     } catch (err) {
       console.error("Error in handleSendMessage:", err);
@@ -802,6 +801,11 @@ function ChatPage() {
   useEffect(() => {
     if (!selectedOrderId || !user) return;
 
+    console.log(
+      "Setting up real-time subscription for order:",
+      selectedOrderId
+    );
+
     // Set up real-time subscription for new messages
     const subscription = supabase
       .channel(`order-${selectedOrderId}`)
@@ -828,8 +832,10 @@ function ChatPage() {
               if (exists) return prev;
 
               // Play sound if tab is not focused
-              if (!isTabFocused) {
-                playMessageSound();
+              if (!isTabFocused && messageSound.current) {
+                messageSound.current
+                  .play()
+                  .catch((err) => console.log("Error playing sound:", err));
               }
 
               // Add the new message
@@ -865,29 +871,11 @@ function ChatPage() {
           }
         }
       )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "messages",
-          filter: `order_id=eq.${selectedOrderId}`,
-        },
-        (payload) => {
-          // Handle message updates (like read status)
-          const updatedMessage = payload.new as Message;
-
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === updatedMessage.id ? { ...m, ...updatedMessage } : m
-            )
-          );
-        }
-      )
       .subscribe();
 
     // Clean up subscription when component unmounts or selectedOrderId changes
     return () => {
+      console.log("Cleaning up real-time subscription");
       supabase.removeChannel(subscription);
     };
   }, [selectedOrderId, user, isTabFocused]);
@@ -924,7 +912,7 @@ function ChatPage() {
     };
   }, []);
 
-  // Add this function to handle typing events
+  // Fix the handleTyping function
   const handleTyping = useCallback(() => {
     if (!selectedOrderId || !user) return;
 
@@ -954,41 +942,10 @@ function ChatPage() {
           user_id: user.id,
         },
       });
-    }, [selectedOrderId, user, isAdmin]);
+    }, 3000);
+  }, [selectedOrderId, user, isAdmin]);
 
-  // Add this effect to listen for typing events
-  useEffect(() => {
-    if (!selectedOrderId) return;
-
-    const typingChannel = supabase
-      .channel(`typing-${selectedOrderId}`)
-      .on("broadcast", { event: "typing" }, (payload) => {
-        // Ignore own typing events
-        if (payload.payload.user_id === user?.id) return;
-
-        // Add user to typing users
-        setTypingUsers((prev) => {
-          const newSet = new Set(prev);
-          newSet.add(payload.payload.user_name);
-          return newSet;
-        });
-      })
-      .on("broadcast", { event: "stop_typing" }, (payload) => {
-        // Remove user from typing users
-        setTypingUsers((prev) => {
-          const newSet = new Set(prev);
-          newSet.delete(payload.payload.user_name);
-          return newSet;
-        });
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(typingChannel);
-    };
-  }, [selectedOrderId, user]);
-
-  // Add this to your input field onChange handler
+  // Fix the handleMessageChange function
   const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
     handleTyping();
@@ -997,22 +954,26 @@ function ChatPage() {
   // Initialize the sound in useEffect
   useEffect(() => {
     // Create audio element for message notification sound
-    messageSound.current = new Audio("/message-sound.mp3"); // Add this sound file to your public folder
-    messageSound.current.volume = 0.5;
+    try {
+      messageSound.current = new Audio("/gg.mp3");
+      messageSound.current.volume = 0.5;
+    } catch (err) {
+      console.error("Error initializing message sound:", err);
+    }
   }, []);
 
   // Replace the simple scrollToBottom function with this improved version
   const scrollToBottom = (force = false) => {
     if (!messagesContainerRef.current) return;
-    
+
     // Only auto-scroll if we're near the bottom or if forced
     if (shouldAutoScroll || force) {
       // Use requestAnimationFrame to ensure the DOM has updated
       requestAnimationFrame(() => {
         if (messagesEndRef.current) {
           messagesEndRef.current.scrollIntoView({
-            behavior: force ? 'auto' : 'smooth',
-            block: 'end'
+            behavior: force ? "auto" : "smooth",
+            block: "end",
           });
         }
       });
@@ -1023,29 +984,32 @@ function ChatPage() {
   const checkIfNearBottom = () => {
     const container = messagesContainerRef.current;
     if (!container) return;
-    
+
     const { scrollTop, scrollHeight, clientHeight } = container;
     const scrollBottom = scrollHeight - scrollTop - clientHeight;
-    
+
     // Consider "near bottom" if within 100px of the bottom
     const nearBottom = scrollBottom < 100;
     setIsNearBottom(nearBottom);
     setShouldAutoScroll(nearBottom);
-    
+
     // If we're not near bottom and there are unread messages, show indicator
     if (!nearBottom && unreadMessages.size > 0) {
       // Count messages that are below the viewport
       let count = 0;
       const visibleBottom = scrollTop + clientHeight;
-      
+
       // This is a simplified approach - for a more accurate count,
       // you'd need to measure each message element's position
       const approximateMessageHeight = 80; // pixels
       const totalMessagesHeight = messages.length * approximateMessageHeight;
       const visibleRatio = clientHeight / totalMessagesHeight;
       const visibleMessages = Math.floor(messages.length * visibleRatio);
-      const messagesBelow = messages.length - visibleMessages - Math.floor(scrollTop / approximateMessageHeight);
-      
+      const messagesBelow =
+        messages.length -
+        visibleMessages -
+        Math.floor(scrollTop / approximateMessageHeight);
+
       count = Math.max(0, messagesBelow);
       setNewMessagesBelowViewport(count);
     } else {
@@ -1056,97 +1020,118 @@ function ChatPage() {
   // Add this component for the new message indicator
   const NewMessagesIndicator = () => {
     if (newMessagesBelowViewport <= 0) return null;
-    
+
     return (
       <button
         onClick={() => scrollToBottom(true)}
         className="absolute bottom-24 right-4 bg-blue-500 text-white rounded-full px-3 py-1 shadow-lg hover:bg-blue-600 transition-all z-10 flex items-center gap-2"
       >
-        <span>{newMessagesBelowViewport} new message{newMessagesBelowViewport > 1 ? 's' : ''}</span>
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+        <span>
+          {newMessagesBelowViewport} new message
+          {newMessagesBelowViewport > 1 ? "s" : ""}
+        </span>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M19 14l-7 7m0 0l-7-7m7 7V3"
+          />
         </svg>
       </button>
     );
   };
 
-  // 1. First, add this function to initialize the sound with user interaction
-  const initializeSound = () => {
-    if (!messageSound.current) {
-      // Create the audio element
-      messageSound.current = new Audio();
-      
-      // Use a base64 encoded short sound to avoid needing an external file
-      // This is a simple "ding" sound encoded as base64
-      messageSound.current.src = "data:audio/mp3;base64,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";
-      
-      // Set volume
-      messageSound.current.volume = 0.5;
-      
-      // Preload the sound
-      messageSound.current.load();
-      
-      console.log("Sound initialized");
-    }
+  // Add the ScrollToBottomButton component definition
+  const ScrollToBottomButton = () => {
+    if (isNearBottom) return null;
+
+    return (
+      <button
+        onClick={() => scrollToBottom(true)}
+        className="absolute bottom-20 right-4 bg-emerald-500 text-white rounded-full p-2 shadow-lg hover:bg-emerald-600 transition-all z-10"
+        aria-label="Scroll to bottom"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="h-6 w-6"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M19 14l-7 7m0 0l-7-7m7 7V3"
+          />
+        </svg>
+      </button>
+    );
   };
 
-  // 2. Add this function to play the sound with error handling
-  const playMessageSound = () => {
-    if (!soundEnabled) return;
-    
-    if (!messageSound.current) {
-      initializeSound();
-    }
-    
-    if (messageSound.current) {
-      // Reset the audio to the beginning
-      messageSound.current.currentTime = 0;
-      
-      // Play with error handling
-      messageSound.current.play().catch(err => {
-        console.log("Error playing sound:", err);
-        
-        // If autoplay is blocked, we need user interaction
-        if (err.name === 'NotAllowedError') {
-          console.log("Autoplay blocked. Sound will be enabled on next user interaction.");
-        }
-      });
-    }
-  };
-
-  // 3. Update the useEffect to initialize sound on user interaction
+  // Add the missing useEffect for scroll event handling
   useEffect(() => {
-    // Initialize sound on first user interaction
-    const handleUserInteraction = () => {
-      initializeSound();
-      // Remove the event listeners after first interaction
-      document.removeEventListener('click', handleUserInteraction);
-      document.removeEventListener('keydown', handleUserInteraction);
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      checkIfNearBottom();
+
+      // Save last scroll position
+      setLastScrollTop(container.scrollTop);
+      setLastScrollHeight(container.scrollHeight);
     };
-    
-    document.addEventListener('click', handleUserInteraction);
-    document.addEventListener('keydown', handleUserInteraction);
-    
-    return () => {
-      document.removeEventListener('click', handleUserInteraction);
-      document.removeEventListener('keydown', handleUserInteraction);
-    };
+
+    container.addEventListener("scroll", handleScroll);
+    return () => container.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Add this function to toggle sound
-  const toggleSound = () => {
-    setSoundEnabled(!soundEnabled);
-    
-    // Initialize sound if not already done
-    if (!messageSound.current) {
-      initializeSound();
+  // Add the missing useEffect for handling messages changes
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    // If this is the first batch of messages, always scroll to bottom
+    if (messages.length && lastScrollHeight === 0) {
+      scrollToBottom(true);
+      return;
     }
-    
-    // Play a test sound when enabling
-    if (!soundEnabled) {
-      playMessageSound();
+
+    // Check if new messages were added at the bottom (normal case)
+    const isNewMessageAtBottom =
+      messages.length > 0 &&
+      (messages[messages.length - 1].id.startsWith("temp-") ||
+        messages[messages.length - 1].user_id === user?.id);
+
+    // If new message is from current user or we're near bottom, scroll down
+    if (isNewMessageAtBottom || isNearBottom) {
+      scrollToBottom();
+    } else {
+      // If we loaded older messages (pagination), maintain scroll position
+      const heightDiff = container.scrollHeight - lastScrollHeight;
+      if (heightDiff > 0 && !isNewMessageAtBottom) {
+        container.scrollTop = lastScrollTop + heightDiff;
+      }
     }
-  };
+
+    // Update last scroll height
+    setLastScrollHeight(container.scrollHeight);
+  }, [messages, lastScrollHeight, lastScrollTop, isNearBottom, user?.id]);
+
+  // Initialize isTabFocused
+  useEffect(() => {
+    // Set initial tab focus state
+    setIsTabFocused(document.visibilityState === "visible");
+  }, []);
 
   if (fallbackMode) {
     return (
@@ -1379,8 +1364,8 @@ function ChatPage() {
             {/* Messages area */}
             {selectedOrderId ? (
               <>
-                <div 
-                  className="flex-1 overflow-y-auto p-4 relative" 
+                <div
+                  className="flex-1 overflow-y-auto p-4 relative"
                   ref={messagesContainerRef}
                 >
                   {loading ? (
@@ -1428,14 +1413,14 @@ function ChatPage() {
                       <div ref={messagesEndRef} />
                     </>
                   )}
-                  
+
                   {/* Scroll to bottom button */}
                   <ScrollToBottomButton />
-                  
+
                   {/* New messages indicator */}
                   <NewMessagesIndicator />
                 </div>
-                
+
                 {/* Message input */}
                 <div className="p-4 border-t border-white/10">
                   <form onSubmit={handleSendMessage}>
@@ -1515,26 +1500,6 @@ function ChatPage() {
                     </span>
                   </div>
                 )}
-
-                {/* Sound toggle button */}
-                <button
-                  type="button"
-                  onClick={toggleSound}
-                  className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
-                  title={soundEnabled ? "Mute notifications" : "Enable notifications"}
-                >
-                  {soundEnabled ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M12 6a9 9 0 010 12m-4.5-9.5v3a2 2 0 002 2h3" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                    </svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                    </svg>
-                  )}
-                </button>
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center">
