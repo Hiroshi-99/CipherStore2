@@ -1,13 +1,16 @@
 export interface Message {
   id: string;
   content: string;
+  user_id: string;
+  order_id: string;
+  created_at: string;
+  is_admin: boolean;
   user_name: string;
   user_avatar: string;
-  is_admin: boolean;
-  created_at: string;
-  order_id: string;
-  user_id: string;
   image_url?: string;
+  is_read?: boolean;
+  failed?: boolean;
+  is_account_details?: boolean;
 }
 
 export interface Order {

@@ -610,7 +610,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Simplified version that only sends a message without updating order metadata
+  // Update the handleAccountDetailsUpload function to use proper UUIDs
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -659,8 +659,12 @@ function AdminPage() {
 Please keep these details secure. You can copy them by selecting the text.
       `.trim();
 
+      // Generate a proper UUID for the message
+      const messageId = crypto.randomUUID();
+
       // Create a message to send the account details
       const { error: messageError } = await supabase.from("messages").insert({
+        id: messageId, // Use the generated UUID
         order_id: selectedOrder.id,
         user_id: userData?.user?.id,
         content: formattedMessage,
@@ -668,7 +672,7 @@ Please keep these details secure. You can copy them by selecting the text.
         created_at: new Date().toISOString(),
         user_name: userName,
         user_avatar: userAvatar,
-        is_account_details: true, // Add this flag to identify account detail messages
+        is_account_details: true,
       });
 
       if (messageError) {
