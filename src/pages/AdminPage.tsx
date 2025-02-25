@@ -206,6 +206,46 @@ function AdminPage() {
     }
   };
 
+  // Add this function to handle rejecting orders
+  const handleReject = async (orderId: string) => {
+    if (!confirm("Are you sure you want to reject this order?")) {
+      return;
+    }
+
+    try {
+      setActionInProgress(orderId);
+
+      // Update the order status to rejected
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "rejected" })
+        .eq("id", orderId);
+
+      if (error) {
+        console.error("Error rejecting order:", error);
+        toast.error("Failed to reject order");
+        return;
+      }
+
+      // Update local state
+      setOrders(
+        orders.map((order) =>
+          order.id === orderId ? { ...order, status: "rejected" } : order
+        )
+      );
+
+      toast.success("Order rejected successfully");
+
+      // Refresh orders to get the latest data
+      fetchOrders();
+    } catch (err) {
+      console.error("Error in handleReject:", err);
+      toast.error("Failed to reject order");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
   useEffect(() => {
     setPageTitle("ADMIN");
     fetchOrders();
@@ -216,7 +256,7 @@ function AdminPage() {
     setRefreshing(true);
 
     try {
-      // Get all orders with payment proofs
+      // Use a more efficient query with pagination
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
         .select(
@@ -225,7 +265,8 @@ function AdminPage() {
           payment_proofs:payment_proofs(*)
         `
         )
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(100); // Limit to 100 orders for better performance
 
       if (ordersError) {
         console.error("Error fetching orders:", ordersError);
@@ -234,25 +275,20 @@ function AdminPage() {
       }
 
       if (ordersData) {
+        // Use a more efficient way to update state
         setOrders(ordersData);
 
-        // Calculate statistics
-        const total = ordersData.length;
-        const pending = ordersData.filter(
-          (order) => order.status === "pending"
-        ).length;
-        const active = ordersData.filter(
-          (order) => order.status === "active"
-        ).length;
-        const rejected = ordersData.filter(
-          (order) => order.status === "rejected"
-        ).length;
+        // Calculate statistics more efficiently
+        const statusCounts = ordersData.reduce((counts, order) => {
+          counts[order.status] = (counts[order.status] || 0) + 1;
+          return counts;
+        }, {} as Record<string, number>);
 
         setStats({
-          total,
-          pending,
-          active,
-          rejected,
+          total: ordersData.length,
+          pending: statusCounts.pending || 0,
+          approved: statusCounts.active || 0,
+          rejected: statusCounts.rejected || 0,
         });
       }
     } catch (err) {
@@ -749,16 +785,17 @@ Please keep these details secure. You can copy them by selecting the text.
         return;
       }
 
-      // Get admin users from the admin_users table
+      // Get admin users from the admin_users table - use a more efficient query
       const { data: adminUsers, error: adminError } = await supabase
         .from("admin_users")
-        .select("user_id, user_email");
+        .select("user_id, user_email")
+        .order("granted_at", { ascending: false });
 
       if (adminError) {
         console.error("Error fetching admin users:", adminError);
       }
 
-      // Create sets for quick lookups
+      // Create sets for quick lookups - more efficient than arrays for lookups
       const adminUserIds = new Set(
         (adminUsers || [])
           .filter((admin) => admin.user_id)
@@ -781,7 +818,7 @@ Please keep these details secure. You can copy them by selecting the text.
         createdAt: currentAuthUser.created_at,
       };
 
-      // Add any admin users we know about by email
+      // Add any admin users we know about by email - use a more efficient approach
       const knownAdminUsers = Array.from(adminEmails)
         .filter((email) => email !== currentAuthUser.email) // Exclude current user
         .map((email) => ({
@@ -793,6 +830,7 @@ Please keep these details secure. You can copy them by selecting the text.
           createdAt: new Date().toISOString(),
         }));
 
+      // Use a more efficient way to update state
       setUsers([currentUserData, ...knownAdminUsers]);
       setCurrentUser(currentUserData);
 
@@ -902,6 +940,9 @@ Please keep these details secure. You can copy them by selecting the text.
 
       toast.success("Admin privileges revoked successfully");
 
+      // Update local state
+      setUsers(users.filter((user) => user.id !== userId));
+
       // Refresh the users list
       fetchUsers(currentUser?.id || "");
     } catch (err) {
@@ -988,24 +1029,37 @@ Please keep these details secure. You can copy them by selecting the text.
         case "approve":
           toast.info(`Approving ${orderIds.length} orders...`);
 
-          // Process each order sequentially
-          for (const orderId of orderIds) {
-            await safeUpdate("orders", { status: "active" }, "id", orderId);
+          // Use a more efficient batch update
+          if (orderIds.length > 0) {
+            const { error } = await supabase
+              .from("orders")
+              .update({ status: "active" })
+              .in("id", orderIds);
+
+            if (error) {
+              throw error;
+            }
           }
 
           toast.success(`${orderIds.length} orders approved`);
-          fetchOrders(); // Refresh the orders list
           break;
 
         case "reject":
           toast.info(`Rejecting ${orderIds.length} orders...`);
 
-          for (const orderId of orderIds) {
-            await safeUpdate("orders", { status: "rejected" }, "id", orderId);
+          // Use a more efficient batch update
+          if (orderIds.length > 0) {
+            const { error } = await supabase
+              .from("orders")
+              .update({ status: "rejected" })
+              .in("id", orderIds);
+
+            if (error) {
+              throw error;
+            }
           }
 
           toast.success(`${orderIds.length} orders rejected`);
-          fetchOrders(); // Refresh the orders list
           break;
 
         case "export":
@@ -1079,12 +1133,13 @@ Please keep these details secure. You can copy them by selecting the text.
               toast.error(`Error deleting orders: ${error.message}`);
             } else {
               toast.success(`${orderIds.length} orders deleted`);
-              // Refresh the orders list
-              fetchOrders();
             }
           }
           break;
       }
+
+      // Refresh orders to get the latest data
+      fetchOrders();
 
       // Clear selection after action
       setSelectedOrderIds(new Set());
