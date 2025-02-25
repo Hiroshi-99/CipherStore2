@@ -24,6 +24,7 @@ import {
   Calendar,
   Clock,
   User,
+  Upload,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
@@ -361,6 +362,98 @@ function AdminPage() {
     setShowImageModal(true);
   };
 
+  // Add this function to handle file uploads
+  const handleFileUpload = async (url: string) => {
+    try {
+      setActionInProgress("uploading");
+
+      // Get the selected order
+      const selectedOrder = orders.find(
+        (order) => order.id === selectedOrderId
+      );
+      if (!selectedOrder) {
+        toast.error("Please select an order first");
+        return;
+      }
+
+      // Update the order with the file URL
+      const { error } = await supabase
+        .from("orders")
+        .update({ account_file_url: url })
+        .eq("id", selectedOrder.id);
+
+      if (error) {
+        throw error;
+      }
+
+      // Create a message to notify the user
+      await supabase.from("messages").insert({
+        order_id: selectedOrder.id,
+        user_id: user.id,
+        content: "Your account file has been uploaded and is now available.",
+        is_admin: true,
+        created_at: new Date().toISOString(),
+        user_name: "Admin",
+        user_avatar: "/images/support-avatar.png",
+        image_url: url,
+      });
+
+      // Update local state
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === selectedOrder.id
+            ? { ...order, account_file_url: url }
+            : order
+        )
+      );
+
+      // Show success message
+      toast.success("File uploaded and attached to order successfully!");
+
+      // Close any open modals
+      setShowImageModal(false);
+    } catch (err) {
+      console.error("Error handling file upload:", err);
+      toast.error("Failed to process file upload. Please try again.");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Add this fallback upload function
+  const uploadDirectToSupabase = async (file: File): Promise<string | null> => {
+    try {
+      // Generate a unique file name
+      const fileName = `${Date.now()}-${file.name.replace(
+        /[^a-zA-Z0-9.]/g,
+        "_"
+      )}`;
+
+      // Upload directly to Supabase storage
+      const { data, error } = await supabase.storage
+        .from("images")
+        .upload(`uploads/${fileName}`, file, {
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (error) {
+        console.error("Error uploading to Supabase storage:", error);
+        return null;
+      }
+
+      // Get the public URL
+      const { data: urlData } = supabase.storage
+        .from("images")
+        .getPublicUrl(`uploads/${fileName}`);
+
+      return urlData.publicUrl;
+    } catch (err) {
+      console.error("Error in direct Supabase upload:", err);
+      return null;
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -566,6 +659,90 @@ function AdminPage() {
                 />
               ))
             )}
+          </div>
+
+          {/* Order Details Section */}
+          <div className="mt-4 border-t pt-4">
+            <h3 className="text-lg font-medium mb-2">Upload Account File</h3>
+            <FileUpload
+              onUploadSuccess={handleFileUpload}
+              onUploadError={(err) =>
+                toast.error(`Upload error: ${err.message}`)
+              }
+              acceptedFileTypes="image/*,application/pdf"
+              maxSizeMB={10}
+              buttonText="Upload Account File"
+              className="mb-4"
+            />
+            {selectedOrderId && (
+              <div className="mt-2">
+                <p className="text-sm text-gray-500">Current file:</p>
+                <a
+                  href={
+                    orders.find((order) => order.id === selectedOrderId)
+                      ?.account_file_url
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-500 hover:underline flex items-center"
+                >
+                  <Download size={16} className="mr-1" />
+                  View uploaded file
+                </a>
+              </div>
+            )}
+
+            {/* Add a direct upload button */}
+            <button
+              onClick={async () => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = "image/*,application/pdf";
+
+                input.onchange = async (e) => {
+                  const file = (e.target as HTMLInputElement).files?.[0];
+                  if (!file) return;
+
+                  // Check file size
+                  if (file.size > 10 * 1024 * 1024) {
+                    toast.error("File too large. Maximum size is 10MB.");
+                    return;
+                  }
+
+                  toast.loading("Uploading file directly...");
+
+                  try {
+                    const url = await uploadDirectToSupabase(file);
+                    if (url) {
+                      toast.dismiss();
+                      toast.success("File uploaded successfully!");
+                      handleFileUpload(url);
+                    } else {
+                      throw new Error("Upload failed");
+                    }
+                  } catch (err) {
+                    toast.dismiss();
+                    toast.error("Failed to upload file. Please try again.");
+                  }
+                };
+
+                input.click();
+              }}
+              className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
+              disabled={actionInProgress === "uploading"}
+            >
+              {actionInProgress === "uploading" ? (
+                <span className="flex items-center">
+                  <RefreshCw className="animate-spin mr-2 h-4 w-4" />
+                  Uploading...
+                </span>
+              ) : (
+                <span className="flex items-center">
+                  <Upload className="mr-2 h-4 w-4" />
+                  Quick Upload
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </main>

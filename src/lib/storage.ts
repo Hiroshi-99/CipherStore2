@@ -6,13 +6,22 @@ export const uploadImage = async (
   authToken?: string
 ) => {
   try {
-    // Create form data for the file upload
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("fileName", fileName);
+    // Convert file to base64
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    // Remove the data URL prefix (e.g., "data:image/jpeg;base64,")
+    const base64Content = base64Data.split(",")[1];
 
     // Set up headers with authentication
-    const headers: HeadersInit = {};
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+    };
+
     if (authToken) {
       headers["Authorization"] = `Bearer ${authToken}`;
     }
@@ -20,7 +29,11 @@ export const uploadImage = async (
     // Make the request to the upload endpoint
     const response = await fetch("/.netlify/functions/admin-upload-file", {
       method: "POST",
-      body: formData,
+      body: JSON.stringify({
+        fileName,
+        fileData: base64Content,
+        contentType: file.type,
+      }),
       headers,
     });
 
