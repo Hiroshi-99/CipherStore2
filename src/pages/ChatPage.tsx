@@ -85,6 +85,7 @@ function ChatPage() {
   const pullMoveY = useRef(0);
   const distanceThreshold = 100;
   const refreshAreaRef = useRef<HTMLDivElement>(null);
+  const [fallbackMode, setFallbackMode] = useState(false);
 
   // Authentication check
   useEffect(() => {
@@ -376,80 +377,54 @@ function ChatPage() {
         setError(null);
 
         // First check if the messages table exists
-        const { data: tableCheck, error: tableCheckError } = await supabase
-          .from("messages")
-          .select("id", { count: "exact", head: true })
-          .limit(1);
-
-        if (tableCheckError && tableCheckError.code === "42P01") {
-          // Table doesn't exist
-          setError(
-            "Chat system is currently unavailable. The messages table doesn't exist in the database."
-          );
-          console.error("Database schema error: messages table doesn't exist");
-          setLoading(false);
-          return;
-        }
-
-        // If we get here, the table exists, so fetch messages
-        const { data, error: messagesError } = await supabase
-          .from("messages")
-          .select("*")
-          .eq("order_id", orderId)
-          .order("created_at", { ascending: true });
-
-        if (messagesError) {
-          throw messagesError;
-        }
-
-        // Process messages to ensure they have user_name and user_avatar
-        const processedMessages = (data || []).map((message) => {
-          // If message is missing user_name or user_avatar, add default values
-          return {
-            ...message,
-            user_name:
-              message.user_name || (message.is_admin ? "Support" : "User"),
-            user_avatar: message.user_avatar || "",
-          };
-        });
-
-        // Set messages even if marking as read fails
-        setMessages(processedMessages);
-
-        // Try to mark messages as read, but don't fail if it doesn't work
         try {
-          const unreadIds =
-            processedMessages
-              ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
-              .map((m) => m.id) || [];
+          const { data: tableCheck, error: tableCheckError } = await supabase
+            .from("messages")
+            .select("id", { count: "exact", head: true })
+            .limit(1);
 
-          if (unreadIds.length > 0) {
-            try {
-              // Check if is_read column exists first
-              const { error: columnCheckError } = await supabase
-                .from("messages")
-                .select("is_read")
-                .limit(1);
-
-              // Only attempt to update if the column exists
-              if (!columnCheckError) {
-                await updateMessagesInBatches(unreadIds);
-              } else {
-                console.log("Skipping mark as read - column doesn't exist");
-              }
-            } catch (columnError) {
-              console.error("Error checking for is_read column:", columnError);
-            }
+          if (tableCheckError && tableCheckError.code === "42P01") {
+            // Table doesn't exist
+            console.error(
+              "Database schema error: messages table doesn't exist"
+            );
+            setFallbackMode(true);
+            setLoading(false);
+            return;
           }
-        } catch (markReadError) {
-          console.error("Error marking messages as read:", markReadError);
-        }
 
-        // After successfully fetching messages, set up realtime
-        setupRealtimeMessaging(orderId);
-      } catch (err) {
-        console.error("Error fetching messages:", err);
-        setError("Failed to load messages. Please try again.");
+          // If we get here, the table exists, so fetch messages
+          const { data, error: messagesError } = await supabase
+            .from("messages")
+            .select("*")
+            .eq("order_id", orderId)
+            .order("created_at", { ascending: true });
+
+          if (messagesError) {
+            throw messagesError;
+          }
+
+          // Process messages to ensure they have user_name and user_avatar
+          const processedMessages = (data || []).map((message) => {
+            // If message is missing user_name or user_avatar, add default values
+            return {
+              ...message,
+              user_name:
+                message.user_name || (message.is_admin ? "Support" : "User"),
+              user_avatar: message.user_avatar || "",
+            };
+          });
+
+          // Set messages even if marking as read fails
+          setMessages(processedMessages);
+
+          // After successfully fetching messages, set up realtime
+          setupRealtimeMessaging(orderId);
+        } catch (err) {
+          console.error("Error in fetchMessages:", err);
+          setError("Failed to load messages. Please try again.");
+          setFallbackMode(true);
+        }
       } finally {
         setLoading(false);
       }
@@ -886,63 +861,76 @@ function ChatPage() {
   // Add this function to set up realtime messaging
   const setupRealtimeMessaging = useCallback(
     (orderId: string) => {
-      // Clean up any existing subscription
-      if (realtimeSubscription.current) {
-        supabase.removeChannel(realtimeSubscription.current);
-      }
+      try {
+        // Clean up any existing subscription
+        if (realtimeSubscription.current) {
+          supabase.removeChannel(realtimeSubscription.current);
+        }
 
-      // Set up new subscription for this order
-      const channel = supabase
-        .channel(`order-${orderId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "INSERT",
-            schema: "public",
-            table: "messages",
-            filter: `order_id=eq.${orderId}`,
-          },
-          (payload) => {
-            // Only add the message if it's not from the current user
-            // or if it's from the current user but not in our messages list yet
-            const newMessage = payload.new as Message;
+        // Set up new subscription for this order
+        const channel = supabase
+          .channel(`order-${orderId}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "messages",
+              filter: `order_id=eq.${orderId}`,
+            },
+            (payload) => {
+              try {
+                // Only add the message if it's not from the current user
+                // or if it's from the current user but not in our messages list yet
+                const newMessage = payload.new as Message;
 
-            // Check if we already have this message
-            const messageExists = messages.some((m) => m.id === newMessage.id);
+                // Check if we already have this message
+                const messageExists = messages.some(
+                  (m) => m.id === newMessage.id
+                );
 
-            if (!messageExists) {
-              // Add the new message
-              setMessages((prev) => [...prev, newMessage]);
+                if (!messageExists) {
+                  // Add the new message
+                  setMessages((prev) => [...prev, newMessage]);
 
-              // Play notification sound if message is from someone else
-              if (newMessage.user_id !== user?.id) {
-                playNotificationSound();
+                  // Play notification sound if message is from someone else
+                  if (newMessage.user_id !== user?.id) {
+                    playNotificationSound();
 
-                // Show browser notification if tab is not focused
-                if (
-                  !document.hasFocus() &&
-                  Notification.permission === "granted"
-                ) {
-                  new Notification("New Message", {
-                    body: `${
-                      newMessage.user_name
-                    }: ${newMessage.content.substring(0, 50)}${
-                      newMessage.content.length > 50 ? "..." : ""
-                    }`,
-                    icon: "/favicon.ico",
-                  });
+                    // Show browser notification if tab is not focused
+                    if (
+                      !document.hasFocus() &&
+                      Notification.permission === "granted"
+                    ) {
+                      new Notification("New Message", {
+                        body: `${
+                          newMessage.user_name
+                        }: ${newMessage.content.substring(0, 50)}${
+                          newMessage.content.length > 50 ? "..." : ""
+                        }`,
+                        icon: "/favicon.ico",
+                      });
+                    }
+                  }
                 }
+              } catch (err) {
+                console.error("Error processing realtime message:", err);
               }
             }
-          }
-        )
-        .subscribe();
+          )
+          .subscribe((status) => {
+            console.log("Realtime subscription status:", status);
+          });
 
-      realtimeSubscription.current = channel;
+        realtimeSubscription.current = channel;
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
+        return () => {
+          supabase.removeChannel(channel);
+        };
+      } catch (err) {
+        console.error("Error setting up realtime messaging:", err);
+        return () => {};
+      }
     },
     [messages, user]
   );
@@ -992,46 +980,62 @@ function ChatPage() {
   const handleTyping = useCallback(() => {
     if (!selectedOrderId || !user) return;
 
-    // Set local typing state
-    setIsTyping(true);
+    try {
+      // Set local typing state
+      setIsTyping(true);
 
-    // Broadcast typing status
-    supabase.channel("typing").send({
-      type: "broadcast",
-      event: "typing",
-      payload: {
-        orderId: selectedOrderId,
-        userId: user.id,
-        userName:
-          user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
-        isTyping: true,
-      },
-    });
+      // Broadcast typing status
+      supabase
+        .channel("typing")
+        .send({
+          type: "broadcast",
+          event: "typing",
+          payload: {
+            orderId: selectedOrderId,
+            userId: user.id,
+            userName:
+              user.user_metadata?.full_name ||
+              user.email?.split("@")[0] ||
+              "User",
+            isTyping: true,
+          },
+        })
+        .catch((err) => {
+          console.error("Error sending typing status:", err);
+        });
 
-    // Clear previous timeout
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
+      // Clear previous timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Set timeout to clear typing status
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+
+        // Broadcast stopped typing
+        supabase
+          .channel("typing")
+          .send({
+            type: "broadcast",
+            event: "typing",
+            payload: {
+              orderId: selectedOrderId,
+              userId: user.id,
+              userName:
+                user.user_metadata?.full_name ||
+                user.email?.split("@")[0] ||
+                "User",
+              isTyping: false,
+            },
+          })
+          .catch((err) => {
+            console.error("Error sending typing status:", err);
+          });
+      }, 2000);
+    } catch (err) {
+      console.error("Error in handleTyping:", err);
     }
-
-    // Set timeout to clear typing status
-    typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
-
-      // Broadcast stopped typing
-      supabase.channel("typing").send({
-        type: "broadcast",
-        event: "typing",
-        payload: {
-          orderId: selectedOrderId,
-          userId: user.id,
-          userName:
-            user.user_metadata?.full_name ||
-            user.email?.split("@")[0] ||
-            "User",
-          isTyping: false,
-        },
-      });
-    }, 2000);
   }, [selectedOrderId, user]);
 
   // Add this to listen for typing events
@@ -1065,11 +1069,13 @@ function ChatPage() {
 
   // Add these handlers
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (!refreshAreaRef.current) return;
     const touchY = e.touches[0].clientY;
     pullStartY.current = touchY;
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (!refreshAreaRef.current) return;
     const touchY = e.touches[0].clientY;
     pullMoveY.current = touchY;
 
@@ -1080,16 +1086,16 @@ function ChatPage() {
     if (scrollTop === 0 && pullDistance > 0 && !refreshing) {
       const pullPercent = Math.min(pullDistance / distanceThreshold, 1);
 
-      if (refreshAreaRef.current) {
-        refreshAreaRef.current.style.height = `${pullDistance}px`;
-        refreshAreaRef.current.style.opacity = `${pullPercent}`;
-      }
+      refreshAreaRef.current.style.height = `${pullDistance}px`;
+      refreshAreaRef.current.style.opacity = `${pullPercent}`;
 
       e.preventDefault();
     }
   };
 
   const handleTouchEnd = async (e: React.TouchEvent) => {
+    if (!refreshAreaRef.current || !selectedOrderId) return;
+
     const pullDistance = pullMoveY.current - pullStartY.current;
 
     if (
@@ -1100,22 +1106,39 @@ function ChatPage() {
       setRefreshing(true);
 
       try {
-        if (selectedOrderId) {
-          await fetchMessages(selectedOrderId);
-        }
+        await fetchMessages(selectedOrderId);
+      } catch (err) {
+        console.error("Error refreshing messages:", err);
       } finally {
         setRefreshing(false);
 
-        if (refreshAreaRef.current) {
-          refreshAreaRef.current.style.height = "0";
-          refreshAreaRef.current.style.opacity = "0";
-        }
+        refreshAreaRef.current.style.height = "0";
+        refreshAreaRef.current.style.opacity = "0";
       }
-    } else if (refreshAreaRef.current) {
+    } else {
       refreshAreaRef.current.style.height = "0";
       refreshAreaRef.current.style.opacity = "0";
     }
   };
+
+  // Add a simplified fallback mode that doesn't rely on database
+  useEffect(() => {
+    // This effect will run if fallbackMode is true
+    if (fallbackMode) {
+      setLoading(false);
+      console.log("Running in fallback mode");
+
+      // Create some dummy orders for testing
+      if (isAdmin) {
+        setAdminOrders([
+          { id: "fallback-1", full_name: "Test User 1" },
+          { id: "fallback-2", full_name: "Test User 2" },
+        ]);
+      } else {
+        setUserOrders([{ id: "fallback-1", full_name: "Your Order" }]);
+      }
+    }
+  }, [fallbackMode, isAdmin]);
 
   if (fallbackMode) {
     return (
@@ -1124,113 +1147,142 @@ function ChatPage() {
           <div className="min-h-[calc(100vh-5rem)] flex flex-col">
             <div className="p-4 border-b border-white/10">
               <h2 className="text-lg font-medium text-white">
-                Chat (Demo Mode)
+                Chat (Fallback Mode)
               </h2>
               <p className="text-sm text-white/50">
                 Database connection unavailable - using local storage
               </p>
             </div>
 
-            <div className="flex-1 p-4 overflow-y-auto">
-              {messages.length === 0 ? (
-                <div className="h-full flex items-center justify-center">
-                  <div className="text-center text-white/50">
-                    <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No messages yet</p>
-                    <p className="text-sm mt-2">
-                      Start the conversation by sending a message
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {messages.map((message, index) => (
-                    <div
-                      key={message.id}
-                      className={`p-3 rounded-lg max-w-[80%] ${
-                        message.is_admin
-                          ? "bg-blue-500/20 text-blue-100 ml-auto"
-                          : "bg-white/10 text-white mr-auto"
-                      }`}
-                    >
-                      <div className="text-sm font-medium mb-1">
-                        {message.is_admin ? "Support" : "You"}
-                      </div>
-                      <div>{message.content}</div>
-                      {message.image_url && (
-                        <img
-                          src={message.image_url}
-                          alt="Attached"
-                          className="mt-2 rounded-lg max-h-40"
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t border-white/10">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!newMessage.trim()) return;
-
-                  // Add local message
-                  const newMsg = {
-                    id: `local-${Date.now()}`,
-                    content: newMessage,
-                    user_name: user?.user_metadata?.full_name || "You",
-                    user_avatar: user?.user_metadata?.avatar_url || "",
-                    is_admin: false,
-                    created_at: new Date().toISOString(),
-                    order_id: "local-order",
-                    user_id: user?.id || "anonymous",
-                    image_url: imagePreview,
-                  };
-
-                  setMessages((prev) => [...prev, newMsg]);
-                  setNewMessage("");
-                  setImagePreview(null);
-
-                  // Simulate response after 1 second
-                  setTimeout(() => {
-                    const responseMsg = {
-                      id: `local-${Date.now() + 1}`,
-                      content:
-                        "This is a demo mode response. The database is currently unavailable.",
-                      user_name: "Support",
-                      user_avatar: "",
-                      is_admin: true,
-                      created_at: new Date().toISOString(),
-                      order_id: "local-order",
-                      user_id: "system",
-                      image_url: "",
-                    };
-                    setMessages((prev) => [...prev, responseMsg]);
-                  }, 1000);
-                }}
-              >
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => {
-                      setNewMessage(e.target.value);
-                      handleTyping();
-                    }}
-                    placeholder="Type your message..."
-                    className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                  />
+            <div className="flex flex-1">
+              {/* Simplified sidebar */}
+              <div className="w-64 border-r border-white/10 p-4 hidden md:block">
+                <h3 className="text-white font-medium mb-4">Orders</h3>
+                <div className="space-y-2">
                   <button
-                    type="submit"
-                    disabled={!newMessage.trim()}
-                    className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full text-left p-2 rounded bg-white/10 hover:bg-white/20 transition-colors"
+                    onClick={() => {
+                      // Set up a local chat
+                      setMessages([
+                        {
+                          id: "local-1",
+                          content: "Hello! How can I help you today?",
+                          user_name: "Support",
+                          user_avatar: "",
+                          is_admin: true,
+                          created_at: new Date().toISOString(),
+                          order_id: "local-order",
+                          user_id: "admin",
+                          is_read: true,
+                        },
+                      ]);
+                    }}
                   >
-                    <Send className="w-6 h-6" />
+                    Fallback Order
                   </button>
                 </div>
-              </form>
+              </div>
+
+              {/* Simplified chat area */}
+              <div className="flex-1 flex flex-col">
+                <div className="flex-1 p-4 overflow-y-auto">
+                  {messages.length === 0 ? (
+                    <div className="h-full flex items-center justify-center">
+                      <div className="text-center text-white/50">
+                        <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>No messages yet</p>
+                        <p className="text-sm mt-2">
+                          Start the conversation by sending a message
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {messages.map((message, index) => (
+                        <div
+                          key={message.id}
+                          className={`p-3 rounded-lg max-w-[80%] ${
+                            message.is_admin
+                              ? "bg-blue-500/20 text-blue-100 ml-auto"
+                              : "bg-white/10 text-white mr-auto"
+                          }`}
+                        >
+                          <div className="text-sm font-medium mb-1">
+                            {message.is_admin ? "Support" : "You"}
+                          </div>
+                          <div>{message.content}</div>
+                          {message.image_url && (
+                            <img
+                              src={message.image_url}
+                              alt="Attached"
+                              className="mt-2 rounded-lg max-h-40"
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 border-t border-white/10">
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!newMessage.trim()) return;
+
+                      // Add local message
+                      const newMsg = {
+                        id: `local-${Date.now()}`,
+                        content: newMessage,
+                        user_name: user?.user_metadata?.full_name || "You",
+                        user_avatar: user?.user_metadata?.avatar_url || "",
+                        is_admin: false,
+                        created_at: new Date().toISOString(),
+                        order_id: "local-order",
+                        user_id: user?.id || "anonymous",
+                        is_read: true,
+                      };
+
+                      setMessages((prev) => [...prev, newMsg]);
+                      setNewMessage("");
+
+                      // Simulate response after 1 second
+                      setTimeout(() => {
+                        const responseMsg = {
+                          id: `local-${Date.now() + 1}`,
+                          content:
+                            "This is a fallback mode response. The database is currently unavailable.",
+                          user_name: "Support",
+                          user_avatar: "",
+                          is_admin: true,
+                          created_at: new Date().toISOString(),
+                          order_id: "local-order",
+                          user_id: "system",
+                          is_read: true,
+                        };
+                        setMessages((prev) => [...prev, responseMsg]);
+                      }, 1000);
+                    }}
+                  >
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newMessage}
+                        onChange={(e) => setNewMessage(e.target.value)}
+                        placeholder="Type your message..."
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!newMessage.trim()}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Send className="w-6 h-6" />
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
             </div>
           </div>
         </main>
