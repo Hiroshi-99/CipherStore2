@@ -38,6 +38,12 @@ import { useOrderFilters } from "../hooks/useOrderFilters";
 import type { Order } from "../hooks/useOrderFilters";
 import { safeUpdate } from "../lib/database";
 import { generateUUID } from "../utils/uuid";
+import {
+  checkIfAdmin,
+  grantAdminPrivileges,
+  revokeAdminPrivileges,
+  fetchUsersWithAdminStatus,
+} from "../lib/adminService";
 
 interface Admin {
   id: string;
@@ -104,6 +110,10 @@ function AdminPage() {
   const [formErrors, setFormErrors] = useState({
     accountId: false,
   });
+  const [users, setUsers] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [selectedTab, setSelectedTab] = useState("users");
 
   // This will define the selectedOrder based on the selectedOrderId
   const selectedOrder = selectedOrderId
@@ -650,381 +660,368 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session?.user) {
+          navigate("/");
+          return;
+        }
+
+        setCurrentUser(session.user);
+
+        // Check if user is admin
+        const adminStatus = await checkIfAdmin(session.user.id);
+        setIsAdmin(adminStatus);
+
+        if (!adminStatus) {
+          toast.error("You don't have permission to access the admin page");
+          navigate("/");
+          return;
+        }
+
+        // Fetch users with admin status
+        await fetchUsers(session.user.id);
+      } catch (err) {
+        console.error("Error checking authentication:", err);
+        toast.error("Authentication error");
+        navigate("/");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkAuth();
+  }, [navigate]);
+
+  const fetchUsers = async (adminUserId: string) => {
+    setLoading(true);
+
+    try {
+      const result = await fetchUsersWithAdminStatus(adminUserId);
+
+      if (result.success) {
+        setUsers(result.data);
+      } else {
+        toast.error(result.error);
+      }
+    } catch (err) {
+      console.error("Error fetching users:", err);
+      toast.error("Failed to load users");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGrantAdmin = async (userId: string) => {
+    setActionInProgress(userId);
+
+    try {
+      const result = await grantAdminPrivileges(currentUser.id, userId);
+
+      if (result.success) {
+        toast.success("Admin privileges granted successfully");
+        // Update the local state
+        setUsers(
+          users.map((user) =>
+            user.id === userId ? { ...user, isAdmin: true } : user
+          )
+        );
+      } else {
+        toast.error(result.error);
+      }
+    } catch (err) {
+      console.error("Error granting admin privileges:", err);
+      toast.error("Failed to grant admin privileges");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  const handleRevokeAdmin = async (userId: string) => {
+    // Prevent revoking your own admin privileges
+    if (userId === currentUser.id) {
+      toast.error("You cannot revoke your own admin privileges");
+      return;
+    }
+
+    setActionInProgress(userId);
+
+    try {
+      const result = await revokeAdminPrivileges(currentUser.id, userId);
+
+      if (result.success) {
+        toast.success("Admin privileges revoked successfully");
+        // Update the local state
+        setUsers(
+          users.map((user) =>
+            user.id === userId ? { ...user, isAdmin: false } : user
+          )
+        );
+      } else {
+        toast.error(result.error);
+      }
+    } catch (err) {
+      console.error("Error revoking admin privileges:", err);
+      toast.error("Failed to revoke admin privileges");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Filter users based on search term
+  const filteredUsers = users.filter((user) => {
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      user.email?.toLowerCase().includes(searchLower) ||
+      user.fullName?.toLowerCase().includes(searchLower) ||
+      user.id.toLowerCase().includes(searchLower)
+    );
+  });
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-white">Loading...</div>
-      </div>
+      <PageContainer title="ADMIN">
+        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
+          <LoadingSpinner size="lg" light />
+        </div>
+      </PageContainer>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <PageContainer title="ADMIN">
+        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
+          <div className="text-center">
+            <h2 className="text-xl text-white mb-4">Access Denied</h2>
+            <p className="text-white/70 mb-6">
+              You don't have permission to access this page.
+            </p>
+            <button
+              onClick={() => navigate("/")}
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+            >
+              Go Home
+            </button>
+          </div>
+        </div>
+      </PageContainer>
     );
   }
 
   return (
-    <PageContainer title="ADMIN" user={null}>
-      <Toaster position="top-right" />
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        <StatsDisplay />
+    <PageContainer title="ADMIN" showBack>
+      <main className="max-w-screen-xl mx-auto pb-16 px-4">
+        <div className="bg-gray-900 rounded-xl p-6 mt-8">
+          <h1 className="text-2xl font-bold text-white mb-6">
+            Admin Dashboard
+          </h1>
 
-        <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
-          {/* Batch Actions */}
-          <AnimatePresence>
-            {selectedOrders.size > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="mb-4 p-4 bg-white/5 rounded-lg flex items-center justify-between"
-              >
-                <div className="text-white">
-                  {selectedOrders.size} orders selected
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleBatchAction("approve")}
-                    className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30"
-                    disabled={isBatchProcessing}
-                  >
-                    Approve All
-                  </button>
-                  <button
-                    onClick={() => handleBatchAction("reject")}
-                    className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30"
-                    disabled={isBatchProcessing}
-                  >
-                    Reject All
-                  </button>
-                  <button
-                    onClick={() => handleBatchAction("export")}
-                    className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30"
-                    disabled={isBatchProcessing}
-                  >
-                    Export Selected
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Update Controls section */}
-          <div className="flex flex-wrap items-center gap-4 mb-6">
-            <div className="flex-1 flex flex-wrap items-center gap-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 w-5 h-5" />
-                <input
-                  type="text"
-                  placeholder="Search orders..."
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  className="pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-              </div>
-
+          {/* Tabs */}
+          <div className="border-b border-white/10 mb-6">
+            <div className="flex space-x-4">
               <button
-                onClick={() => setShowFilters(!showFilters)}
-                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                title="Toggle filters"
-              >
-                <Filter className="w-5 h-5 text-white" />
-              </button>
-
-              <button
-                onClick={handleExport}
-                className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg flex items-center gap-2"
-                title="Export to CSV"
-              >
-                <Download className="w-4 h-4" />
-                Export
-              </button>
-            </div>
-
-            {/* View mode toggle */}
-            <div className="flex items-center gap-2 bg-white/5 rounded-lg p-1">
-              <button
-                onClick={() => setViewMode("list")}
-                className={`p-2 rounded ${
-                  viewMode === "list" ? "bg-white/10" : ""
+                onClick={() => setSelectedTab("users")}
+                className={`py-2 px-4 ${
+                  selectedTab === "users"
+                    ? "border-b-2 border-emerald-500 text-emerald-500"
+                    : "text-white/70 hover:text-white"
                 }`}
               >
-                List
+                User Management
               </button>
               <button
-                onClick={() => setViewMode("grid")}
-                className={`p-2 rounded ${
-                  viewMode === "grid" ? "bg-white/10" : ""
+                onClick={() => setSelectedTab("orders")}
+                className={`py-2 px-4 ${
+                  selectedTab === "orders"
+                    ? "border-b-2 border-emerald-500 text-emerald-500"
+                    : "text-white/70 hover:text-white"
                 }`}
               >
-                Grid
+                Orders
+              </button>
+              <button
+                onClick={() => setSelectedTab("settings")}
+                className={`py-2 px-4 ${
+                  selectedTab === "settings"
+                    ? "border-b-2 border-emerald-500 text-emerald-500"
+                    : "text-white/70 hover:text-white"
+                }`}
+              >
+                Settings
               </button>
             </div>
           </div>
 
-          {/* Filters panel */}
-          {showFilters && (
-            <div className="mb-6 p-4 bg-white/5 rounded-lg">
-              <h3 className="text-white mb-4">Filters</h3>
-              <div className="flex flex-wrap gap-4">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-white/70" />
+          {/* User Management Tab */}
+          {selectedTab === "users" && (
+            <div>
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl text-white">User Management</h2>
+                <div className="relative">
                   <input
-                    type="date"
-                    onChange={(e) =>
-                      setFilteredDateRange((prev) => ({
-                        ...prev,
-                        start: e.target.value ? new Date(e.target.value) : null,
-                      }))
-                    }
-                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                    type="text"
+                    placeholder="Search users..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40 w-64"
                   />
-                  <span className="text-white/70">to</span>
-                  <input
-                    type="date"
-                    onChange={(e) =>
-                      setFilteredDateRange((prev) => ({
-                        ...prev,
-                        end: e.target.value ? new Date(e.target.value) : null,
-                      }))
-                    }
-                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
-                  />
+                  <div className="absolute right-3 top-2.5 text-white/50">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-5 w-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                      />
+                    </svg>
+                  </div>
                 </div>
+              </div>
 
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-white/70" />
-                  <select
-                    multiple
-                    value={filteredSelectedStatuses}
-                    onChange={(e) =>
-                      setFilteredSelectedStatuses(
-                        Array.from(
-                          e.target.selectedOptions,
-                          (option) => option.value
-                        )
-                      )
-                    }
-                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
-                  >
-                    <option value="pending">Pending</option>
-                    <option value="active">Active</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </div>
+              {/* Users Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-white">
+                  <thead className="bg-white/5 text-left">
+                    <tr>
+                      <th className="px-4 py-3 rounded-tl-lg">Name</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3 rounded-tr-lg">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {filteredUsers.length > 0 ? (
+                      filteredUsers.map((user) => (
+                        <tr key={user.id} className="hover:bg-white/5">
+                          <td className="px-4 py-3">
+                            {user.fullName || "N/A"}
+                          </td>
+                          <td className="px-4 py-3">{user.email}</td>
+                          <td className="px-4 py-3">
+                            {user.isAdmin ? (
+                              <span className="bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full text-xs">
+                                Admin
+                              </span>
+                            ) : (
+                              <span className="bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full text-xs">
+                                User
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {new Date(user.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3">
+                            {user.isAdmin ? (
+                              <button
+                                onClick={() => handleRevokeAdmin(user.id)}
+                                disabled={
+                                  actionInProgress === user.id ||
+                                  user.id === currentUser.id
+                                }
+                                className={`px-3 py-1 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors ${
+                                  actionInProgress === user.id ||
+                                  user.id === currentUser.id
+                                    ? "opacity-50 cursor-not-allowed"
+                                    : ""
+                                }`}
+                              >
+                                {actionInProgress === user.id ? (
+                                  <span className="flex items-center">
+                                    <LoadingSpinner size="sm" light />
+                                    <span className="ml-2">Revoking...</span>
+                                  </span>
+                                ) : (
+                                  "Revoke Admin"
+                                )}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleGrantAdmin(user.id)}
+                                disabled={actionInProgress === user.id}
+                                className={`px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors ${
+                                  actionInProgress === user.id
+                                    ? "opacity-50 cursor-not-allowed"
+                                    : ""
+                                }`}
+                              >
+                                {actionInProgress === user.id ? (
+                                  <span className="flex items-center">
+                                    <LoadingSpinner size="sm" light />
+                                    <span className="ml-2">Granting...</span>
+                                  </span>
+                                ) : (
+                                  "Make Admin"
+                                )}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={5}
+                          className="px-4 py-8 text-center text-white/50"
+                        >
+                          {searchTerm ? (
+                            <>
+                              <p>No users matching "{searchTerm}"</p>
+                              <button
+                                onClick={() => setSearchTerm("")}
+                                className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                              >
+                                Clear search
+                              </button>
+                            </>
+                          ) : (
+                            <p>No users found</p>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
 
-          {/* Orders List/Grid */}
-          <div
-            className={
-              viewMode === "grid"
-                ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-                : "space-y-6"
-            }
-          >
-            {loading ? (
-              <div className="text-center py-12">
-                <LoadingSpinner size="lg" light />
-              </div>
-            ) : filteredOrders.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-white/70 text-lg">No orders found</p>
-                <p className="text-white/50 text-sm mt-2">
-                  {searchTerm || filter !== "all"
-                    ? "Try adjusting your search or filter"
-                    : "New orders will appear here"}
-                </p>
-              </div>
-            ) : (
-              filteredOrders.map((order) => (
-                <OrderItem
-                  key={order.id}
-                  order={order}
-                  onPaymentAction={handlePaymentAction}
-                  onImageView={(imageUrl) => {
-                    setCurrentImageUrl(imageUrl);
-                    setShowImageModal(true);
-                  }}
-                  onFileUpload={handleFileUploadSuccess}
-                  isSelected={selectedOrders.has(order.id)}
-                  onSelect={(selected) => {
-                    setSelectedOrders((prev) => {
-                      const next = new Set(prev);
-                      if (selected) {
-                        next.add(order.id);
-                      } else {
-                        next.delete(order.id);
-                      }
-                      return next;
-                    });
-                  }}
-                  actionInProgress={actionInProgress}
-                  onApprove={handleApprove}
-                />
-              ))
-            )}
-          </div>
-
-          {/* Order Details Section */}
-          <div className="mt-4 space-y-4">
-            <div className="mt-6 border-t border-gray-700 pt-4">
-              <h3 className="text-lg font-medium mb-3 text-white">
-                Account Management
-              </h3>
-
-              <div
-                className="bg-gray-800 rounded-lg p-4 mb-4"
-                id="account-details-section"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-medium text-white">Account Details</h4>
-                  {selectedOrder?.account_details_sent && (
-                    <span className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded-full">
-                      Sent
-                    </span>
-                  )}
-                </div>
-
-                {selectedOrder?.status === "approved" &&
-                  !selectedOrder?.account_details_sent && (
-                    <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/30 rounded-md animate-pulse-slow">
-                      <div className="flex items-center">
-                        <MessageCircle
-                          className="text-blue-400 mr-2"
-                          size={20}
-                        />
-                        <p className="text-blue-300 text-sm">
-                          <span className="font-medium">Action required:</span>{" "}
-                          Please enter the account details below to send them to
-                          the customer.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                {selectedOrder?.account_details_sent ? (
-                  <div className="mb-4">
-                    <div className="flex items-center mb-2">
-                      <MessageCircle className="text-blue-400 mr-2" size={20} />
-                      <span className="text-gray-300">
-                        Account details sent on{" "}
-                        {new Date(
-                          selectedOrder.account_details_sent_at
-                        ).toLocaleString()}
-                      </span>
-                    </div>
-
-                    {selectedOrder.account_metadata && (
-                      <div className="mt-2 p-3 bg-gray-700/50 rounded-md text-sm">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <span className="text-gray-400">Account ID:</span>
-                            <div className="text-white font-mono">
-                              {selectedOrder.account_metadata.accountId}
-                            </div>
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Password:</span>
-                            <div className="text-white">
-                              {selectedOrder.account_metadata.password}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-gray-400 text-sm mb-3">
-                    No account details have been sent for this order yet.
-                  </p>
-                )}
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-gray-400 text-sm mb-1">
-                      Account ID / Email <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                      id="account-id-input"
-                      type="text"
-                      value={accountDetails.accountId}
-                      onChange={(e) => {
-                        setAccountDetails((prev) => ({
-                          ...prev,
-                          accountId: e.target.value,
-                        }));
-                        // Clear error when typing
-                        if (e.target.value.trim()) {
-                          setFormErrors((prev) => ({
-                            ...prev,
-                            accountId: false,
-                          }));
-                        }
-                      }}
-                      placeholder="e.g., user123@example.com"
-                      className={`w-full p-2 bg-gray-700 border ${
-                        formErrors.accountId
-                          ? "border-red-500"
-                          : "border-gray-600"
-                      } rounded-md text-white`}
-                    />
-                    {formErrors.accountId && (
-                      <p className="text-red-400 text-xs mt-1">
-                        Account ID is required
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-gray-400 text-sm mb-1">
-                      Password
-                    </label>
-                    <input
-                      id="account-password-input"
-                      type="text"
-                      value={accountDetails.password}
-                      onChange={(e) =>
-                        setAccountDetails((prev) => ({
-                          ...prev,
-                          password: e.target.value,
-                        }))
-                      }
-                      placeholder="Enter password"
-                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleAccountDetailsUpload}
-                    className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
-                    disabled={
-                      actionInProgress === "uploading" ||
-                      !selectedOrderId ||
-                      !accountDetails.accountId
-                    }
-                  >
-                    {actionInProgress === "uploading" ? (
-                      <span className="flex items-center justify-center">
-                        <RefreshCw className="animate-spin mr-2 h-5 w-5" />
-                        Sending...
-                      </span>
-                    ) : (
-                      <span className="flex items-center justify-center">
-                        <MessageCircle className="mr-2 h-5 w-5" />
-                        Send Account Details
-                      </span>
-                    )}
-                  </button>
-                </div>
-              </div>
+          {/* Orders Tab */}
+          {selectedTab === "orders" && (
+            <div>
+              <h2 className="text-xl text-white mb-6">Order Management</h2>
+              {/* Order management UI would go here */}
+              <p className="text-white/70">
+                Order management functionality coming soon.
+              </p>
             </div>
-          </div>
+          )}
+
+          {/* Settings Tab */}
+          {selectedTab === "settings" && (
+            <div>
+              <h2 className="text-xl text-white mb-6">Admin Settings</h2>
+              {/* Settings UI would go here */}
+              <p className="text-white/70">
+                Admin settings functionality coming soon.
+              </p>
+            </div>
+          )}
         </div>
       </main>
-
-      {/* Image Modal with zoom and navigation */}
-      {showImageModal && (
-        <ImageModal
-          imageUrl={currentImageUrl}
-          onClose={() => setShowImageModal(false)}
-        />
-      )}
     </PageContainer>
   );
 }

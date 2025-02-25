@@ -8,6 +8,7 @@ import ChatPage from "./pages/ChatPage";
 import AdminGuard from "./components/AdminGuard";
 import { setPageTitle } from "./utils/title";
 import Fireflies from "./components/Fireflies";
+import { AdminProvider } from "./contexts/AdminContext";
 
 function App() {
   useEffect(() => {
@@ -15,7 +16,7 @@ function App() {
   }, []);
 
   return (
-    <>
+    <AdminProvider>
       <Fireflies />
       <Routes>
         <Route path="/" element={<StorePage />} />
@@ -32,7 +33,7 @@ function App() {
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </>
+    </AdminProvider>
   );
 }
 
