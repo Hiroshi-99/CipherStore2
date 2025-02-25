@@ -835,28 +835,36 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       setActionInProgress("adding-admin");
 
-      // Find the user with the matching email in the users table
-      const { data: userWithEmail, error: userError } = await supabase
-        .from("users")
-        .select("id, email")
-        .eq("email", newAdminEmail.trim())
-        .single();
+      // Try to find the user by email
+      let userId = null;
 
-      if (userError) {
-        console.error("Error finding user:", userError);
+      // First try the users table
+      try {
+        const { data: userWithEmail, error: userError } = await supabase
+          .from("users")
+          .select("id, email")
+          .eq("email", newAdminEmail.trim())
+          .single();
+
+        if (!userError && userWithEmail) {
+          userId = userWithEmail.id;
+        }
+      } catch (err) {
+        console.error("Error finding user in users table:", err);
+      }
+
+      // If we couldn't find the user, show an error
+      if (!userId) {
         toast.error("User not found with that email");
         setActionInProgress(null);
         return;
       }
 
       // Grant admin privileges
-      const result = await grantAdminPrivileges(
-        currentUser?.id || "",
-        userWithEmail.id
-      );
+      const result = await grantAdminPrivileges(currentUser?.id || "", userId);
 
       if (result.success) {
-        toast.success(`Admin privileges granted to ${userWithEmail.email}`);
+        toast.success(`Admin privileges granted to ${newAdminEmail}`);
         setNewAdminEmail("");
         fetchUsers(currentUser?.id || "");
       } else {

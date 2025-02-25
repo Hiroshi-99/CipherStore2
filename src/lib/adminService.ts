@@ -339,53 +339,65 @@ export async function getAllUsersClientSide() {
       };
     }
 
-    // Get all users from the users table
-    const { data: dbUsers, error: usersError } = await supabase
-      .from("users")
-      .select("*");
+    // Try to get users from auth directly first
+    let allUsers = [];
 
-    if (usersError) {
-      console.error("Error fetching users:", usersError);
-      // Continue with just the current user
+    try {
+      // Get all users from the users table
+      const { data: dbUsers, error: usersError } = await supabase
+        .from("users")
+        .select("*");
+
+      if (!usersError && dbUsers && dbUsers.length > 0) {
+        allUsers = dbUsers;
+      } else {
+        console.log(
+          "Could not get users from users table:",
+          usersError?.message
+        );
+      }
+    } catch (usersError) {
+      console.error("Error fetching users from table:", usersError);
+    }
+
+    // If we couldn't get users from the table, create a minimal list with just the current user
+    if (allUsers.length === 0) {
+      allUsers = [
+        {
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata?.full_name || "",
+          created_at: user.created_at,
+          last_sign_in: null,
+        },
+      ];
     }
 
     // Get all admin users
-    const { data: adminUsers, error: adminError } = await supabase
-      .from("admin_users")
-      .select("user_id");
+    let adminUserIds = new Set();
+    try {
+      const { data: adminUsers, error: adminError } = await supabase
+        .from("admin_users")
+        .select("user_id");
 
-    if (adminError) {
+      if (!adminError && adminUsers) {
+        adminUserIds = new Set(adminUsers.map((admin) => admin.user_id));
+      }
+    } catch (adminError) {
       console.error("Error fetching admin users:", adminError);
+      // Always include the current user as admin since we verified above
+      adminUserIds.add(user.id);
     }
 
-    // Create a set of admin user IDs for quick lookup
-    const adminUserIds = new Set(
-      (adminUsers || []).map((admin) => admin.user_id)
-    );
-
     // Format users with admin status
-    const formattedUsers = (dbUsers || []).map((dbUser) => ({
+    const formattedUsers = allUsers.map((dbUser) => ({
       id: dbUser.id,
       email: dbUser.email || "",
       fullName: dbUser.full_name || "",
-      isAdmin: adminUserIds.has(dbUser.id),
+      isAdmin: adminUserIds.has(dbUser.id) || dbUser.id === user.id, // Current user is always admin
       lastSignIn: dbUser.last_sign_in,
       createdAt: dbUser.created_at,
     }));
-
-    // Always include the current user if not already in the list
-    const currentUserInList = formattedUsers.some((u) => u.id === user.id);
-
-    if (!currentUserInList) {
-      formattedUsers.push({
-        id: user.id,
-        email: user.email || "",
-        fullName: user.user_metadata?.full_name || "",
-        isAdmin: true, // Current user is admin (we checked above)
-        lastSignIn: null,
-        createdAt: user.created_at,
-      });
-    }
 
     return {
       success: true,
@@ -393,6 +405,32 @@ export async function getAllUsersClientSide() {
     };
   } catch (err) {
     console.error("Error in getAllUsersClientSide:", err);
+
+    // Fallback to just the current user
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        return {
+          success: true,
+          data: [
+            {
+              id: user.id,
+              email: user.email || "",
+              fullName: user.user_metadata?.full_name || "",
+              isAdmin: true,
+              lastSignIn: null,
+              createdAt: user.created_at,
+            },
+          ],
+        };
+      }
+    } catch (fallbackErr) {
+      console.error("Error in fallback:", fallbackErr);
+    }
+
     return { success: false, error: "Failed to get user information" };
   }
 }
