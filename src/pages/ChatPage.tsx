@@ -60,6 +60,7 @@ function ChatPage() {
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [fallbackMode, setFallbackMode] = useState(false);
 
   // Authentication check
   useEffect(() => {
@@ -134,6 +135,39 @@ function ChatPage() {
       subscription.unsubscribe();
     };
   }, [navigate]);
+
+  // Modify the useEffect to check for fallback mode
+  useEffect(() => {
+    // Check if database tables exist
+    const checkDatabaseTables = async () => {
+      try {
+        // Check if messages table exists
+        const { error: messagesTableError } = await supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .limit(1);
+
+        // Check if orders table exists
+        const { error: ordersTableError } = await supabase
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .limit(1);
+
+        if (
+          messagesTableError?.code === "42P01" ||
+          ordersTableError?.code === "42P01"
+        ) {
+          console.log("Database tables missing, entering fallback mode");
+          setFallbackMode(true);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error("Error checking database tables:", err);
+      }
+    };
+
+    checkDatabaseTables();
+  }, []);
 
   // Fetch user orders
   const fetchUserOrders = async (userId: string) => {
@@ -229,34 +263,58 @@ function ChatPage() {
     }
   };
 
-  // Fix the message marking as read functionality by implementing batching
-  // Add this helper function to batch updates
+  // Replace the updateMessagesInBatches function with this more robust version
   const updateMessagesInBatches = async (messageIds: string[]) => {
-    // Process in smaller batches to avoid URL length limits
-    const BATCH_SIZE = 10;
-    const batches = [];
-
-    for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
-      const batch = messageIds.slice(i, i + BATCH_SIZE);
-      batches.push(batch);
-    }
-
+    // First check if the messages table exists and we have update permission
     try {
+      // Try a simple query first to check if the table exists
+      const { error: tableCheckError } = await supabase
+        .from("messages")
+        .select("id", { count: "exact", head: true })
+        .limit(1);
+
+      if (tableCheckError) {
+        console.error("Error checking messages table:", tableCheckError);
+        // If table doesn't exist or we don't have permission, just return without updating
+        return false;
+      }
+
+      // If we get here, the table exists and we have permission
+      // Process in smaller batches to avoid URL length limits
+      const BATCH_SIZE = 5; // Reduce batch size to avoid URL length issues
+      const batches = [];
+
+      for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+        const batch = messageIds.slice(i, i + BATCH_SIZE);
+        batches.push(batch);
+      }
+
       // Process each batch sequentially
       for (const batchIds of batches) {
-        await supabase
-          .from("messages")
-          .update({ is_read: true })
-          .in("id", batchIds);
+        try {
+          const { error: updateError } = await supabase
+            .from("messages")
+            .update({ is_read: true })
+            .in("id", batchIds);
+
+          if (updateError) {
+            console.error("Error updating batch:", updateError);
+            // Continue with other batches even if one fails
+          }
+        } catch (batchError) {
+          console.error("Exception updating batch:", batchError);
+          // Continue with other batches
+        }
       }
+
       return true;
     } catch (error) {
-      console.error("Error updating message read status:", error);
+      console.error("Error in updateMessagesInBatches:", error);
       return false;
     }
   };
 
-  // Then modify the fetchMessages function to use this batched approach:
+  // Modify the fetchMessages function to handle the case where messages can't be marked as read
   const fetchMessages = useCallback(
     async (orderId: string) => {
       if (!orderId) return;
@@ -265,34 +323,55 @@ function ChatPage() {
         setLoading(true);
         setError(null);
 
+        // First check if the messages table exists
+        const { data: tableCheck, error: tableCheckError } = await supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .limit(1);
+
+        if (tableCheckError && tableCheckError.code === "42P01") {
+          // Table doesn't exist
+          setError(
+            "Chat system is currently unavailable. The messages table doesn't exist in the database."
+          );
+          console.error("Database schema error: messages table doesn't exist");
+          setLoading(false);
+          return;
+        }
+
+        // If we get here, the table exists, so fetch messages
         const { data, error: messagesError } = await supabase
           .from("messages")
           .select("*")
           .eq("order_id", orderId)
           .order("created_at", { ascending: true });
 
-        if (messagesError && messagesError.code === "42P01") {
-          // Table doesn't exist error
-          setError(
-            "Chat system is currently unavailable. The messages table doesn't exist in the database."
-          );
-          console.error("Database schema error: messages table doesn't exist");
-          return;
+        if (messagesError) {
+          throw messagesError;
         }
 
-        if (messagesError) throw messagesError;
-
+        // Set messages even if marking as read fails
         setMessages(data || []);
 
-        // Mark messages as read using batched approach
-        const unreadIds =
-          data
-            ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
-            .map((m) => m.id) || [];
+        // Try to mark messages as read, but don't fail if it doesn't work
+        try {
+          const unreadIds =
+            data
+              ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
+              .map((m) => m.id) || [];
 
-        if (unreadIds.length > 0) {
-          // Use the batched update function instead of a single update
-          await updateMessagesInBatches(unreadIds);
+          if (unreadIds.length > 0) {
+            // Use the batched update function
+            const updateSuccess = await updateMessagesInBatches(unreadIds);
+
+            if (!updateSuccess) {
+              console.log("Could not mark messages as read, but continuing");
+              // We can still show the messages even if we can't mark them as read
+            }
+          }
+        } catch (markReadError) {
+          console.error("Error marking messages as read:", markReadError);
+          // Continue anyway - this is not a critical error
         }
       } catch (err) {
         console.error("Error fetching messages:", err);
@@ -435,6 +514,33 @@ function ChatPage() {
   const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
     isAdmin ? adminOrders : userOrders
   );
+
+  if (fallbackMode) {
+    return (
+      <PageContainer title="CHAT" user={user}>
+        <main className="max-w-screen-xl mx-auto pb-16">
+          <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
+            <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
+              <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
+              <h2 className="text-xl text-white mb-2">
+                Database Setup Required
+              </h2>
+              <p className="text-white/70 mb-6">
+                The chat system requires database tables that don't exist yet.
+                Please contact the administrator to set up the database.
+              </p>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+              >
+                Refresh Page
+              </button>
+            </div>
+          </div>
+        </main>
+      </PageContainer>
+    );
+  }
 
   if (error) {
     return (
