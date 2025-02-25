@@ -365,27 +365,11 @@ function ChatPage() {
     async (orderId: string) => {
       if (!orderId) return;
 
+      setLoading(true);
+      setError(null);
+
       try {
-        setLoading(true);
-        setError(null);
-
-        // First check if the messages table exists
-        const { data: tableCheck, error: tableCheckError } = await supabase
-          .from("messages")
-          .select("id", { count: "exact", head: true })
-          .limit(1);
-
-        if (tableCheckError && tableCheckError.code === "42P01") {
-          // Table doesn't exist
-          setError(
-            "Chat system is currently unavailable. The messages table doesn't exist in the database."
-          );
-          console.error("Database schema error: messages table doesn't exist");
-          setLoading(false);
-          return;
-        }
-
-        // If we get here, the table exists, so fetch messages
+        // Fetch messages for the selected order
         const { data, error: messagesError } = await supabase
           .from("messages")
           .select("*")
@@ -393,6 +377,8 @@ function ChatPage() {
           .order("created_at", { ascending: true });
 
         if (messagesError) {
+          console.error("Error fetching messages:", messagesError);
+          setError("Failed to load messages. Please try again.");
           throw messagesError;
         }
 
@@ -410,6 +396,11 @@ function ChatPage() {
         // Set messages even if marking as read fails
         setMessages(processedMessages);
 
+        // If no messages exist, send a welcome message
+        if (processedMessages.length === 0) {
+          await sendWelcomeMessage(orderId);
+        }
+
         // Try to mark messages as read, but don't fail if it doesn't work
         try {
           const unreadIds =
@@ -418,21 +409,13 @@ function ChatPage() {
               .map((m) => m.id) || [];
 
           if (unreadIds.length > 0) {
-            try {
-              // Check if is_read column exists first
-              const { error: columnCheckError } = await supabase
-                .from("messages")
-                .select("is_read")
-                .limit(1);
+            const { error: markReadError } = await supabase
+              .from("messages")
+              .update({ is_read: true })
+              .in("id", unreadIds);
 
-              // Only attempt to update if the column exists
-              if (!columnCheckError) {
-                await updateMessagesInBatches(unreadIds);
-              } else {
-                console.log("Skipping mark as read - column doesn't exist");
-              }
-            } catch (columnError) {
-              console.error("Error checking for is_read column:", columnError);
+            if (markReadError) {
+              console.error("Error marking messages as read:", markReadError);
             }
           }
         } catch (markReadError) {
@@ -1272,6 +1255,123 @@ function ChatPage() {
     };
   }, [orderSearchTerm]);
 
+  // Add this function to send an automatic welcome message
+  const sendWelcomeMessage = async (orderId: string) => {
+    try {
+      // Check if there are any messages in this chat
+      const { data: existingMessages, error: checkError } = await supabase
+        .from("messages")
+        .select("id")
+        .eq("order_id", orderId)
+        .limit(1);
+
+      if (checkError) {
+        console.error("Error checking for existing messages:", checkError);
+        return;
+      }
+
+      // Only send welcome message if this is the first message in the chat
+      if (!existingMessages || existingMessages.length === 0) {
+        // Create the welcome message
+        const welcomeMessage = {
+          id: `welcome-${Date.now()}`,
+          content:
+            "Thank you for your order! Our support team will be with you shortly. Feel free to ask any questions about your order here.",
+          user_id: "system", // Use a special ID for system messages
+          order_id: orderId,
+          is_admin: true,
+          created_at: new Date().toISOString(),
+          is_read: false,
+          user_name: "Support Team",
+          user_avatar: "/images/support-avatar.png", // Add a default support avatar
+        };
+
+        // Insert the welcome message into the database
+        const { error: insertError } = await supabase
+          .from("messages")
+          .insert(welcomeMessage);
+
+        if (insertError) {
+          console.error("Error sending welcome message:", insertError);
+        } else {
+          console.log("Welcome message sent successfully");
+
+          // Add the message to the UI
+          setMessages([welcomeMessage as Message]);
+        }
+      }
+    } catch (err) {
+      console.error("Error in sendWelcomeMessage:", err);
+    }
+  };
+
+  // Add this function to check for new orders
+  const checkForNewOrders = useCallback(async () => {
+    if (!user || !isAdmin) return;
+
+    try {
+      // Get the timestamp of the last check
+      const lastCheckTimestamp =
+        localStorage.getItem("lastNewOrderCheck") || "0";
+
+      // Fetch orders created after the last check
+      const { data: newOrders, error } = await supabase
+        .from("orders")
+        .select("id")
+        .gt("created_at", new Date(parseInt(lastCheckTimestamp)).toISOString());
+
+      if (error) {
+        console.error("Error checking for new orders:", error);
+        return;
+      }
+
+      // Send welcome messages for each new order
+      if (newOrders && newOrders.length > 0) {
+        for (const order of newOrders) {
+          await sendWelcomeMessage(order.id);
+        }
+      }
+
+      // Update the last check timestamp
+      localStorage.setItem("lastNewOrderCheck", Date.now().toString());
+    } catch (err) {
+      console.error("Error in checkForNewOrders:", err);
+    }
+  }, [user, isAdmin]);
+
+  // Call this function periodically
+  useEffect(() => {
+    // Check for new orders when the component mounts
+    checkForNewOrders();
+
+    // Set up an interval to check for new orders
+    const intervalId = setInterval(checkForNewOrders, 5 * 60 * 1000); // Check every 5 minutes
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [checkForNewOrders]);
+
+  // Update the handleOrderSelect function
+  const handleOrderSelect = async (orderId: string) => {
+    setSelectedOrderId(orderId);
+    setShowSidebar(false);
+    await fetchMessages(orderId);
+
+    // Check if this is the first time the user is opening this chat
+    const openedChats = JSON.parse(localStorage.getItem("openedChats") || "[]");
+    if (!openedChats.includes(orderId)) {
+      // Add this chat to the opened chats list
+      openedChats.push(orderId);
+      localStorage.setItem("openedChats", JSON.stringify(openedChats));
+
+      // Send a welcome message if there are no messages yet
+      if (messages.length === 0) {
+        await sendWelcomeMessage(orderId);
+      }
+    }
+  };
+
   if (fallbackMode) {
     return (
       <PageContainer title="CHAT" user={user}>
@@ -1485,11 +1585,7 @@ function ChatPage() {
                     {filteredAdminOrders.map((order) => (
                       <button
                         key={order.id}
-                        onClick={() => {
-                          setSelectedOrderId(order.id);
-                          setShowSidebar(false);
-                          fetchMessages(order.id);
-                        }}
+                        onClick={() => handleOrderSelect(order.id)}
                         className={`w-full text-left p-4 hover:bg-white/5 transition-colors ${
                           selectedOrderId === order.id ? "bg-white/10" : ""
                         }`}
@@ -1535,11 +1631,7 @@ function ChatPage() {
                   {filteredUserOrders.map((order) => (
                     <button
                       key={order.id}
-                      onClick={() => {
-                        setSelectedOrderId(order.id);
-                        setShowSidebar(false);
-                        fetchMessages(order.id);
-                      }}
+                      onClick={() => handleOrderSelect(order.id)}
                       className={`w-full text-left p-4 hover:bg-white/5 transition-colors ${
                         selectedOrderId === order.id ? "bg-white/10" : ""
                       }`}
