@@ -43,6 +43,7 @@ import {
   grantAdminPrivileges,
   revokeAdminPrivileges,
   fetchUsersWithAdminStatus,
+  getLocalUsers,
 } from "../lib/adminService";
 
 interface Admin {
@@ -703,22 +704,33 @@ Please keep these details secure. You can copy them by selecting the text.
     setLoading(true);
 
     try {
+      // Try the serverless function first
       const result = await fetchUsersWithAdminStatus(adminUserId);
 
       if (result.success && result.data && result.data.length > 0) {
         setUsers(result.data);
-      } else if (result.success && (!result.data || result.data.length === 0)) {
-        // No users returned, but not an error
-        console.log("No users returned from API");
-        toast.info("No users found");
-        setUsers([]);
-      } else {
-        // Error case - already handled
+        setLoading(false);
+        return;
       }
     } catch (err) {
-      console.error("Error fetching users:", err);
-      toast.error("Failed to load users");
-      setFallbackMode(true);
+      console.error("Error fetching users via function:", err);
+    }
+
+    // If we get here, try the local fallback
+    try {
+      const localResult = await getLocalUsers(adminUserId);
+
+      if (localResult.success && localResult.data) {
+        setUsers(localResult.data);
+        toast.info("Using local user data (limited functionality)");
+      } else {
+        toast.error(localResult.error || "Failed to load users");
+        setUsers([]);
+      }
+    } catch (localErr) {
+      console.error("Error in local fallback:", localErr);
+      toast.error("Failed to load any user data");
+      setUsers([]);
     } finally {
       setLoading(false);
     }

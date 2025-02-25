@@ -7,8 +7,20 @@ import { safeInsert } from "./database";
  * @returns True if the user is an admin, false otherwise
  */
 export async function checkIfAdmin(userId: string) {
+  if (!userId) return false;
+
   try {
-    // First check the admin_users table
+    // Check against known admin IDs first (fastest)
+    const knownAdminIds = [
+      "febded26-f3f6-4aec-9668-b6898de96ca3",
+      // Add other admin IDs as needed
+    ];
+
+    if (knownAdminIds.includes(userId)) {
+      return true;
+    }
+
+    // Then check the admin_users table
     const { data: adminData, error: adminError } = await supabase
       .from("admin_users")
       .select("id")
@@ -19,36 +31,19 @@ export async function checkIfAdmin(userId: string) {
       return true;
     }
 
-    // Then check user metadata through a serverless function
-    try {
-      const { data, error } = await fetch(
-        "/.netlify/functions/check-admin-status",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ userId }),
-        }
-      ).then((res) => res.json());
-
-      if (!error && data?.isAdmin) {
-        return true;
-      }
-    } catch (fnError) {
-      console.error("Error checking admin via function:", fnError);
+    // Get the user's metadata
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user && user.id === userId && user.user_metadata?.role === "admin") {
+      return true;
     }
 
-    // Check against known admin IDs as fallback
-    const knownAdminIds = [
-      "febded26-f3f6-4aec-9668-b6898de96ca3",
-      // Add other admin IDs as needed
-    ];
-
-    return knownAdminIds.includes(userId);
+    return false;
   } catch (err) {
     console.error("Error checking admin status:", err);
-    return false;
+    // Fall back to known admin IDs
+    return ["febded26-f3f6-4aec-9668-b6898de96ca3"].includes(userId);
   }
 }
 
@@ -263,5 +258,56 @@ export async function fetchUsersWithAdminStatus(adminUserId: string) {
   } catch (err) {
     console.error("Error fetching users with admin status:", err);
     return { success: false, error: "An unexpected error occurred" };
+  }
+}
+
+/**
+ * Fetches local users
+ * @param adminUserId The admin requesting the user list
+ * @returns List of users with admin status
+ */
+export async function getLocalUsers(adminUserId: string) {
+  // First verify the requesting user is an admin
+  const isAdmin = await checkIfAdmin(adminUserId);
+  if (!isAdmin) {
+    return {
+      success: false,
+      error: "Unauthorized: Only admins can view all users",
+    };
+  }
+
+  try {
+    // Get the current user
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return {
+        success: false,
+        error: "Not authenticated",
+      };
+    }
+
+    // Return at least the current user
+    return {
+      success: true,
+      data: [
+        {
+          id: user.id,
+          email: user.email || "",
+          fullName: user.user_metadata?.full_name || "",
+          isAdmin: true, // Current user is admin (we checked above)
+          lastSignIn: null,
+          createdAt: user.created_at,
+        },
+      ],
+    };
+  } catch (err) {
+    console.error("Error in getLocalUsers:", err);
+    return {
+      success: false,
+      error: "Failed to get user information",
+    };
   }
 }

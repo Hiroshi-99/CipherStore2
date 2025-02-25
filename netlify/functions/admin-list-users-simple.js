@@ -48,121 +48,43 @@ exports.handler = async (event, context) => {
     // Add this after the supabase client initialization
     console.log("Checking if profiles table exists...");
 
-    // First check if the profiles table exists
+    // Always use auth.users which is guaranteed to exist
+    const { data: users, error: usersError } =
+      await supabase.auth.admin.listUsers();
+
+    if (usersError) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          error: `Failed to fetch users: ${usersError.message}`,
+        }),
+      };
+    }
+
+    // Try to get admin users, but don't fail if the table doesn't exist
+    let adminUserIds = new Set();
     try {
-      const { data: tableExists, error: tableCheckError } = await supabase
-        .from("profiles")
-        .select("id")
-        .limit(1);
+      const { data: adminUsers } = await supabase
+        .from("admin_users")
+        .select("user_id");
 
-      if (
-        tableCheckError &&
-        tableCheckError.message.includes("does not exist")
-      ) {
-        console.log("Profiles table does not exist, using auth.users instead");
-
-        // Fall back to using auth.users directly
-        const { data: users, error: usersError } =
-          await supabase.auth.admin.listUsers();
-
-        if (usersError) {
-          return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({
-              error: `Failed to fetch users: ${usersError.message}`,
-            }),
-          };
-        }
-
-        // Get admin users
-        const { data: adminUsers, error: adminUsersError } = await supabase
-          .from("admin_users")
-          .select("user_id");
-
-        if (
-          adminUsersError &&
-          !adminUsersError.message.includes("does not exist")
-        ) {
-          return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({
-              error: `Failed to fetch admin users: ${adminUsersError.message}`,
-            }),
-          };
-        }
-
-        // Create a set of admin user IDs for quick lookup
-        const adminUserIds = new Set(
-          (adminUsers || []).map((admin) => admin.user_id)
-        );
-
-        // Format the response using auth.users data
-        const usersWithAdminStatus = users.users.map((user) => ({
-          id: user.id,
-          email: user.email,
-          fullName: user.user_metadata?.full_name || "",
-          isAdmin:
-            adminUserIds.has(user.id) || user.user_metadata?.role === "admin",
-          lastSignIn: user.last_sign_in_at,
-          createdAt: user.created_at,
-        }));
-
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ data: usersWithAdminStatus }),
-        };
+      if (adminUsers && adminUsers.length > 0) {
+        adminUserIds = new Set(adminUsers.map((admin) => admin.user_id));
       }
-    } catch (tableCheckErr) {
-      console.error("Error checking profiles table:", tableCheckErr);
-      // Continue with normal flow
+    } catch (adminError) {
+      console.log("Admin users table might not exist:", adminError.message);
     }
 
-    // Just get profiles from the public schema - simpler approach
-    const { data: profiles, error: profilesError } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, created_at");
-
-    if (profilesError) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: `Failed to fetch profiles: ${profilesError.message}`,
-        }),
-      };
-    }
-
-    // Get admin users
-    const { data: adminUsers, error: adminUsersError } = await supabase
-      .from("admin_users")
-      .select("user_id");
-
-    if (adminUsersError) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: `Failed to fetch admin users: ${adminUsersError.message}`,
-        }),
-      };
-    }
-
-    // Create a set of admin user IDs for quick lookup
-    const adminUserIds = new Set(
-      (adminUsers || []).map((admin) => admin.user_id)
-    );
-
-    // Format the response
-    const usersWithAdminStatus = (profiles || []).map((profile) => ({
-      id: profile.id,
-      email: profile.email,
-      fullName: profile.full_name || "",
-      isAdmin: adminUserIds.has(profile.id),
-      lastSignIn: null,
-      createdAt: profile.created_at,
+    // Format the response using auth.users data
+    const usersWithAdminStatus = users.users.map((user) => ({
+      id: user.id,
+      email: user.email,
+      fullName: user.user_metadata?.full_name || "",
+      isAdmin:
+        adminUserIds.has(user.id) || user.user_metadata?.role === "admin",
+      lastSignIn: user.last_sign_in_at,
+      createdAt: user.created_at,
     }));
 
     return {
@@ -171,7 +93,7 @@ exports.handler = async (event, context) => {
       body: JSON.stringify({ data: usersWithAdminStatus }),
     };
   } catch (error) {
-    console.error("Function error:", error);
+    console.error("Error in admin-list-users-simple:", error);
     return {
       statusCode: 500,
       headers,
