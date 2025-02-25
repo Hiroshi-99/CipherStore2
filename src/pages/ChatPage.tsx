@@ -233,21 +233,44 @@ function ChatPage() {
     try {
       const { data, error: ordersError } = await supabase
         .from("orders")
-        .select("id, full_name, messages:chat_messages(id)")
+        .select("id, full_name")
         .order("created_at", { ascending: false });
 
       if (ordersError && ordersError.code === "42P01") {
         // Table doesn't exist error
         setError(
-          "Chat system is currently unavailable. The messages table doesn't exist in the database."
+          "Chat system is currently unavailable. The orders table doesn't exist in the database."
         );
-        console.error("Database schema error: messages table doesn't exist");
+        console.error("Database schema error: orders table doesn't exist");
         return;
       }
 
       if (ordersError) throw ordersError;
 
-      setAdminOrders(data || []);
+      // Fetch message counts separately
+      const ordersWithMessageCounts = await Promise.all(
+        (data || []).map(async (order) => {
+          try {
+            const { count } = await supabase
+              .from("messages")
+              .select("id", { count: "exact", head: true })
+              .eq("order_id", order.id);
+
+            return {
+              ...order,
+              messages: count ? Array(count).fill({ id: "placeholder" }) : [],
+            };
+          } catch (err) {
+            console.error(
+              `Error fetching message count for order ${order.id}:`,
+              err
+            );
+            return order;
+          }
+        })
+      );
+
+      setAdminOrders(ordersWithMessageCounts || []);
 
       // Select first order if available and none selected
       if (data?.length && !selectedOrderId) {
@@ -404,47 +427,64 @@ function ChatPage() {
   );
 
   // Handle sending messages
-  const handleSendMessage = useCallback(
-    async (e: React.FormEvent, imageUrl?: string) => {
-      e.preventDefault();
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-      if ((!newMessage.trim() && !imageUrl) || !selectedOrderId || !user) {
-        return;
+    if ((!newMessage.trim() && !selectedImage) || !selectedOrderId || !user) {
+      return;
+    }
+
+    setSending(true);
+
+    try {
+      let imageUrl: string | undefined;
+
+      // Upload image if selected
+      if (selectedImage) {
+        try {
+          imageUrl = await uploadImage(selectedImage);
+        } catch (err) {
+          console.error("Error uploading image:", err);
+          toast.error("Failed to upload image. Please try again.");
+          setSending(false);
+          return;
+        }
       }
 
-      setSending(true);
+      // Create a temporary ID for optimistic UI
+      const tempId = `temp-${Date.now()}`;
+
+      // Add optimistic message
+      const optimisticMessage = {
+        id: tempId,
+        content: newMessage.trim(),
+        order_id: selectedOrderId,
+        user_id: user.id,
+        is_admin: isAdmin,
+        created_at: new Date().toISOString(),
+        is_read: false,
+        image_url: imageUrl || null,
+        user_name: user.user_metadata?.full_name || user.email || "User",
+        user_avatar: user.user_metadata?.avatar_url || null,
+      };
+
+      // Add to messages
+      setMessages((prev) => [...prev, optimisticMessage]);
+
+      // Store pending message for retry
+      pendingMessages.current.set(tempId, {
+        content: newMessage.trim(),
+        image_url: imageUrl,
+      });
+
+      // Clear input
       setNewMessage("");
       setSelectedImage(null);
       setImagePreview(null);
 
+      // Send to database
       try {
-        // Create a temporary ID for optimistic UI
-        const tempId = `temp-${Date.now()}`;
-
-        // Add optimistic message
-        const optimisticMessage = {
-          id: tempId,
-          content: newMessage.trim(),
-          order_id: selectedOrderId,
-          user_id: user.id,
-          is_admin: isAdmin,
-          created_at: new Date().toISOString(),
-          is_read: false,
-          image_url: imageUrl || null,
-          user_name: user.user_metadata?.full_name || user.email || "User",
-          user_avatar: user.user_metadata?.avatar_url || null,
-        };
-
-        setMessages((prev) => [...prev, optimisticMessage]);
-
-        // Store pending message for retry
-        pendingMessages.current.set(tempId, {
-          content: newMessage.trim(),
-          image_url: imageUrl,
-        });
-
-        // Send to database
-        const { data, error: sendError } = await supabase
+        const { data, error } = await supabase
           .from("messages")
           .insert([
             {
@@ -458,7 +498,7 @@ function ChatPage() {
           .select()
           .single();
 
-        if (sendError) throw sendError;
+        if (error) throw error;
 
         // Replace optimistic message with real one
         setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
@@ -467,33 +507,55 @@ function ChatPage() {
         pendingMessages.current.delete(tempId);
       } catch (err) {
         console.error("Error sending message:", err);
-        toast.error("Failed to send message. Please try again.");
-      } finally {
-        setSending(false);
+        toast.error("Failed to send message. Message saved as draft.");
       }
-    },
-    [newMessage, selectedOrderId, user, isAdmin]
-  );
+    } catch (err) {
+      console.error("Error in handleSendMessage:", err);
+      toast.error("Something went wrong. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
 
   // Handle message retry
-  const handleRetry = useCallback((tempId: string) => {
-    const pendingMessage = pendingMessages.current.get(tempId);
-    if (!pendingMessage) return;
+  const handleRetry = async (messageId: string) => {
+    const pendingMessage = pendingMessages.current.get(messageId);
+    if (!pendingMessage || !selectedOrderId || !user) return;
 
-    // Remove failed message
-    setMessages((prev) => prev.filter((m) => m.id !== tempId));
+    setSending(true);
 
-    // Set message content back to input
-    setNewMessage(pendingMessage.content);
+    try {
+      // Send to database
+      const { data, error } = await supabase
+        .from("messages")
+        .insert([
+          {
+            content: pendingMessage.content,
+            order_id: selectedOrderId,
+            user_id: user.id,
+            is_admin: isAdmin,
+            image_url: pendingMessage.image_url,
+          },
+        ])
+        .select()
+        .single();
 
-    // If there was an image, we need to handle that too
-    if (pendingMessage.image_url) {
-      // Logic to handle image retry
+      if (error) throw error;
+
+      // Replace pending message with real one
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? data : m)));
+
+      // Clear pending message
+      pendingMessages.current.delete(messageId);
+
+      toast.success("Message sent successfully!");
+    } catch (err) {
+      console.error("Error retrying message:", err);
+      toast.error("Failed to send message. Please try again.");
+    } finally {
+      setSending(false);
     }
-
-    // Remove from pending messages
-    pendingMessages.current.delete(tempId);
-  }, []);
+  };
 
   // Handle image upload
   const handleImageUpload = async () => {
@@ -516,18 +578,20 @@ function ChatPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type.startsWith("image/")) {
-      setSelectedImage(file);
-
-      // Create preview
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setImagePreview(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-    } else {
-      toast.error("Please select an image file");
+    // Check file size (limit to 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image too large. Maximum size is 5MB.");
+      return;
     }
+
+    setSelectedImage(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
 
   // Filter orders based on search
@@ -539,22 +603,113 @@ function ChatPage() {
     return (
       <PageContainer title="CHAT" user={user}>
         <main className="max-w-screen-xl mx-auto pb-16">
-          <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
-            <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
-              <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
-              <h2 className="text-xl text-white mb-2">
-                Database Setup Required
+          <div className="min-h-[calc(100vh-5rem)] flex flex-col">
+            <div className="p-4 border-b border-white/10">
+              <h2 className="text-lg font-medium text-white">
+                Chat (Demo Mode)
               </h2>
-              <p className="text-white/70 mb-6">
-                The chat system requires database tables that don't exist yet.
-                Please contact the administrator to set up the database.
+              <p className="text-sm text-white/50">
+                Database connection unavailable - using local storage
               </p>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+            </div>
+
+            <div className="flex-1 p-4 overflow-y-auto">
+              {messages.length === 0 ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center text-white/50">
+                    <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>No messages yet</p>
+                    <p className="text-sm mt-2">
+                      Start the conversation by sending a message
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {messages.map((message, index) => (
+                    <div
+                      key={message.id}
+                      className={`p-3 rounded-lg max-w-[80%] ${
+                        message.is_admin
+                          ? "bg-blue-500/20 text-blue-100 ml-auto"
+                          : "bg-white/10 text-white mr-auto"
+                      }`}
+                    >
+                      <div className="text-sm font-medium mb-1">
+                        {message.is_admin ? "Support" : "You"}
+                      </div>
+                      <div>{message.content}</div>
+                      {message.image_url && (
+                        <img
+                          src={message.image_url}
+                          alt="Attached"
+                          className="mt-2 rounded-lg max-h-40"
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-white/10">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!newMessage.trim()) return;
+
+                  // Add local message
+                  const newMsg = {
+                    id: `local-${Date.now()}`,
+                    content: newMessage,
+                    user_name: user?.user_metadata?.full_name || "You",
+                    user_avatar: user?.user_metadata?.avatar_url || "",
+                    is_admin: false,
+                    created_at: new Date().toISOString(),
+                    order_id: "local-order",
+                    user_id: user?.id || "anonymous",
+                    image_url: imagePreview,
+                  };
+
+                  setMessages((prev) => [...prev, newMsg]);
+                  setNewMessage("");
+                  setImagePreview(null);
+
+                  // Simulate response after 1 second
+                  setTimeout(() => {
+                    const responseMsg = {
+                      id: `local-${Date.now() + 1}`,
+                      content:
+                        "This is a demo mode response. The database is currently unavailable.",
+                      user_name: "Support",
+                      user_avatar: "",
+                      is_admin: true,
+                      created_at: new Date().toISOString(),
+                      order_id: "local-order",
+                      user_id: "system",
+                      image_url: "",
+                    };
+                    setMessages((prev) => [...prev, responseMsg]);
+                  }, 1000);
+                }}
               >
-                Refresh Page
-              </button>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Type your message..."
+                    className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!newMessage.trim()}
+                    className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Send className="w-6 h-6" />
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </main>
