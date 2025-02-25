@@ -24,8 +24,11 @@ export const MessageBubble = React.memo(function MessageBubble({
 }: MessageBubbleProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [showTimestamp, setShowTimestamp] = useState(false);
 
   const isAdmin = message.is_admin;
+  const isSystemMessage = message.is_system;
+  const isAccountDetails = message.is_account_details;
 
   // Ensure user_name and user_avatar have fallback values
   const userName = message.user_name || (isAdmin ? "Support" : "User");
@@ -36,9 +39,6 @@ export const MessageBubble = React.memo(function MessageBubble({
     addSuffix: true,
   });
 
-  // First, check if the message is an account details message
-  const isAccountDetails = message.is_account_details;
-
   return (
     <div
       className={`flex items-start gap-3 ${
@@ -47,6 +47,7 @@ export const MessageBubble = React.memo(function MessageBubble({
         isUnread ? "animate-highlight-fade" : ""
       }`}
       aria-live={isLatest ? "polite" : "off"}
+      onClick={() => setShowTimestamp(!showTimestamp)}
     >
       {isAdmin && (
         <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm overflow-hidden">
@@ -66,7 +67,7 @@ export const MessageBubble = React.memo(function MessageBubble({
           isAdmin
             ? "bg-blue-500/20 text-blue-100"
             : "bg-emerald-500/20 text-emerald-100"
-        } rounded-lg p-3 relative group`}
+        } rounded-lg p-3 relative group hover:bg-opacity-30 transition-all cursor-pointer`}
       >
         <div className="flex items-center gap-2 mb-1">
           <span className="text-sm font-medium text-white/90">{userName}</span>
@@ -77,7 +78,13 @@ export const MessageBubble = React.memo(function MessageBubble({
             {relativeTime}
           </span>
         </div>
-        {isAccountDetails ? (
+
+        {/* Message content based on type */}
+        {isSystemMessage ? (
+          <div className="bg-red-50 p-3 rounded-lg border border-red-200">
+            <div className="text-red-800 text-sm">{message.content}</div>
+          </div>
+        ) : isAccountDetails ? (
           <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
             <div className="font-medium text-blue-800 mb-2">
               Account Details
@@ -95,7 +102,8 @@ export const MessageBubble = React.memo(function MessageBubble({
                         <span className="ml-2 font-mono">{value}</span>
                       </div>
                       <button
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           navigator.clipboard.writeText(value);
                           toast.success("Account ID copied to clipboard");
                         }}
@@ -116,7 +124,8 @@ export const MessageBubble = React.memo(function MessageBubble({
                         <span className="ml-2">{value}</span>
                       </div>
                       <button
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           navigator.clipboard.writeText(value);
                           toast.success("Password copied to clipboard");
                         }}
@@ -148,9 +157,11 @@ export const MessageBubble = React.memo(function MessageBubble({
             {message.content}
           </div>
         )}
+
+        {/* Image attachment */}
         {message.image_url && (
           <div
-            className={`relative ${
+            className={`relative mt-2 ${
               !imageLoaded && !imageError ? "min-h-[100px]" : ""
             }`}
           >
@@ -163,7 +174,8 @@ export const MessageBubble = React.memo(function MessageBubble({
               <div className="bg-white/5 p-3 rounded text-center">
                 <p className="text-red-400 text-sm">Failed to load image</p>
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setImageError(false);
                     setImageLoaded(false);
                   }}
@@ -176,7 +188,7 @@ export const MessageBubble = React.memo(function MessageBubble({
               <img
                 src={message.image_url}
                 alt="Chat image"
-                className={`max-w-full rounded-lg mt-2 transition-opacity ${
+                className={`max-w-full rounded-lg transition-opacity ${
                   imageLoaded ? "opacity-100" : "opacity-0"
                 }`}
                 loading="lazy"
@@ -186,6 +198,8 @@ export const MessageBubble = React.memo(function MessageBubble({
             )}
           </div>
         )}
+
+        {/* Status indicators */}
         {isPending && (
           <button
             onClick={(e) => {
@@ -204,6 +218,20 @@ export const MessageBubble = React.memo(function MessageBubble({
             aria-label="Sending message"
           >
             <LoadingSpinner size="sm" light />
+          </div>
+        )}
+
+        {/* Read indicator */}
+        {!isAdmin && !sending && message.is_read && (
+          <div className="absolute right-2 bottom-1 text-xs text-blue-300">
+            Read
+          </div>
+        )}
+
+        {/* Detailed timestamp on click */}
+        {showTimestamp && (
+          <div className="absolute left-0 -bottom-6 text-xs bg-gray-800 text-white px-2 py-1 rounded">
+            {new Date(message.created_at).toLocaleString()}
           </div>
         )}
       </div>

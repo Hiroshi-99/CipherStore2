@@ -8,6 +8,7 @@ export interface Message {
   order_id: string;
   user_id: string;
   image_url?: string;
+  is_system?: boolean;
 }
 
 export interface Order {

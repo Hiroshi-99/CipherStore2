@@ -204,14 +204,27 @@ function AdminPage() {
         .order("created_at", { ascending: false });
 
       if (ordersError) throw ordersError;
-      setOrders(ordersData || []);
 
-      // Update stats
-      setStats(calculateStats(ordersData || []));
+      // Process orders data
+      const processedOrders = ordersData.map((order) => ({
+        ...order,
+        // Add any additional processing here
+      }));
+
+      setOrders(processedOrders);
+
+      // Calculate stats
+      const stats = {
+        total: processedOrders.length,
+        pending: processedOrders.filter((o) => o.status === "pending").length,
+        approved: processedOrders.filter((o) => o.status === "approved").length,
+        rejected: processedOrders.filter((o) => o.status === "rejected").length,
+      };
+
+      setStats(stats);
     } catch (error) {
       console.error("Error fetching orders:", error);
-      setError("Failed to load orders");
-      toast.error("Failed to load orders");
+      setError("Failed to load orders. Please try again.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -240,54 +253,101 @@ function AdminPage() {
   };
 
   const handlePaymentAction = useCallback(
-    async (orderId: string, status: "approved" | "rejected") => {
-      if (actionInProgress) return;
-      setActionInProgress(orderId);
-
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                status: status === "approved" ? "active" : "rejected",
-                payment_proofs: order.payment_proofs?.map((proof) => ({
-                  ...proof,
-                  status,
-                })),
-              }
-            : order
-        )
-      );
-
+    async (orderId: string, status: string) => {
       try {
-        const response = await fetch(
-          "/.netlify/functions/discord-update-payment",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              orderId,
-              status,
-              notes: `Payment ${status} by admin`,
-            }),
-          }
+        setActionInProgress(orderId);
+
+        // Update order status
+        const { error } = await supabase
+          .from("orders")
+          .update({ status })
+          .eq("id", orderId);
+
+        if (error) throw error;
+
+        // Update local state
+        setOrders((prev) =>
+          prev.map((order) =>
+            order.id === orderId ? { ...order, status } : order
+          )
         );
 
-        if (!response.ok) throw new Error("Failed to update payment status");
+        // If order is rejected, schedule auto-delete of chat after 5 minutes
+        if (status === "rejected") {
+          // Send a system message to inform the user
+          const systemMessage = `Your order has been rejected. This chat will be automatically deleted in 5 minutes. You will not be able to send new messages.`;
 
-        toast.success(`Payment ${status} successfully`);
-        await fetchOrders();
+          // Add system message to the chat
+          const { error: messageError } = await supabase
+            .from("messages")
+            .insert({
+              order_id: orderId,
+              content: systemMessage,
+              is_admin: true,
+              is_system: true, // Add this flag to identify system messages
+              created_at: new Date().toISOString(),
+              user_name: "System",
+              user_avatar: "/images/system-avatar.png",
+            });
+
+          if (messageError) {
+            console.error("Error sending system message:", messageError);
+          }
+
+          // Schedule deletion after 5 minutes (300000 ms)
+          // Note: In a real production app, you would use a server-side scheduled job
+          // This client-side timeout is just for demonstration
+          setTimeout(async () => {
+            try {
+              // Delete all messages for this order
+              const { error: deleteMessagesError } = await supabase
+                .from("messages")
+                .delete()
+                .eq("order_id", orderId);
+
+              if (deleteMessagesError) {
+                console.error("Error deleting messages:", deleteMessagesError);
+              }
+
+              // Update order to mark chat as deleted
+              const { error: updateOrderError } = await supabase
+                .from("orders")
+                .update({ chat_deleted: true })
+                .eq("id", orderId);
+
+              if (updateOrderError) {
+                console.error("Error updating order:", updateOrderError);
+              }
+
+              // Update local state
+              setOrders((prev) =>
+                prev.map((order) =>
+                  order.id === orderId
+                    ? { ...order, chat_deleted: true }
+                    : order
+                )
+              );
+
+              toast.success(`Chat for rejected order has been deleted.`);
+            } catch (err) {
+              console.error("Error in auto-delete process:", err);
+            }
+          }, 300000); // 5 minutes
+
+          toast.success(
+            `Order rejected. Chat will be automatically deleted in 5 minutes.`
+          );
+        } else {
+          toast.success(`Order ${status} successfully!`);
+        }
       } catch (error) {
-        console.error("Error updating payment status:", error);
-        await fetchOrders();
-        toast.error("Failed to update payment status");
+        console.error(`Error ${status} order:`, error);
+        toast.error(`Failed to ${status} order. Please try again.`);
       } finally {
         setActionInProgress(null);
       }
     },
-    [actionInProgress, fetchOrders]
+    []
   );
 
   const handleFileUploadSuccess = useCallback(
@@ -462,11 +522,84 @@ function AdminPage() {
         }
         case "reject": {
           await Promise.all(
-            Array.from(selectedOrders).map((orderId) =>
-              handlePaymentAction(orderId, "rejected")
-            )
+            Array.from(selectedOrders).map(async (orderId) => {
+              try {
+                // Update order status
+                const { error } = await supabase
+                  .from("orders")
+                  .update({ status: "rejected" })
+                  .eq("id", orderId);
+
+                if (error) throw error;
+
+                // Send a system message to inform the user
+                const systemMessage = `Your order has been rejected. This chat will be automatically deleted in 5 minutes. You will not be able to send new messages.`;
+
+                // Add system message to the chat
+                const { error: messageError } = await supabase
+                  .from("messages")
+                  .insert({
+                    order_id: orderId,
+                    content: systemMessage,
+                    is_admin: true,
+                    is_system: true,
+                    created_at: new Date().toISOString(),
+                    user_name: "System",
+                    user_avatar: "/images/system-avatar.png",
+                  });
+
+                if (messageError) {
+                  console.error("Error sending system message:", messageError);
+                }
+
+                // Schedule deletion after 5 minutes (300000 ms)
+                setTimeout(async () => {
+                  try {
+                    // Delete all messages for this order
+                    const { error: deleteMessagesError } = await supabase
+                      .from("messages")
+                      .delete()
+                      .eq("order_id", orderId);
+
+                    if (deleteMessagesError) {
+                      console.error(
+                        "Error deleting messages:",
+                        deleteMessagesError
+                      );
+                    }
+
+                    // Update order to mark chat as deleted
+                    const { error: updateOrderError } = await supabase
+                      .from("orders")
+                      .update({ chat_deleted: true })
+                      .eq("id", orderId);
+
+                    if (updateOrderError) {
+                      console.error("Error updating order:", updateOrderError);
+                    }
+
+                    // Update local state
+                    setOrders((prev) =>
+                      prev.map((order) =>
+                        order.id === orderId
+                          ? { ...order, chat_deleted: true }
+                          : order
+                      )
+                    );
+                  } catch (err) {
+                    console.error("Error in auto-delete process:", err);
+                  }
+                }, 300000); // 5 minutes
+              } catch (err) {
+                console.error("Error rejecting order:", err);
+                throw err;
+              }
+            })
           );
-          toast.success(`Successfully rejected ${selectedOrders.size} orders`);
+
+          toast.success(
+            `Successfully rejected ${selectedOrders.size} orders. Chats will be automatically deleted in 5 minutes.`
+          );
           break;
         }
         case "export": {
@@ -642,6 +775,296 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add a Dashboard Summary at the top of the Admin page
+  const DashboardSummary = React.memo(function DashboardSummary({
+    stats,
+  }: {
+    stats: {
+      total: number;
+      pending: number;
+      approved: number;
+      rejected: number;
+    };
+  }) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white/5 rounded-lg p-4 border-l-4 border-blue-500">
+          <h3 className="text-white/70 text-sm font-medium">Total Orders</h3>
+          <p className="text-white text-2xl font-bold">{stats.total}</p>
+        </div>
+        <div className="bg-white/5 rounded-lg p-4 border-l-4 border-yellow-500">
+          <h3 className="text-white/70 text-sm font-medium">Pending</h3>
+          <p className="text-white text-2xl font-bold">{stats.pending}</p>
+        </div>
+        <div className="bg-white/5 rounded-lg p-4 border-l-4 border-green-500">
+          <h3 className="text-white/70 text-sm font-medium">Approved</h3>
+          <p className="text-white text-2xl font-bold">{stats.approved}</p>
+        </div>
+        <div className="bg-white/5 rounded-lg p-4 border-l-4 border-red-500">
+          <h3 className="text-white/70 text-sm font-medium">Rejected</h3>
+          <p className="text-white text-2xl font-bold">{stats.rejected}</p>
+        </div>
+      </div>
+    );
+  });
+
+  // Add an improved filter panel
+  const FilterPanel = React.memo(function FilterPanel({
+    searchTerm,
+    setSearchTerm,
+    selectedStatuses,
+    setSelectedStatuses,
+    dateRange,
+    setDateRange,
+    clearFilters,
+  }: {
+    searchTerm: string;
+    setSearchTerm: (term: string) => void;
+    selectedStatuses: string[];
+    setSelectedStatuses: (statuses: string[]) => void;
+    dateRange: DateRange;
+    setDateRange: (range: DateRange) => void;
+    clearFilters: () => void;
+  }) {
+    return (
+      <div className="bg-white/5 rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-white text-lg font-medium">Filters</h3>
+          <button
+            onClick={clearFilters}
+            className="text-sm text-blue-400 hover:text-blue-300"
+          >
+            Clear All
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-white/70 text-sm mb-1">Search</label>
+            <div className="relative">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by name or email..."
+                className="w-full p-2 pl-8 bg-white/10 border border-white/20 rounded text-white"
+              />
+              <Search
+                className="absolute left-2 top-2.5 text-white/50"
+                size={16}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-white/70 text-sm mb-1">Status</label>
+            <div className="flex flex-wrap gap-2">
+              {["pending", "approved", "rejected"].map((status) => (
+                <button
+                  key={status}
+                  onClick={() => {
+                    if (selectedStatuses.includes(status)) {
+                      setSelectedStatuses(
+                        selectedStatuses.filter((s) => s !== status)
+                      );
+                    } else {
+                      setSelectedStatuses([...selectedStatuses, status]);
+                    }
+                  }}
+                  className={`px-3 py-1 rounded-full text-sm ${
+                    selectedStatuses.includes(status)
+                      ? "bg-blue-500 text-white"
+                      : "bg-white/10 text-white/70 hover:bg-white/20"
+                  }`}
+                >
+                  {status.charAt(0).toUpperCase() + status.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-white/70 text-sm mb-1">
+              Date Range
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={
+                  dateRange.start
+                    ? dateRange.start.toISOString().split("T")[0]
+                    : ""
+                }
+                onChange={(e) => {
+                  const date = e.target.value ? new Date(e.target.value) : null;
+                  setDateRange({ ...dateRange, start: date });
+                }}
+                className="flex-1 p-2 bg-white/10 border border-white/20 rounded text-white"
+              />
+              <span className="text-white/50">to</span>
+              <input
+                type="date"
+                value={
+                  dateRange.end ? dateRange.end.toISOString().split("T")[0] : ""
+                }
+                onChange={(e) => {
+                  const date = e.target.value ? new Date(e.target.value) : null;
+                  setDateRange({ ...dateRange, end: date });
+                }}
+                className="flex-1 p-2 bg-white/10 border border-white/20 rounded text-white"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  });
+
+  // Enhanced account details form with templates
+  const AccountDetailsForm = React.memo(function AccountDetailsForm({
+    accountDetails,
+    setAccountDetails,
+    formErrors,
+    setFormErrors,
+    onSubmit,
+    isSubmitting,
+    selectedOrderId,
+  }: {
+    accountDetails: AccountDetails;
+    setAccountDetails: React.Dispatch<React.SetStateAction<AccountDetails>>;
+    formErrors: { accountId: boolean };
+    setFormErrors: React.Dispatch<React.SetStateAction<{ accountId: boolean }>>;
+    onSubmit: () => void;
+    isSubmitting: boolean;
+    selectedOrderId: string | null;
+  }) {
+    const templates = [
+      {
+        name: "Gmail",
+        accountId: "example@gmail.com",
+        password: "Password123",
+      },
+      {
+        name: "Game Account",
+        accountId: "username123",
+        password: "GamePass!23",
+      },
+    ];
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-white font-medium">Account Details</h4>
+          <div className="relative group">
+            <button
+              className="text-sm text-blue-400 hover:text-blue-300"
+              aria-label="Use template"
+            >
+              Use Template
+            </button>
+            <div className="absolute right-0 mt-1 w-48 bg-gray-800 rounded-md shadow-lg p-2 hidden group-hover:block z-10">
+              {templates.map((template, index) => (
+                <button
+                  key={index}
+                  onClick={() => setAccountDetails(template)}
+                  className="block w-full text-left px-3 py-2 text-sm text-white hover:bg-white/10 rounded"
+                >
+                  {template.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-gray-400 text-sm mb-1">
+            Account ID / Email <span className="text-red-400">*</span>
+          </label>
+          <input
+            id="account-id-input"
+            type="text"
+            value={accountDetails.accountId}
+            onChange={(e) => {
+              setAccountDetails((prev) => ({
+                ...prev,
+                accountId: e.target.value,
+              }));
+              if (e.target.value.trim()) {
+                setFormErrors((prev) => ({
+                  ...prev,
+                  accountId: false,
+                }));
+              }
+            }}
+            placeholder="e.g., user123@example.com"
+            className={`w-full p-2 bg-gray-700 border ${
+              formErrors.accountId ? "border-red-500" : "border-gray-600"
+            } rounded-md text-white`}
+          />
+          {formErrors.accountId && (
+            <p className="text-red-400 text-xs mt-1">Account ID is required</p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-gray-400 text-sm mb-1">Password</label>
+          <div className="relative">
+            <input
+              id="account-password-input"
+              type="text"
+              value={accountDetails.password}
+              onChange={(e) =>
+                setAccountDetails((prev) => ({
+                  ...prev,
+                  password: e.target.value,
+                }))
+              }
+              placeholder="Enter password"
+              className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const randomPassword =
+                  Math.random().toString(36).slice(-8) +
+                  Math.random().toString(36).toUpperCase().slice(-2) +
+                  Math.floor(Math.random() * 10) +
+                  "!";
+                setAccountDetails((prev) => ({
+                  ...prev,
+                  password: randomPassword,
+                }));
+              }}
+              className="absolute right-2 top-2 text-sm text-blue-400 hover:text-blue-300"
+            >
+              Generate
+            </button>
+          </div>
+        </div>
+
+        <button
+          onClick={onSubmit}
+          className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
+          disabled={
+            isSubmitting || !selectedOrderId || !accountDetails.accountId
+          }
+        >
+          {isSubmitting ? (
+            <span className="flex items-center justify-center">
+              <RefreshCw className="animate-spin mr-2 h-5 w-5" />
+              Sending...
+            </span>
+          ) : (
+            <span className="flex items-center justify-center">
+              <MessageCircle className="mr-2 h-5 w-5" />
+              Send Account Details
+            </span>
+          )}
+        </button>
+      </div>
+    );
+  });
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -654,7 +1077,13 @@ Please keep these details secure. You can copy them by selecting the text.
     <PageContainer title="ADMIN" user={null}>
       <Toaster position="top-right" />
       <main className="max-w-6xl mx-auto px-4 py-8">
-        <StatsDisplay />
+        <div className="max-w-6xl mx-auto px-4">
+          <h1 className="text-2xl font-bold text-white mb-6">
+            Admin Dashboard
+          </h1>
+          <DashboardSummary stats={stats} />
+          <StatsDisplay />
+        </div>
 
         <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
           {/* Batch Actions */}
@@ -750,56 +1179,15 @@ Please keep these details secure. You can copy them by selecting the text.
 
           {/* Filters panel */}
           {showFilters && (
-            <div className="mb-6 p-4 bg-white/5 rounded-lg">
-              <h3 className="text-white mb-4">Filters</h3>
-              <div className="flex flex-wrap gap-4">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-white/70" />
-                  <input
-                    type="date"
-                    onChange={(e) =>
-                      setFilteredDateRange((prev) => ({
-                        ...prev,
-                        start: e.target.value ? new Date(e.target.value) : null,
-                      }))
-                    }
-                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
-                  />
-                  <span className="text-white/70">to</span>
-                  <input
-                    type="date"
-                    onChange={(e) =>
-                      setFilteredDateRange((prev) => ({
-                        ...prev,
-                        end: e.target.value ? new Date(e.target.value) : null,
-                      }))
-                    }
-                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-white/70" />
-                  <select
-                    multiple
-                    value={filteredSelectedStatuses}
-                    onChange={(e) =>
-                      setFilteredSelectedStatuses(
-                        Array.from(
-                          e.target.selectedOptions,
-                          (option) => option.value
-                        )
-                      )
-                    }
-                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
-                  >
-                    <option value="pending">Pending</option>
-                    <option value="active">Active</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </div>
-              </div>
-            </div>
+            <FilterPanel
+              searchTerm={filteredSearchTerm}
+              setSearchTerm={setFilteredSearchTerm}
+              selectedStatuses={filteredSelectedStatuses}
+              setSelectedStatuses={setFilteredSelectedStatuses}
+              dateRange={filteredDateRange}
+              setDateRange={setFilteredDateRange}
+              clearFilters={clearFilteredFilters}
+            />
           )}
 
           {/* Orders List/Grid */}
@@ -927,83 +1315,15 @@ Please keep these details secure. You can copy them by selecting the text.
                   </p>
                 )}
 
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-gray-400 text-sm mb-1">
-                      Account ID / Email <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                      id="account-id-input"
-                      type="text"
-                      value={accountDetails.accountId}
-                      onChange={(e) => {
-                        setAccountDetails((prev) => ({
-                          ...prev,
-                          accountId: e.target.value,
-                        }));
-                        // Clear error when typing
-                        if (e.target.value.trim()) {
-                          setFormErrors((prev) => ({
-                            ...prev,
-                            accountId: false,
-                          }));
-                        }
-                      }}
-                      placeholder="e.g., user123@example.com"
-                      className={`w-full p-2 bg-gray-700 border ${
-                        formErrors.accountId
-                          ? "border-red-500"
-                          : "border-gray-600"
-                      } rounded-md text-white`}
-                    />
-                    {formErrors.accountId && (
-                      <p className="text-red-400 text-xs mt-1">
-                        Account ID is required
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-gray-400 text-sm mb-1">
-                      Password
-                    </label>
-                    <input
-                      id="account-password-input"
-                      type="text"
-                      value={accountDetails.password}
-                      onChange={(e) =>
-                        setAccountDetails((prev) => ({
-                          ...prev,
-                          password: e.target.value,
-                        }))
-                      }
-                      placeholder="Enter password"
-                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleAccountDetailsUpload}
-                    className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
-                    disabled={
-                      actionInProgress === "uploading" ||
-                      !selectedOrderId ||
-                      !accountDetails.accountId
-                    }
-                  >
-                    {actionInProgress === "uploading" ? (
-                      <span className="flex items-center justify-center">
-                        <RefreshCw className="animate-spin mr-2 h-5 w-5" />
-                        Sending...
-                      </span>
-                    ) : (
-                      <span className="flex items-center justify-center">
-                        <MessageCircle className="mr-2 h-5 w-5" />
-                        Send Account Details
-                      </span>
-                    )}
-                  </button>
-                </div>
+                <AccountDetailsForm
+                  accountDetails={accountDetails}
+                  setAccountDetails={setAccountDetails}
+                  formErrors={formErrors}
+                  setFormErrors={setFormErrors}
+                  onSubmit={handleAccountDetailsUpload}
+                  isSubmitting={actionInProgress === "uploading"}
+                  selectedOrderId={selectedOrderId}
+                />
               </div>
             </div>
           </div>
@@ -1041,6 +1361,7 @@ const OrderItem = React.memo(function OrderItem({
   onApprove: (orderId: string) => void;
 }) {
   const messageCount = order.messages?.length || 0;
+  const hasUnreadMessages = order.messages?.some((m) => !m.is_read) || false;
 
   return (
     <motion.div
@@ -1050,7 +1371,7 @@ const OrderItem = React.memo(function OrderItem({
       exit={{ opacity: 0 }}
       className={`relative bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors ${
         isSelected ? "ring-2 ring-emerald-500" : ""
-      }`}
+      } ${hasUnreadMessages ? "border-l-4 border-blue-400" : ""}`}
     >
       <div className="absolute top-2 right-2">
         <input
@@ -1060,10 +1381,16 @@ const OrderItem = React.memo(function OrderItem({
           className="w-4 h-4 accent-emerald-500"
         />
       </div>
-      <div className="flex flex-wrap items-start justify-between gap-4">
+
+      <div className="flex flex-wrap md:flex-nowrap items-start justify-between gap-4">
         <div className="flex-1">
-          <h3 className="text-lg font-semibold text-white">
+          <h3 className="text-lg font-semibold text-white group flex items-center">
             {order.full_name}
+            {hasUnreadMessages && (
+              <span className="ml-2 bg-blue-500 text-white text-xs rounded-full px-2 py-0.5">
+                New
+              </span>
+            )}
           </h3>
           <p className="text-white/70">{order.email}</p>
           <p className="text-sm text-white/50">
@@ -1077,48 +1404,67 @@ const OrderItem = React.memo(function OrderItem({
               </span>
             )}
             {messageCount > 0 && (
-              <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
+              <span
+                className={`${
+                  hasUnreadMessages
+                    ? "bg-blue-400/40 text-blue-300"
+                    : "bg-blue-400/20 text-blue-400"
+                } px-2 py-1 rounded text-xs`}
+              >
                 {messageCount} MESSAGES
               </span>
             )}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {order.payment_proofs?.map((proof) => (
-            <div key={proof.id} className="flex items-center gap-2">
+        <div className="flex flex-col md:flex-row items-center gap-2">
+          <div className="flex items-center gap-2">
+            {order.payment_proofs?.map((proof) => (
               <button
+                key={proof.id}
                 onClick={() => onImageView(proof.image_url)}
-                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                className="p-2 bg-white/5 hover:bg-white/10 rounded transition-colors flex items-center gap-1"
                 title="View payment proof"
               >
-                <Eye className="text-white" size={20} />
+                <Eye className="text-white" size={18} />
+                <span className="text-xs text-white/80">View Proof</span>
               </button>
-              {proof.status === "pending" && (
-                <div className="flex items-center gap-2">
-                  <ActionButton
-                    icon={<CheckCircle className="text-green-400" size={20} />}
-                    onClick={() => onApprove(order.id)}
-                    disabled={actionInProgress !== null}
-                    title="Approve order"
-                  />
-                  <ActionButton
-                    icon={<XCircle className="text-red-400" size={20} />}
-                    onClick={() => onPaymentAction(order.id, "rejected")}
-                    disabled={!!actionInProgress}
-                    title="Reject payment"
-                  />
-                </div>
-              )}
-            </div>
-          ))}
+            ))}
+
+            {order.status === "pending" && (
+              <>
+                <button
+                  onClick={() => onApprove(order.id)}
+                  disabled={actionInProgress !== null}
+                  className="p-2 bg-green-500/20 hover:bg-green-500/30 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+                  title="Approve order"
+                >
+                  <CheckCircle className="text-green-400" size={18} />
+                  <span className="text-xs text-green-300">Approve</span>
+                </button>
+                <button
+                  onClick={() => onPaymentAction(order.id, "rejected")}
+                  disabled={!!actionInProgress}
+                  className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+                  title="Reject payment"
+                >
+                  <XCircle className="text-red-400" size={18} />
+                  <span className="text-xs text-red-300">Reject</span>
+                </button>
+              </>
+            )}
+          </div>
 
           <Link
             to={`/chat?order=${order.id}`}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            className="p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded transition-colors flex items-center gap-1"
             title="Open chat"
           >
-            <MessageCircle className="text-white" size={20} />
+            <MessageCircle className="text-blue-400" size={18} />
+            <span className="text-xs text-blue-300">Chat</span>
+            {hasUnreadMessages && (
+              <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+            )}
           </Link>
         </div>
       </div>

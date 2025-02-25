@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ExternalLink, Bell, FileText, RefreshCw } from "lucide-react";
+import { ExternalLink, Bell, FileText, RefreshCw, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Header from "../components/Header";
 import { setPageTitle } from "../utils/title";
 import { toast } from "sonner";
+import { formatDistanceToNow } from "date-fns";
 
 interface InboxMessage {
   id: string;
@@ -24,6 +25,11 @@ function InboxPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<
+    string | null
+  >(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     setPageTitle("Inbox");
@@ -72,6 +78,7 @@ function InboxPage() {
 
       if (error) throw error;
       setMessages(data || []);
+      setConversations(data || []);
     } catch (error) {
       console.error("Error fetching messages:", error);
       setError("Failed to load messages. Please try again.");
@@ -150,6 +157,14 @@ function InboxPage() {
     }
   };
 
+  const handleConversationSelect = (id: string) => {
+    setSelectedConversationId(id);
+  };
+
+  const filteredConversations = conversations.filter((conv) =>
+    conv.full_name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -206,66 +221,133 @@ function InboxPage() {
               </div>
             )}
 
-            {messages.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-white/70 text-lg">No messages yet</p>
-                <p className="text-white/50 text-sm mt-2">
-                  New messages will appear here
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`bg-white/5 hover:bg-white/10 p-6 rounded-lg border-l-4 transition-all cursor-pointer ${getMessageStatusColor(
-                      message.type,
-                      message.is_read
-                    )}`}
-                    onClick={() => !message.is_read && markAsRead(message.id)}
-                  >
-                    <div className="flex justify-between items-start gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          {getMessageIcon(message.type)}
-                          <h3 className="text-lg font-medium text-white">
-                            {message.title}
-                          </h3>
-                        </div>
-                        <p className="text-white/80 mb-3">{message.content}</p>
-                        {message.file_url && (
-                          <div className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition-colors">
-                            <ExternalLink size={16} />
-                            <a
-                              href={message.file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm hover:underline"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              View Attached File
-                            </a>
-                          </div>
-                        )}
-                        <p className="text-sm text-white/40 mt-3">
-                          {new Date(message.created_at).toLocaleString()}
-                        </p>
-                      </div>
-                      {!message.is_read && (
-                        <span className="bg-emerald-400/20 text-emerald-400 text-xs px-2 py-1 rounded-full">
-                          New
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <SearchBar value={searchTerm} onChange={setSearchTerm} />
+
+            <ConversationList
+              conversations={filteredConversations}
+              selectedId={selectedConversationId}
+              onSelect={handleConversationSelect}
+            />
           </div>
         </main>
       </div>
     </div>
   );
 }
+
+const ConversationList = React.memo(function ConversationList({
+  conversations,
+  selectedId,
+  onSelect,
+}: {
+  conversations: any[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  // Group conversations by status
+  const grouped = conversations.reduce((acc, conv) => {
+    const status = conv.status || "other";
+    if (!acc[status]) acc[status] = [];
+    acc[status].push(conv);
+    return acc;
+  }, {} as Record<string, any[]>);
+
+  // Define the order of status groups
+  const statusOrder = ["pending", "approved", "rejected", "other"];
+
+  return (
+    <div className="h-full overflow-y-auto">
+      {statusOrder.map((status) => {
+        if (!grouped[status] || grouped[status].length === 0) return null;
+
+        return (
+          <div key={status} className="mb-4">
+            <h3 className="px-4 py-2 text-sm font-medium text-white/70 uppercase">
+              {status}
+              <span className="ml-2 text-white/50">
+                ({grouped[status].length})
+              </span>
+            </h3>
+
+            {grouped[status].map((conversation) => {
+              const hasUnread = conversation.messages?.some(
+                (m: any) => !m.is_read && m.is_admin
+              );
+              const lastMessage =
+                conversation.messages?.[conversation.messages.length - 1];
+
+              return (
+                <button
+                  key={conversation.id}
+                  onClick={() => onSelect(conversation.id)}
+                  className={`w-full text-left p-4 border-b border-gray-700 hover:bg-white/5 transition-colors ${
+                    selectedId === conversation.id ? "bg-white/10" : ""
+                  } ${hasUnread ? "border-l-4 border-blue-500" : ""}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-white truncate">
+                      {conversation.full_name}
+                      {hasUnread && (
+                        <span className="ml-2 bg-blue-500 text-white text-xs rounded-full px-2 py-0.5">
+                          New
+                        </span>
+                      )}
+                    </h4>
+                    <span className="text-xs text-white/50">
+                      {lastMessage
+                        ? formatDistanceToNow(
+                            new Date(lastMessage.created_at),
+                            { addSuffix: true }
+                          )
+                        : ""}
+                    </span>
+                  </div>
+
+                  {lastMessage && (
+                    <p className="text-sm text-white/70 mt-1 truncate">
+                      {lastMessage.is_admin ? "Admin: " : ""}
+                      {lastMessage.content}
+                    </p>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+const SearchBar = React.memo(function SearchBar({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="px-4 py-3 border-b border-gray-700">
+      <div className="relative">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Search conversations..."
+          className="w-full p-2 pl-8 bg-white/10 border border-white/20 rounded text-white"
+        />
+        <Search className="absolute left-2 top-2.5 text-white/50" size={16} />
+        {value && (
+          <button
+            onClick={() => onChange("")}
+            className="absolute right-2 top-2.5 text-white/50 hover:text-white"
+          >
+            <X size={16} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
 
 export default InboxPage;
