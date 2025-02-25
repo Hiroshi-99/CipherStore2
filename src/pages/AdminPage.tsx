@@ -990,9 +990,7 @@ Please keep these details secure. You can copy them by selecting the text.
   };
 
   // Add this function to handle batch actions on orders
-  const handleOrderBatchAction = async (
-    action: "approve" | "reject" | "export" | "delete"
-  ) => {
+  const handleOrderBatchAction = async (action: BatchAction) => {
     if (selectedOrderIds.size === 0) {
       toast.error("No orders selected");
       return;
@@ -1144,7 +1142,7 @@ Please keep these details secure. You can copy them by selecting the text.
 
       if (orderDateRange.end) {
         const endDate = new Date(orderDateRange.end);
-        endDate.setHours(23, 59, 59, 999); // End of the day
+        endDate.setHours(23, 59, 59, 999); // Set to end of day
         if (new Date(order.created_at) > endDate) {
           return false;
         }
@@ -1462,6 +1460,228 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   };
 
+  // Add this function to render the orders tab
+  const renderOrdersTab = () => {
+    const stats = calculateOrderStats();
+    const filteredOrders = getFilteredOrders();
+
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Order Management</h2>
+
+        {/* Order Statistics */}
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+          {Object.entries(stats).map(([key, value]) => (
+            <div key={key} className="bg-white/5 rounded-lg p-4">
+              <h3 className="text-white/70 text-sm uppercase">
+                {key.replace(/([A-Z])/g, " $1").trim()}
+              </h3>
+              <p className="text-2xl font-bold text-white mt-1">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Filters and Search */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="flex flex-wrap gap-4">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-white/70 mb-2 text-sm">Search</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={orderSearchQuery}
+                  onChange={(e) => setOrderSearchQuery(e.target.value)}
+                  placeholder="Search by name or email"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+                <Search
+                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
+                  size={18}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-white/70 mb-2 text-sm">Status</label>
+              <select
+                value={orderStatusFilter}
+                onChange={(e) => setOrderStatusFilter(e.target.value)}
+                className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-white/40"
+              >
+                <option value="all">All Statuses</option>
+                <option value="pending">Pending</option>
+                <option value="active">Active</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Batch Actions */}
+        {selectedOrderIds.size > 0 && (
+          <div className="bg-white/5 rounded-lg p-4 mb-6">
+            <div className="flex items-center justify-between">
+              <p className="text-white">
+                {selectedOrderIds.size}{" "}
+                {selectedOrderIds.size === 1 ? "order" : "orders"} selected
+              </p>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleOrderBatchAction("approve")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
+                >
+                  <CheckSquare className="w-4 h-4" />
+                  Approve
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("reject")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                >
+                  <XSquare className="w-4 h-4" />
+                  Reject
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("export")}
+                  disabled={isOrderActionInProgress || isExporting}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+                >
+                  {isExporting ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  Export
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("delete")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Orders list */}
+        <div className="space-y-4">
+          {filteredOrders.length === 0 ? (
+            <div className="bg-white/5 rounded-lg p-8 text-center">
+              <p className="text-white/70">No orders found</p>
+            </div>
+          ) : (
+            filteredOrders.map((order) => (
+              <div
+                key={order.id}
+                className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedOrderIds.has(order.id)}
+                      onChange={(e) => {
+                        const newSelected = new Set(selectedOrderIds);
+                        if (e.target.checked) {
+                          newSelected.add(order.id);
+                        } else {
+                          newSelected.delete(order.id);
+                        }
+                        setSelectedOrderIds(newSelected);
+                      }}
+                      className="mt-1 w-4 h-4 accent-emerald-500"
+                    />
+
+                    <div>
+                      <h3 className="text-lg font-medium text-white">
+                        {order.full_name}
+                      </h3>
+                      <p className="text-white/70">{order.email}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs ${
+                            order.status === "active"
+                              ? "bg-green-500/20 text-green-400"
+                              : order.status === "rejected"
+                              ? "bg-red-500/20 text-red-400"
+                              : "bg-yellow-500/20 text-yellow-400"
+                          }`}
+                        >
+                          {order.status.toUpperCase()}
+                        </span>
+                        <span className="text-white/50 text-xs">
+                          {new Date(order.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setSelectedOrderDetail(order)}
+                      className="p-2 bg-white/10 text-white rounded hover:bg-white/20 transition-colors"
+                      title="View order details"
+                    >
+                      <Eye className="w-5 h-5" />
+                    </button>
+
+                    {order.status === "pending" && (
+                      <>
+                        <button
+                          onClick={() => handleApprove(order.id)}
+                          disabled={!!actionInProgress}
+                          className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+                          title="Approve order"
+                        >
+                          <CheckCircle className="w-5 h-5" />
+                        </button>
+
+                        <button
+                          onClick={() => handleReject(order.id)}
+                          disabled={!!actionInProgress}
+                          className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+                          title="Reject order"
+                        >
+                          <XCircle className="w-5 h-5" />
+                        </button>
+                      </>
+                    )}
+
+                    <Link
+                      to={`/chat?order=${order.id}`}
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                      title="Chat with customer"
+                    >
+                      <MessageSquare className="w-5 h-5" />
+                    </Link>
+
+                    {order.status === "active" && !order.account_file_url && (
+                      <button
+                        onClick={() => setSelectedOrderId(order.id)}
+                        className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+                        title="Upload account file"
+                      >
+                        <Upload className="w-5 h-5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -1698,234 +1918,7 @@ Please keep these details secure. You can copy them by selecting the text.
           )}
 
           {/* Orders Tab */}
-          {selectedTab === "orders" && (
-            <div>
-              <h2 className="text-xl text-white mb-6">Order Management</h2>
-
-              {/* Order Statistics */}
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-                {Object.entries(calculateOrderStats()).map(([key, value]) => (
-                  <div key={key} className="bg-white/5 rounded-lg p-4">
-                    <h3 className="text-white/70 text-sm uppercase">
-                      {key.replace(/([A-Z])/g, " $1").trim()}
-                    </h3>
-                    <p className="text-2xl font-bold text-white mt-1">
-                      {value}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Order Filters */}
-              <div className="bg-white/5 rounded-lg p-4 mb-6">
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="flex-1">
-                    <div className="relative">
-                      <Search
-                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
-                        size={18}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Search orders..."
-                        value={orderSearchQuery}
-                        onChange={(e) => setOrderSearchQuery(e.target.value)}
-                        className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={orderStatusFilter}
-                      onChange={(e) => setOrderStatusFilter(e.target.value)}
-                      className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-white/40"
-                    >
-                      <option value="all">All Statuses</option>
-                      <option value="pending">Pending</option>
-                      <option value="active">Active</option>
-                      <option value="rejected">Rejected</option>
-                    </select>
-
-                    {/* Date picker would go here - simplified for now */}
-                    <button
-                      onClick={() => {
-                        // Reset date filter
-                        setOrderDateRange({ start: null, end: null });
-                      }}
-                      className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white hover:bg-white/20 transition-colors"
-                    >
-                      <Calendar size={18} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Batch Actions */}
-              {selectedOrderIds.size > 0 && (
-                <div className="bg-white/5 rounded-lg p-4 mb-6">
-                  <div className="flex items-center justify-between">
-                    <p className="text-white">
-                      {selectedOrderIds.size}{" "}
-                      {selectedOrderIds.size === 1 ? "order" : "orders"}{" "}
-                      selected
-                    </p>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleOrderBatchAction("approve")}
-                        disabled={isOrderActionInProgress}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
-                      >
-                        <CheckSquare className="w-4 h-4" />
-                        Approve
-                      </button>
-
-                      <button
-                        onClick={() => handleOrderBatchAction("reject")}
-                        disabled={isOrderActionInProgress}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                      >
-                        <XSquare className="w-4 h-4" />
-                        Reject
-                      </button>
-
-                      <button
-                        onClick={() => handleOrderBatchAction("export")}
-                        disabled={isOrderActionInProgress || isExporting}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-                      >
-                        {isExporting ? (
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Download className="w-4 h-4" />
-                        )}
-                        Export
-                      </button>
-
-                      <button
-                        onClick={() => handleOrderBatchAction("delete")}
-                        disabled={isOrderActionInProgress}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Orders list */}
-              <div className="space-y-4">
-                {getFilteredOrders().length === 0 ? (
-                  <div className="bg-white/5 rounded-lg p-8 text-center">
-                    <p className="text-white/70">No orders found</p>
-                  </div>
-                ) : (
-                  getFilteredOrders().map((order) => (
-                    <div
-                      key={order.id}
-                      className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            checked={selectedOrderIds.has(order.id)}
-                            onChange={(e) => {
-                              const newSelected = new Set(selectedOrderIds);
-                              if (e.target.checked) {
-                                newSelected.add(order.id);
-                              } else {
-                                newSelected.delete(order.id);
-                              }
-                              setSelectedOrderIds(newSelected);
-                            }}
-                            className="mt-1 w-4 h-4 accent-emerald-500"
-                          />
-
-                          <div>
-                            <h3 className="text-lg font-medium text-white">
-                              {order.full_name}
-                            </h3>
-                            <p className="text-white/70">{order.email}</p>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span
-                                className={`px-2 py-0.5 rounded text-xs ${
-                                  order.status === "active"
-                                    ? "bg-green-500/20 text-green-400"
-                                    : order.status === "rejected"
-                                    ? "bg-red-500/20 text-red-400"
-                                    : "bg-yellow-500/20 text-yellow-400"
-                                }`}
-                              >
-                                {order.status.toUpperCase()}
-                              </span>
-                              <span className="text-white/50 text-xs">
-                                {new Date(order.created_at).toLocaleString()}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setSelectedOrderDetail(order)}
-                            className="p-2 bg-white/10 text-white rounded hover:bg-white/20 transition-colors"
-                            title="View order details"
-                          >
-                            <Eye className="w-5 h-5" />
-                          </button>
-
-                          {order.status === "pending" && (
-                            <>
-                              <button
-                                onClick={() => handleApprove(order.id)}
-                                disabled={!!actionInProgress}
-                                className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
-                                title="Approve order"
-                              >
-                                <CheckCircle className="w-5 h-5" />
-                              </button>
-
-                              <button
-                                onClick={() => handleReject(order.id)}
-                                disabled={!!actionInProgress}
-                                className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
-                                title="Reject order"
-                              >
-                                <XCircle className="w-5 h-5" />
-                              </button>
-                            </>
-                          )}
-
-                          <Link
-                            to={`/chat?order=${order.id}`}
-                            className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                            title="Chat with customer"
-                          >
-                            <MessageSquare className="w-5 h-5" />
-                          </Link>
-
-                          {order.status === "active" &&
-                            !order.account_file_url && (
-                              <button
-                                onClick={() => setSelectedOrderId(order.id)}
-                                className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
-                                title="Upload account file"
-                              >
-                                <Upload className="w-5 h-5" />
-                              </button>
-                            )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
+          {selectedTab === "orders" && renderOrdersTab()}
 
           {/* Settings Tab */}
           {selectedTab === "settings" && renderSettingsTab()}
