@@ -263,25 +263,31 @@ function ChatPage() {
     }
   };
 
-  // Replace the updateMessagesInBatches function with this more robust version
+  // Replace the updateMessagesInBatches function with this version that handles missing columns
   const updateMessagesInBatches = async (messageIds: string[]) => {
-    // First check if the messages table exists and we have update permission
+    // First check if the messages table exists and has the is_read column
     try {
-      // Try a simple query first to check if the table exists
-      const { error: tableCheckError } = await supabase
+      // Try a simple query first to check if the table and column exist
+      const { data: columnCheck, error: columnCheckError } = await supabase
         .from("messages")
-        .select("id", { count: "exact", head: true })
+        .select("id")
         .limit(1);
 
-      if (tableCheckError) {
-        console.error("Error checking messages table:", tableCheckError);
-        // If table doesn't exist or we don't have permission, just return without updating
+      if (columnCheckError) {
+        if (columnCheckError.code === "PGRST204") {
+          console.error(
+            "The is_read column doesn't exist in the messages table"
+          );
+          // Don't attempt to update if the column doesn't exist
+          return false;
+        }
+
+        console.error("Error checking messages table:", columnCheckError);
         return false;
       }
 
-      // If we get here, the table exists and we have permission
-      // Process in smaller batches to avoid URL length limits
-      const BATCH_SIZE = 5; // Reduce batch size to avoid URL length issues
+      // Process in smaller batches
+      const BATCH_SIZE = 5;
       const batches = [];
 
       for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
@@ -298,12 +304,18 @@ function ChatPage() {
             .in("id", batchIds);
 
           if (updateError) {
+            // If we get a column not found error, stop trying to update
+            if (updateError.code === "PGRST204") {
+              console.error(
+                "The is_read column doesn't exist in the messages table"
+              );
+              return false;
+            }
+
             console.error("Error updating batch:", updateError);
-            // Continue with other batches even if one fails
           }
         } catch (batchError) {
           console.error("Exception updating batch:", batchError);
-          // Continue with other batches
         }
       }
 
@@ -361,17 +373,25 @@ function ChatPage() {
               .map((m) => m.id) || [];
 
           if (unreadIds.length > 0) {
-            // Use the batched update function
-            const updateSuccess = await updateMessagesInBatches(unreadIds);
+            try {
+              // Check if is_read column exists first
+              const { error: columnCheckError } = await supabase
+                .from("messages")
+                .select("is_read")
+                .limit(1);
 
-            if (!updateSuccess) {
-              console.log("Could not mark messages as read, but continuing");
-              // We can still show the messages even if we can't mark them as read
+              // Only attempt to update if the column exists
+              if (!columnCheckError) {
+                await updateMessagesInBatches(unreadIds);
+              } else {
+                console.log("Skipping mark as read - column doesn't exist");
+              }
+            } catch (columnError) {
+              console.error("Error checking for is_read column:", columnError);
             }
           }
         } catch (markReadError) {
           console.error("Error marking messages as read:", markReadError);
-          // Continue anyway - this is not a critical error
         }
       } catch (err) {
         console.error("Error fetching messages:", err);
