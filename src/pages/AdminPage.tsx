@@ -1210,505 +1210,222 @@ Please keep these details secure. You can copy them by selecting the text.
     setSelectedOrderDetail(order);
   };
 
-  // Add this component at the end of your component
-  const OrderDetailModal = () => {
-    if (!selectedOrderDetail) return null;
+  // Add this component for the account delivery form
+  const AccountDeliveryForm = ({
+    orderId,
+    onSubmit,
+    onCancel,
+  }: {
+    orderId: string;
+    onSubmit: (details: { email: string; password: string }) => void;
+    onCancel: () => void;
+  }) => {
+    const [accountEmail, setAccountEmail] = useState("");
+    const [accountPassword, setAccountPassword] = useState("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [errors, setErrors] = useState({ email: false, password: false });
+
+    const handleSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+
+      // Validate inputs
+      const newErrors = {
+        email: !accountEmail.trim(),
+        password: !accountPassword.trim(),
+      };
+
+      setErrors(newErrors);
+
+      if (newErrors.email || newErrors.password) {
+        toast.error("Please fill in all required fields");
+        return;
+      }
+
+      setIsSubmitting(true);
+
+      try {
+        onSubmit({ email: accountEmail, password: accountPassword });
+      } catch (err) {
+        console.error("Error submitting account details:", err);
+        toast.error("Failed to save account details");
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
 
     return (
-      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-        <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-          <div className="p-6">
-            <div className="flex justify-between items-start mb-6">
-              <h2 className="text-xl font-bold text-white">Order Details</h2>
-              <button
-                onClick={() => setSelectedOrderDetail(null)}
-                className="text-white/70 hover:text-white"
-              >
-                <XCircle className="w-6 h-6" />
-              </button>
-            </div>
+      <div className="bg-gray-800 rounded-lg p-6 mt-4">
+        <h3 className="text-lg font-medium text-white mb-4">
+          Deliver Account Details
+        </h3>
 
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-white/70 mb-2">Customer Information</h3>
-                <div className="bg-white/5 rounded-lg p-4">
-                  <p className="text-white">
-                    <span className="text-white/70">Name:</span>{" "}
-                    {selectedOrderDetail.full_name}
-                  </p>
-                  <p className="text-white">
-                    <span className="text-white/70">Email:</span>{" "}
-                    {selectedOrderDetail.email}
-                  </p>
-                  <p className="text-white">
-                    <span className="text-white/70">Status:</span>
-                    <span
-                      className={`ml-2 px-2 py-0.5 rounded text-xs ${
-                        selectedOrderDetail.status === "active"
-                          ? "bg-green-500/20 text-green-400"
-                          : selectedOrderDetail.status === "rejected"
-                          ? "bg-red-500/20 text-red-400"
-                          : "bg-yellow-500/20 text-yellow-400"
-                      }`}
-                    >
-                      {selectedOrderDetail.status.toUpperCase()}
-                    </span>
-                  </p>
-                  <p className="text-white">
-                    <span className="text-white/70">Created:</span>{" "}
-                    {new Date(selectedOrderDetail.created_at).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-
-              {selectedOrderDetail.payment_proofs &&
-                selectedOrderDetail.payment_proofs.length > 0 && (
-                  <div>
-                    <h3 className="text-white/70 mb-2">Payment Proofs</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {selectedOrderDetail.payment_proofs.map(
-                        (proof, index) => (
-                          <div
-                            key={index}
-                            className="bg-white/5 rounded-lg p-4"
-                          >
-                            <img
-                              src={proof.image_url}
-                              alt={`Payment proof ${index + 1}`}
-                              className="w-full h-auto rounded-lg mb-2 cursor-pointer"
-                              onClick={() => {
-                                setCurrentImageUrl(proof.image_url);
-                                setShowImageModal(true);
-                              }}
-                            />
-                            <p className="text-white/70 text-sm">
-                              Status:{" "}
-                              <span
-                                className={`${
-                                  proof.status === "approved"
-                                    ? "text-green-400"
-                                    : proof.status === "rejected"
-                                    ? "text-red-400"
-                                    : "text-yellow-400"
-                                }`}
-                              >
-                                {proof.status.toUpperCase()}
-                              </span>
-                            </p>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {selectedOrderDetail.account_file_url ? (
-                <div>
-                  <h3 className="text-white/70 mb-2">Account File</h3>
-                  <div className="bg-white/5 rounded-lg p-4 flex items-center justify-between">
-                    <div>
-                      <p className="text-white">Account file uploaded</p>
-                      <p className="text-white/70 text-sm">
-                        {new URL(selectedOrderDetail.account_file_url).pathname
-                          .split("/")
-                          .pop()}
-                      </p>
-                    </div>
-                    <a
-                      href={selectedOrderDetail.account_file_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                    >
-                      <Download className="w-5 h-5" />
-                    </a>
-                  </div>
-                </div>
-              ) : selectedOrderDetail.status === "active" ? (
-                <div>
-                  <h3 className="text-white/70 mb-2">Account File</h3>
-                  <div className="bg-white/5 rounded-lg p-4">
-                    <p className="text-white/70 mb-2">
-                      No account file uploaded yet
-                    </p>
-                    <FileUpload
-                      orderId={selectedOrderDetail.id}
-                      onUploadSuccess={(fileUrl) => {
-                        handleFileUploadSuccess(
-                          selectedOrderDetail.id,
-                          fileUrl
-                        );
-                        setSelectedOrderDetail({
-                          ...selectedOrderDetail,
-                          account_file_url: fileUrl,
-                        });
-                      }}
-                    />
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="flex justify-end gap-3 mt-6">
-                <Link
-                  to={`/chat?order=${selectedOrderDetail.id}`}
-                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-                >
-                  Open Chat
-                </Link>
-                <button
-                  onClick={() => setSelectedOrderDetail(null)}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Add this function to render the settings tab
-  const renderSettingsTab = () => {
-    return (
-      <div>
-        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
-
-        <div className="space-y-6">
-          {/* System Settings */}
-          <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg text-white mb-4">System Settings</h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-white/70 mb-2">Site Name</label>
-                <input
-                  type="text"
-                  value="Cipher Admin"
-                  onChange={() => {}}
-                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-              </div>
-
-              <div>
-                <label className="block text-white/70 mb-2">
-                  Support Email
-                </label>
-                <input
-                  type="email"
-                  value="support@example.com"
-                  onChange={() => {}}
-                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-              </div>
-
-              <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="maintenance-mode"
-                  checked={false}
-                  onChange={() => {}}
-                  className="w-4 h-4 accent-emerald-500"
-                />
-                <label htmlFor="maintenance-mode" className="ml-2 text-white">
-                  Enable Maintenance Mode
-                </label>
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <button
-                onClick={() => toast.info("Settings saved (demo)")}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors"
-              >
-                Save Settings
-              </button>
-            </div>
-          </div>
-
-          {/* Database Management */}
-          <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg text-white mb-4">Database Management</h3>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-white">Backup Database</h4>
-                  <p className="text-white/70 text-sm">
-                    Create a backup of the current database
-                  </p>
-                </div>
-                <button
-                  onClick={() => toast.info("Database backup initiated (demo)")}
-                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-                >
-                  Create Backup
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-white">Clear Cache</h4>
-                  <p className="text-white/70 text-sm">
-                    Clear the system cache
-                  </p>
-                </div>
-                <button
-                  onClick={() => toast.success("Cache cleared (demo)")}
-                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
-                >
-                  Clear Cache
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Danger Zone */}
-          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
-            <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-white">Reset All Settings</h4>
-                  <p className="text-white/70 text-sm">
-                    Reset all settings to default values
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    if (
-                      confirm(
-                        "Are you sure you want to reset all settings? This cannot be undone."
-                      )
-                    ) {
-                      toast.success("Settings reset to defaults (demo)");
-                    }
-                  }}
-                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
-                >
-                  Reset Settings
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Add this function to render the orders tab
-  const renderOrdersTab = () => {
-    const stats = calculateOrderStats();
-    const filteredOrders = getFilteredOrders();
-
-    return (
-      <div>
-        <h2 className="text-xl text-white mb-6">Order Management</h2>
-
-        {/* Order Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-          {Object.entries(stats).map(([key, value]) => (
-            <div key={key} className="bg-white/5 rounded-lg p-4">
-              <h3 className="text-white/70 text-sm uppercase">
-                {key.replace(/([A-Z])/g, " $1").trim()}
-              </h3>
-              <p className="text-2xl font-bold text-white mt-1">{value}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Filters and Search */}
-        <div className="bg-white/5 rounded-lg p-4 mb-6">
-          <div className="flex flex-wrap gap-4">
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-white/70 mb-2 text-sm">Search</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={orderSearchQuery}
-                  onChange={(e) => setOrderSearchQuery(e.target.value)}
-                  placeholder="Search by name or email"
-                  className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-                <Search
-                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
-                  size={18}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-white/70 mb-2 text-sm">Status</label>
-              <select
-                value={orderStatusFilter}
-                onChange={(e) => setOrderStatusFilter(e.target.value)}
-                className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-white/40"
-              >
-                <option value="all">All Statuses</option>
-                <option value="pending">Pending</option>
-                <option value="active">Active</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Batch Actions */}
-        {selectedOrderIds.size > 0 && (
-          <div className="bg-white/5 rounded-lg p-4 mb-6">
-            <div className="flex items-center justify-between">
-              <p className="text-white">
-                {selectedOrderIds.size}{" "}
-                {selectedOrderIds.size === 1 ? "order" : "orders"} selected
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="account-email" className="block text-white/70 mb-1">
+              Account Email <span className="text-red-400">*</span>
+            </label>
+            <input
+              id="account-email"
+              type="text"
+              value={accountEmail}
+              onChange={(e) => setAccountEmail(e.target.value)}
+              className={`w-full bg-white/10 border ${
+                errors.email ? "border-red-500" : "border-white/20"
+              } rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40`}
+              placeholder="Enter account email"
+            />
+            {errors.email && (
+              <p className="text-red-400 text-sm mt-1">
+                Account email is required
               </p>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleOrderBatchAction("approve")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
-                >
-                  <CheckSquare className="w-4 h-4" />
-                  Approve
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("reject")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                >
-                  <XSquare className="w-4 h-4" />
-                  Reject
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("export")}
-                  disabled={isOrderActionInProgress || isExporting}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-                >
-                  {isExporting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  Export
-                </button>
-              </div>
-            </div>
+            )}
           </div>
-        )}
 
-        {/* Orders list */}
-        <div className="space-y-4">
-          {filteredOrders.length === 0 ? (
-            <div className="bg-white/5 rounded-lg p-8 text-center">
-              <p className="text-white/70">No orders found</p>
-            </div>
-          ) : (
-            filteredOrders.map((order) => (
-              <div
-                key={order.id}
-                className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedOrderIds.has(order.id)}
-                      onChange={(e) => {
-                        const newSelected = new Set(selectedOrderIds);
-                        if (e.target.checked) {
-                          newSelected.add(order.id);
-                        } else {
-                          newSelected.delete(order.id);
-                        }
-                        setSelectedOrderIds(newSelected);
-                      }}
-                      className="mt-1 w-4 h-4 accent-emerald-500"
-                    />
+          <div>
+            <label
+              htmlFor="account-password"
+              className="block text-white/70 mb-1"
+            >
+              Account Password <span className="text-red-400">*</span>
+            </label>
+            <input
+              id="account-password"
+              type="text"
+              value={accountPassword}
+              onChange={(e) => setAccountPassword(e.target.value)}
+              className={`w-full bg-white/10 border ${
+                errors.password ? "border-red-500" : "border-white/20"
+              } rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40`}
+              placeholder="Enter account password"
+            />
+            {errors.password && (
+              <p className="text-red-400 text-sm mt-1">
+                Account password is required
+              </p>
+            )}
+          </div>
 
-                    <div>
-                      <h3 className="text-lg font-medium text-white">
-                        {order.full_name}
-                      </h3>
-                      <p className="text-white/70">{order.email}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs ${
-                            order.status === "active"
-                              ? "bg-green-500/20 text-green-400"
-                              : order.status === "rejected"
-                              ? "bg-red-500/20 text-red-400"
-                              : "bg-yellow-500/20 text-yellow-400"
-                          }`}
-                        >
-                          {order.status.toUpperCase()}
-                        </span>
-                        <span className="text-white/50 text-xs">
-                          {new Date(order.created_at).toLocaleString()}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setSelectedOrderDetail(order)}
-                      className="p-2 bg-white/10 text-white rounded hover:bg-white/20 transition-colors"
-                      title="View order details"
-                    >
-                      <Eye className="w-5 h-5" />
-                    </button>
-
-                    {order.status === "pending" && (
-                      <>
-                        <button
-                          onClick={() => handleApprove(order.id)}
-                          disabled={!!actionInProgress}
-                          className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
-                          title="Approve order"
-                        >
-                          <CheckCircle className="w-5 h-5" />
-                        </button>
-
-                        <button
-                          onClick={() => handleReject(order.id)}
-                          disabled={!!actionInProgress}
-                          className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
-                          title="Reject order"
-                        >
-                          <XCircle className="w-5 h-5" />
-                        </button>
-                      </>
-                    )}
-
-                    <Link
-                      to={`/chat?order=${order.id}`}
-                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                      title="Chat with customer"
-                    >
-                      <MessageSquare className="w-5 h-5" />
-                    </Link>
-
-                    {order.status === "active" && !order.account_file_url && (
-                      <button
-                        onClick={() => setSelectedOrderId(order.id)}
-                        className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
-                        title="Upload account file"
-                      >
-                        <Upload className="w-5 h-5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+          <div className="flex justify-end gap-3 mt-6">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+              disabled={isSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center gap-2"
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" />
+                  Deliver Account
+                </>
+              )}
+            </button>
+          </div>
+        </form>
       </div>
     );
+  };
+
+  // Add this function to handle delivering account details
+  const handleDeliverAccount = async (
+    orderId: string,
+    details: { email: string; password: string }
+  ) => {
+    try {
+      setActionInProgress(orderId);
+
+      // First, update the order with account details
+      const { error: updateError } = await supabase
+        .from("orders")
+        .update({
+          account_email: details.email,
+          account_password: details.password,
+          account_delivered_at: new Date().toISOString(),
+        })
+        .eq("id", orderId);
+
+      if (updateError) {
+        console.error(
+          "Error updating order with account details:",
+          updateError
+        );
+        toast.error("Failed to save account details");
+        return;
+      }
+
+      // Now send a message to the user with the account details
+      const { data: orderData } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+
+      if (!orderData) {
+        toast.error("Order not found");
+        return;
+      }
+
+      // Create a message with the account details
+      const message = {
+        id: generateUUID(),
+        order_id: orderId,
+        content: `Your account is ready!\n\nEmail: ${details.email}\nPassword: ${details.password}\n\nPlease let us know if you have any questions.`,
+        created_at: new Date().toISOString(),
+        user_id: currentUser?.id || null,
+        is_read: false,
+        user_name: "Support Team",
+        user_avatar: "https://i.imgur.com/eyaDC8l.png",
+      };
+
+      // Insert the message
+      const { error: messageError } = await supabase
+        .from("messages")
+        .insert(message);
+
+      if (messageError) {
+        console.error("Error sending account details message:", messageError);
+        toast.error("Account details saved but failed to send message to user");
+        return;
+      }
+
+      // Update local state
+      setOrders(
+        orders.map((order) =>
+          order.id === orderId
+            ? {
+                ...order,
+                account_email: details.email,
+                account_password: details.password,
+                account_delivered_at: new Date().toISOString(),
+              }
+            : order
+        )
+      );
+
+      toast.success("Account details delivered successfully");
+
+      // Clear the selected order ID
+      setSelectedOrderId(null);
+
+      // Refresh orders to get the latest data
+      fetchOrders();
+    } catch (err) {
+      console.error("Error in handleDeliverAccount:", err);
+      toast.error("Failed to deliver account details");
+    } finally {
+      setActionInProgress(null);
+    }
   };
 
   if (loading) {
@@ -2145,5 +1862,207 @@ const ImageModal = React.memo(function ImageModal({
     </div>
   );
 });
+
+const OrderDetailModal = () => {
+  if (!selectedOrderDetail) return null;
+
+  const [showDeliveryForm, setShowDeliveryForm] = useState(false);
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6">
+          <div className="flex justify-between items-start mb-6">
+            <h2 className="text-xl font-bold text-white">Order Details</h2>
+            <button
+              onClick={() => setSelectedOrderDetail(null)}
+              className="text-white/70 hover:text-white"
+            >
+              <XCircle className="w-6 h-6" />
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            <div>
+              <h3 className="text-white/70 mb-2">Customer Information</h3>
+              <div className="bg-white/5 rounded-lg p-4">
+                <p className="text-white">
+                  <span className="text-white/70">Name:</span>{" "}
+                  {selectedOrderDetail.full_name}
+                </p>
+                <p className="text-white">
+                  <span className="text-white/70">Email:</span>{" "}
+                  {selectedOrderDetail.email}
+                </p>
+                <p className="text-white">
+                  <span className="text-white/70">Status:</span>
+                  <span
+                    className={`ml-2 px-2 py-0.5 rounded text-xs ${
+                      selectedOrderDetail.status === "active"
+                        ? "bg-green-500/20 text-green-400"
+                        : selectedOrderDetail.status === "rejected"
+                        ? "bg-red-500/20 text-red-400"
+                        : "bg-yellow-500/20 text-yellow-400"
+                    }`}
+                  >
+                    {selectedOrderDetail.status.toUpperCase()}
+                  </span>
+                </p>
+                <p className="text-white">
+                  <span className="text-white/70">Created:</span>{" "}
+                  {new Date(selectedOrderDetail.created_at).toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            {/* Account Details Section */}
+            {selectedOrderDetail.status === "active" && (
+              <div>
+                <h3 className="text-white/70 mb-2">Account Details</h3>
+                {selectedOrderDetail.account_email &&
+                selectedOrderDetail.account_password ? (
+                  <div className="bg-white/5 rounded-lg p-4">
+                    <p className="text-white">
+                      <span className="text-white/70">Account Email:</span>{" "}
+                      {selectedOrderDetail.account_email}
+                    </p>
+                    <p className="text-white">
+                      <span className="text-white/70">Account Password:</span>{" "}
+                      {selectedOrderDetail.account_password}
+                    </p>
+                    {selectedOrderDetail.account_delivered_at && (
+                      <p className="text-white">
+                        <span className="text-white/70">Delivered:</span>{" "}
+                        {new Date(
+                          selectedOrderDetail.account_delivered_at
+                        ).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                ) : showDeliveryForm ? (
+                  <AccountDeliveryForm
+                    orderId={selectedOrderDetail.id}
+                    onSubmit={(details) => {
+                      handleDeliverAccount(selectedOrderDetail.id, details);
+                      setShowDeliveryForm(false);
+                    }}
+                    onCancel={() => setShowDeliveryForm(false)}
+                  />
+                ) : (
+                  <div className="bg-white/5 rounded-lg p-4">
+                    <p className="text-white/70 mb-2">
+                      No account details provided yet
+                    </p>
+                    <button
+                      onClick={() => setShowDeliveryForm(true)}
+                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center gap-2"
+                    >
+                      <Send className="w-4 h-4" />
+                      Deliver Account Details
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedOrderDetail.payment_proofs &&
+              selectedOrderDetail.payment_proofs.length > 0 && (
+                <div>
+                  <h3 className="text-white/70 mb-2">Payment Proofs</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {selectedOrderDetail.payment_proofs.map((proof, index) => (
+                      <div key={index} className="bg-white/5 rounded-lg p-4">
+                        <img
+                          src={proof.image_url}
+                          alt={`Payment proof ${index + 1}`}
+                          className="w-full h-auto rounded-lg mb-2 cursor-pointer"
+                          onClick={() => {
+                            setCurrentImageUrl(proof.image_url);
+                            setShowImageModal(true);
+                          }}
+                        />
+                        <p className="text-white/70 text-sm">
+                          Status:{" "}
+                          <span
+                            className={`${
+                              proof.status === "approved"
+                                ? "text-green-400"
+                                : proof.status === "rejected"
+                                ? "text-red-400"
+                                : "text-yellow-400"
+                            }`}
+                          >
+                            {proof.status.toUpperCase()}
+                          </span>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            {selectedOrderDetail.account_file_url ? (
+              <div>
+                <h3 className="text-white/70 mb-2">Account File</h3>
+                <div className="bg-white/5 rounded-lg p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-white">Account file uploaded</p>
+                    <p className="text-white/70 text-sm">
+                      {new URL(selectedOrderDetail.account_file_url).pathname
+                        .split("/")
+                        .pop()}
+                    </p>
+                  </div>
+                  <a
+                    href={selectedOrderDetail.account_file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                  >
+                    <Download className="w-5 h-5" />
+                  </a>
+                </div>
+              </div>
+            ) : selectedOrderDetail.status === "active" ? (
+              <div>
+                <h3 className="text-white/70 mb-2">Account File</h3>
+                <div className="bg-white/5 rounded-lg p-4">
+                  <p className="text-white/70 mb-2">
+                    No account file uploaded yet
+                  </p>
+                  <FileUpload
+                    orderId={selectedOrderDetail.id}
+                    onUploadSuccess={(fileUrl) => {
+                      onFileUpload(selectedOrderDetail.id, fileUrl);
+                      setSelectedOrderDetail({
+                        ...selectedOrderDetail,
+                        account_file_url: fileUrl,
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex justify-end gap-3 mt-6">
+              <Link
+                to={`/chat?order=${selectedOrderDetail.id}`}
+                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+              >
+                Open Chat
+              </Link>
+              <button
+                onClick={() => setSelectedOrderDetail(null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default React.memo(AdminPage);
