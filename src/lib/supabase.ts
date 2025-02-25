@@ -41,3 +41,27 @@ export async function insertMessage(message: {
     return { data: null, error: err };
   }
 }
+
+export async function saveMessage({
+  id,
+  content,
+  metadata = {},
+}: {
+  id: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  try {
+    const { data, error } = await supabase.from("messages").insert({
+      id,
+      content,
+      metadata,
+    });
+
+    if (error) throw error;
+    return { success: true, data };
+  } catch (err) {
+    console.error("Error saving message:", err);
+    return { success: false, error: err };
+  }
+}

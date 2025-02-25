@@ -82,7 +82,9 @@ export async function grantAdminPrivileges(
     if (error) {
       return {
         success: false,
-        error: `Failed to grant admin privileges: ${error.message}`,
+        error: `Failed to grant admin privileges: ${
+          error.message || JSON.stringify(error)
+        }`,
       };
     }
 

@@ -68,6 +68,16 @@ interface AccountDetails {
   password: string;
 }
 
+// Fix the user type
+interface User {
+  id: string;
+  email: string;
+  fullName: string;
+  isAdmin: boolean;
+  lastSignIn: string | null;
+  createdAt: string;
+}
+
 function AdminPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,8 +122,8 @@ function AdminPage() {
   const [formErrors, setFormErrors] = useState({
     accountId: false,
   });
-  const [users, setUsers] = useState<any[]>([]);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [users, setUsers] = useState<User[]>([]);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [selectedTab, setSelectedTab] = useState("users");
   const [fallbackMode, setFallbackMode] = useState(false);
@@ -703,21 +713,46 @@ Please keep these details secure. You can copy them by selecting the text.
   }, [navigate]);
 
   const fetchUsers = async (adminUserId: string) => {
+    if (!adminUserId) {
+      console.error("No admin user ID provided");
+      return;
+    }
+
     setLoading(true);
 
     try {
-      // Try the client-side approach first
+      // Try the client-side approach
       const result = await getAllUsersClientSide();
 
       if (result.success && result.data) {
         setUsers(result.data);
-        toast.info("Using local user data");
       } else {
+        console.error("Error fetching users:", result.error);
         toast.error(result.error || "Failed to load users");
-        setUsers([]);
+
+        // Fallback to just showing the current user
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user) {
+          setUsers([
+            {
+              id: user.id,
+              email: user.email || "",
+              fullName: user.user_metadata?.full_name || "",
+              isAdmin: true,
+              lastSignIn: null,
+              createdAt: user.created_at,
+            },
+          ]);
+          toast.info("Limited user data available");
+        } else {
+          setUsers([]);
+        }
       }
     } catch (err) {
-      console.error("Error fetching users:", err);
+      console.error("Error in fetchUsers:", err);
       toast.error("Failed to load user data");
       setUsers([]);
     } finally {
@@ -798,34 +833,40 @@ Please keep these details secure. You can copy them by selecting the text.
     }
 
     try {
+      setActionInProgress("adding-admin");
+
       // Find the user with the matching email in the users table
       const { data: userWithEmail, error: userError } = await supabase
         .from("users")
-        .select("id")
+        .select("id, email")
         .eq("email", newAdminEmail.trim())
         .single();
 
-      if (userError || !userWithEmail) {
+      if (userError) {
+        console.error("Error finding user:", userError);
         toast.error("User not found with that email");
+        setActionInProgress(null);
         return;
       }
 
       // Grant admin privileges
       const result = await grantAdminPrivileges(
-        currentUser.id,
+        currentUser?.id || "",
         userWithEmail.id
       );
 
       if (result.success) {
-        toast.success(`Admin privileges granted to ${newAdminEmail}`);
+        toast.success(`Admin privileges granted to ${userWithEmail.email}`);
         setNewAdminEmail("");
-        fetchUsers(currentUser.id);
+        fetchUsers(currentUser?.id || "");
       } else {
         toast.error(result.error || "Failed to grant admin privileges");
       }
     } catch (err) {
       console.error("Error adding admin by email:", err);
       toast.error("Failed to add admin");
+    } finally {
+      setActionInProgress(null);
     }
   };
 
