@@ -72,8 +72,12 @@ function ChatPage() {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [newMessagesBelowViewport, setNewMessagesBelowViewport] = useState(0);
   const [orderSearchTerm, setOrderSearchTerm] = useState("");
-  const [filteredUserOrders, setFilteredUserOrders] = useState<typeof userOrders>([]);
-  const [filteredAdminOrders, setFilteredAdminOrders] = useState<typeof adminOrders>([]);
+  const [filteredUserOrders, setFilteredUserOrders] = useState<
+    typeof userOrders
+  >([]);
+  const [filteredAdminOrders, setFilteredAdminOrders] = useState<
+    typeof adminOrders
+  >([]);
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
 
   // Authentication check
@@ -1203,44 +1207,50 @@ function ChatPage() {
         setFilteredUserOrders(userOrders);
       } else {
         const searchTermLower = debouncedSearchTerm.toLowerCase();
-        const filtered = userOrders.filter(order => {
+        const filtered = userOrders.filter((order) => {
           // Search by order ID
           if (order.id.toLowerCase().includes(searchTermLower)) {
             return true;
           }
-          
+
           // Search by full name
-          if (order.full_name && order.full_name.toLowerCase().includes(searchTermLower)) {
+          if (
+            order.full_name &&
+            order.full_name.toLowerCase().includes(searchTermLower)
+          ) {
             return true;
           }
-          
+
           return false;
         });
-        
+
         setFilteredUserOrders(filtered);
       }
     }
-    
+
     // Filter admin orders
     if (adminOrders.length > 0) {
       if (!debouncedSearchTerm.trim()) {
         setFilteredAdminOrders(adminOrders);
       } else {
         const searchTermLower = debouncedSearchTerm.toLowerCase();
-        const filtered = adminOrders.filter(order => {
+        const filtered = adminOrders.filter((order) => {
           // Search by order ID
           if (order.id.toLowerCase().includes(searchTermLower)) {
             return true;
           }
-          
+
           // Search by full name
-          if (order.full_name && order.full_name.toLowerCase().includes(searchTermLower)) {
+          if (
+            order.full_name &&
+            order.full_name.toLowerCase().includes(searchTermLower)
+          ) {
             return true;
           }
-          
+
           return false;
         });
-        
+
         setFilteredAdminOrders(filtered);
       }
     }
@@ -1420,7 +1430,11 @@ function ChatPage() {
                 <h2 className="text-lg font-medium text-white">
                   Orders
                   <span className="ml-2 text-sm text-white/50">
-                    ({isAdmin ? filteredAdminOrders.length : filteredUserOrders.length})
+                    (
+                    {isAdmin
+                      ? filteredAdminOrders.length
+                      : filteredUserOrders.length}
+                    )
                   </span>
                 </h2>
                 <button
@@ -1430,7 +1444,7 @@ function ChatPage() {
                   <XIcon className="w-6 h-6" />
                 </button>
               </div>
-              
+
               {/* Add search input */}
               <div className="relative">
                 <input
@@ -1441,8 +1455,19 @@ function ChatPage() {
                   className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                 />
                 <div className="absolute right-3 top-2.5 text-white/50">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    />
                   </svg>
                 </div>
               </div>
@@ -1485,7 +1510,7 @@ function ChatPage() {
                           )}
                         </div>
                       </button>
-                    ))
+                    ))}
                   </div>
                 ) : (
                   <div className="p-8 text-center text-white/50">
@@ -1504,57 +1529,55 @@ function ChatPage() {
                     )}
                   </div>
                 )
-              ) : (
-                // User orders list
-                filteredUserOrders.length > 0 ? (
-                  <div className="divide-y divide-white/10">
-                    {filteredUserOrders.map((order) => (
-                      <button
-                        key={order.id}
-                        onClick={() => {
-                          setSelectedOrderId(order.id);
-                          setShowSidebar(false);
-                          fetchMessages(order.id);
-                        }}
-                        className={`w-full text-left p-4 hover:bg-white/5 transition-colors ${
-                          selectedOrderId === order.id ? "bg-white/10" : ""
-                        }`}
-                      >
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="text-white font-medium">
-                              Order #{order.id.slice(0, 8)}
-                            </p>
-                            <p className="text-white/50 text-sm">
-                              {new Date().toLocaleDateString()}
-                            </p>
-                          </div>
-                          {order.messages && order.messages.length > 0 && (
-                            <span className="bg-emerald-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                              {order.messages.length}
-                            </span>
-                          )}
+              ) : // User orders list
+              filteredUserOrders.length > 0 ? (
+                <div className="divide-y divide-white/10">
+                  {filteredUserOrders.map((order) => (
+                    <button
+                      key={order.id}
+                      onClick={() => {
+                        setSelectedOrderId(order.id);
+                        setShowSidebar(false);
+                        fetchMessages(order.id);
+                      }}
+                      className={`w-full text-left p-4 hover:bg-white/5 transition-colors ${
+                        selectedOrderId === order.id ? "bg-white/10" : ""
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="text-white font-medium">
+                            Order #{order.id.slice(0, 8)}
+                          </p>
+                          <p className="text-white/50 text-sm">
+                            {new Date().toLocaleDateString()}
+                          </p>
                         </div>
+                        {order.messages && order.messages.length > 0 && (
+                          <span className="bg-emerald-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                            {order.messages.length}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-white/50">
+                  {orderSearchTerm ? (
+                    <>
+                      <p>No orders matching "{orderSearchTerm}"</p>
+                      <button
+                        onClick={() => setOrderSearchTerm("")}
+                        className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                      >
+                        Clear search
                       </button>
-                    ))
-                  </div>
-                ) : (
-                  <div className="p-8 text-center text-white/50">
-                    {orderSearchTerm ? (
-                      <>
-                        <p>No orders matching "{orderSearchTerm}"</p>
-                        <button
-                          onClick={() => setOrderSearchTerm("")}
-                          className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
-                        >
-                          Clear search
-                        </button>
-                      </>
-                    ) : (
-                      <p>No orders found</p>
-                    )}
-                  </div>
-                )
+                    </>
+                  ) : (
+                    <p>No orders found</p>
+                  )}
+                </div>
               )}
             </div>
           </div>
