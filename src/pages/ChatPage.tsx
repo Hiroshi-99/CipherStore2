@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
+import { useNavigate } from "react-router-dom";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { toast } from "sonner";
@@ -27,16 +28,13 @@ import { useOrderFilters } from "../hooks/useOrderFilters";
 import { motion } from "framer-motion";
 import { useInView } from "react-intersection-observer";
 
-interface ChatProps {
-  orderId: string;
-}
-
-// Add these constants outside component
+// Constants
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
 const TYPING_DEBOUNCE = 1000;
 
 function ChatPage() {
+  const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
@@ -51,839 +49,455 @@ function ChatPage() {
     { id: string; full_name: string; messages?: { id: string }[] }[]
   >([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const [initialLoading, setInitialLoading] = useState(true);
   const [showSidebar, setShowSidebar] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState<Set<string>>(new Set());
   const [isTabFocused, setIsTabFocused] = useState(true);
-  const [notification, setNotification] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [isTyping, setIsTyping] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Add message queue for optimistic updates
-  const messageQueue = useRef<Set<string>>(new Set());
-  const pendingMessages = useRef<Map<string, Message>>(new Map());
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Add virtual scrolling state
-  const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
-  const messageListRef = useRef<HTMLDivElement>(null);
-  const observerRef = useRef<IntersectionObserver | null>(null);
-
-  // Add audio ref to prevent multiple instances
-  const notificationSound = useRef<HTMLAudioElement | null>(null);
-
-  // Add pagination state
+  const pendingMessages = useRef(new Map());
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
 
-  // Order filtering
-  const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
-    isAdmin ? adminOrders : userOrders
-  );
-
-  const { ref: topLoaderRef, inView: isTopVisible } = useInView({
-    threshold: 0.1,
-  });
-
-  const {
-    scrollRef,
-    lastMessageRef,
-    scrollToBottom,
-    handleScroll: handleScrollEvent,
-  } = useMessageScroll(messages, loading);
-
-  // Memoize orders list
-  const ordersList = useMemo(() => {
-    return (isAdmin ? adminOrders : userOrders).map((order) => (
-      <button
-        key={order.id}
-        onClick={() => {
-          setSelectedOrderId(order.id);
-          setShowSidebar(false);
-          fetchMessages(order.id);
-        }}
-        className={`w-full text-left p-3 rounded-lg mb-2 transition-colors ${
-          selectedOrderId === order.id
-            ? "bg-emerald-500/20 text-emerald-400"
-            : "hover:bg-gray-800 text-white"
-        }`}
-      >
-        <div className="font-medium">Order #{order.id.slice(0, 8)}</div>
-        {isAdmin && order.messages?.length && (
-          <div className="text-xs text-emerald-400 mt-1">
-            {order.messages.length} messages
-          </div>
-        )}
-      </button>
-    ));
-  }, [isAdmin, userOrders, adminOrders, selectedOrderId, fetchMessages]);
-
-  // Memoize messages list
-  const messagesList = useMemo(() => {
-    return messages.map((message, index) => (
-      <MessageBubble
-        key={message.id}
-        message={message}
-        isLatest={index === messages.length - 1}
-        sending={sending}
-        isUnread={unreadMessages.has(message.id)}
-      />
-    ));
-  }, [messages, sending, unreadMessages]);
-
-  // Initialize audio on mount
+  // Authentication check
   useEffect(() => {
-    notificationSound.current = new Audio("/notification.mp3");
-    notificationSound.current.volume = 0.5;
+    setPageTitle("Chat");
 
-    return () => {
-      if (notificationSound.current) {
-        notificationSound.current.pause();
-        notificationSound.current = null;
+    // Check if user is authenticated
+    const checkAuth = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session?.user) {
+          // Redirect to login if not authenticated
+          navigate("/");
+          return;
+        }
+
+        setUser(session.user);
+
+        // Check if user is admin
+        const { data: adminData } = await supabase
+          .from("admins")
+          .select("id")
+          .eq("user_id", session.user.id)
+          .single();
+
+        setIsAdmin(!!adminData);
+
+        // Fetch orders based on user role
+        if (adminData) {
+          fetchAdminOrders();
+        } else {
+          fetchUserOrders(session.user.id);
+        }
+      } catch (err) {
+        console.error("Authentication error:", err);
+        setError("Authentication failed. Please try again.");
+        setLoading(false);
       }
     };
-  }, []);
 
-  // Update message subscription with better sound handling
-  const subscribeToMessages = useCallback(() => {
-    if (!selectedOrderId) return undefined;
+    checkAuth();
 
-    let isSubscribed = true;
-    const channel = supabase
-      .channel(`messages:${selectedOrderId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "messages",
-          filter: `order_id=eq.${selectedOrderId}`,
-        },
-        async (payload) => {
-          if (!isSubscribed || payload.eventType !== "INSERT") return;
-
-          const newMessage = payload.new as Message;
-          if (!newMessage || messageQueue.current.has(newMessage.id)) {
-            messageQueue.current.delete(newMessage.id);
-            pendingMessages.current.delete(newMessage.id);
-            return;
-          }
-
-          setMessages((prev) => {
-            if (prev.some((msg) => msg.id === newMessage.id)) return prev;
-
-            const isFromOther = newMessage.user_id !== user?.id;
-            if (isFromOther) {
-              // Play notification sound
-              if (notificationSound.current) {
-                notificationSound.current.currentTime = 0;
-                notificationSound.current.play().catch((error) => {
-                  console.warn("Failed to play notification sound:", error);
-                });
-              }
-
-              // Show toast notification
-              toast.message("New message", {
-                description: `${
-                  newMessage.user_name
-                }: ${newMessage.content.slice(0, 60)}${
-                  newMessage.content.length > 60 ? "..." : ""
-                }`,
-              });
-
-              if (!isTabFocused) {
-                setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
-              }
-            }
-
-            return [...prev, newMessage];
-          });
-
-          scrollToBottom();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      isSubscribed = false;
-      supabase.removeChannel(channel);
-    };
-  }, [selectedOrderId, user?.id, isTabFocused, scrollToBottom]);
-
-  // Add virtual scrolling
-  useEffect(() => {
-    if (!messageListRef.current) return;
-
-    const options = {
-      root: messageListRef.current,
-      rootMargin: "20px",
-      threshold: 0.1,
-    };
-
-    observerRef.current = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const messageId = entry.target.getAttribute("data-message-id");
-          if (messageId) {
-            setVisibleMessages((prev) =>
-              [...prev, messages.find((m) => m.id === messageId)!].filter(
-                Boolean
-              )
-            );
-          }
-        }
-      });
-    }, options);
-
-    messages.forEach((message) => {
-      const element = document.querySelector(
-        `[data-message-id="${message.id}"]`
-      );
-      if (element) {
-        observerRef.current?.observe(element);
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        navigate("/");
       }
     });
 
     return () => {
-      observerRef.current?.disconnect();
+      subscription.unsubscribe();
     };
-  }, [messages]);
+  }, [navigate]);
 
-  // Optimized message sending with better error handling
+  // Fetch user orders
+  const fetchUserOrders = async (userId: string) => {
+    try {
+      const { data, error: ordersError } = await supabase
+        .from("orders")
+        .select("id, full_name, messages:chat_messages(id)")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      if (ordersError) throw ordersError;
+
+      setUserOrders(data || []);
+
+      // Select first order if available and none selected
+      if (data?.length && !selectedOrderId) {
+        setSelectedOrderId(data[0].id);
+        fetchMessages(data[0].id);
+      }
+
+      setLoading(false);
+    } catch (err) {
+      console.error("Error fetching user orders:", err);
+      setError("Failed to load orders. Please refresh the page.");
+      setLoading(false);
+    }
+  };
+
+  // Fetch admin orders
+  const fetchAdminOrders = async () => {
+    try {
+      const { data, error: ordersError } = await supabase
+        .from("orders")
+        .select("id, full_name, messages:chat_messages(id)")
+        .order("created_at", { ascending: false });
+
+      if (ordersError) throw ordersError;
+
+      setAdminOrders(data || []);
+
+      // Select first order if available and none selected
+      if (data?.length && !selectedOrderId) {
+        setSelectedOrderId(data[0].id);
+        fetchMessages(data[0].id);
+      }
+
+      setLoading(false);
+    } catch (err) {
+      console.error("Error fetching admin orders:", err);
+      setError("Failed to load orders. Please refresh the page.");
+      setLoading(false);
+    }
+  };
+
+  // Fetch messages for selected order
+  const fetchMessages = useCallback(
+    async (orderId: string) => {
+      if (!orderId) return;
+
+      try {
+        setLoading(true);
+        setError(null);
+
+        const { data, error: messagesError } = await supabase
+          .from("chat_messages")
+          .select("*")
+          .eq("order_id", orderId)
+          .order("created_at", { ascending: true });
+
+        if (messagesError) throw messagesError;
+
+        setMessages(data || []);
+
+        // Mark messages as read
+        const unreadIds =
+          data
+            ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
+            .map((m) => m.id) || [];
+
+        if (unreadIds.length > 0) {
+          await supabase
+            .from("chat_messages")
+            .update({ is_read: true })
+            .in("id", unreadIds);
+        }
+      } catch (err) {
+        console.error("Error fetching messages:", err);
+        setError("Failed to load messages. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [isAdmin]
+  );
+
+  // Handle sending messages
   const handleSendMessage = useCallback(
     async (e: React.FormEvent, imageUrl?: string) => {
       e.preventDefault();
-      if (
-        !user ||
-        (!newMessage.trim() && !imageUrl) ||
-        sending ||
-        !selectedOrderId
-      )
-        return;
 
-      const messageContent = newMessage.trim();
-      setNewMessage("");
+      if ((!newMessage.trim() && !imageUrl) || !selectedOrderId || !user) {
+        return;
+      }
+
       setSending(true);
 
-      const tempId = crypto.randomUUID();
-      const optimisticMessage: Message = {
-        id: tempId,
-        content: messageContent,
-        image_url: imageUrl,
-        user_id: user.id,
-        user_name: user.user_metadata.full_name || user.email,
-        user_avatar: user.user_metadata.avatar_url,
-        is_admin: isAdmin,
-        created_at: new Date().toISOString(),
-        order_id: selectedOrderId,
-      };
-
       try {
-        messageQueue.current.add(tempId);
-        pendingMessages.current.set(tempId, optimisticMessage);
+        const tempId = crypto.randomUUID();
 
-        // Add message and scroll
+        // Add optimistic message
+        const optimisticMessage: Message = {
+          id: tempId,
+          content: newMessage.trim(),
+          order_id: selectedOrderId,
+          user_id: user.id,
+          is_admin: isAdmin,
+          is_read: false,
+          created_at: new Date().toISOString(),
+          image_url: imageUrl || null,
+          user_name: user.user_metadata?.full_name || user.email || "User",
+          user_avatar: user.user_metadata?.avatar_url || null,
+        };
+
         setMessages((prev) => [...prev, optimisticMessage]);
-        scrollToBottom();
 
-        // Get order details first
-        const { data: orderData } = await supabase
-          .from("orders")
-          .select("user_id")
-          .eq("id", selectedOrderId)
-          .single();
+        // Store pending message for retry
+        pendingMessages.current.set(tempId, {
+          content: newMessage.trim(),
+          image_url: imageUrl,
+        });
 
-        if (!orderData) throw new Error("Order not found");
-
-        // Send message
-        const { data: messageData, error: messageError } = await supabase
-          .from("messages")
+        // Send to database
+        const { data, error: sendError } = await supabase
+          .from("chat_messages")
           .insert([
             {
-              content: messageContent,
-              image_url: imageUrl,
-              user_id: user.id,
-              is_admin: user.id !== orderData.user_id,
-              user_name: user.user_metadata.full_name || user.email,
-              user_avatar: user.user_metadata.avatar_url,
+              content: newMessage.trim(),
               order_id: selectedOrderId,
-              order_user_id: orderData.user_id,
+              user_id: user.id,
+              is_admin: isAdmin,
+              image_url: imageUrl,
             },
           ])
           .select()
           .single();
 
-        if (messageError) throw messageError;
+        if (sendError) throw sendError;
 
-        // Update message with real ID
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, id: messageData.id } : msg
-          )
-        );
-      } catch (error) {
-        console.error("Error sending message:", error);
-        // Remove optimistic message on error
-        setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-        setError("Failed to send message");
-        if (!imageUrl) {
-          setNewMessage(messageContent);
-        }
-      } finally {
-        messageQueue.current.delete(tempId);
+        // Replace optimistic message with real one
+        setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
+
+        // Clear pending message
         pendingMessages.current.delete(tempId);
+
+        setNewMessage("");
+        setSelectedImage(null);
+        setImagePreview(null);
+      } catch (err) {
+        console.error("Error sending message:", err);
+        toast.error("Failed to send message. Click to retry.");
+      } finally {
         setSending(false);
       }
     },
-    [user, newMessage, sending, selectedOrderId, isAdmin, scrollToBottom]
+    [newMessage, selectedOrderId, user, isAdmin]
   );
 
-  // Add message retry functionality
-  const retryMessage = useCallback(
-    async (tempId: string) => {
-      const message = pendingMessages.current.get(tempId);
-      if (!message) return;
+  // Handle message retry
+  const handleRetry = useCallback((tempId: string) => {
+    const pendingMessage = pendingMessages.current.get(tempId);
+    if (!pendingMessage) return;
 
-      // Remove failed message
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+    // Remove failed message
+    setMessages((prev) => prev.filter((m) => m.id !== tempId));
 
-      // Retry sending
-      const content = message.content;
-      pendingMessages.current.delete(tempId);
-      setNewMessage(content);
-      await handleSendMessage(new Event("submit") as any, message.image_url);
-    },
-    [handleSendMessage]
-  );
+    // Set message content back to input
+    setNewMessage(pendingMessage.content);
 
-  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && file.type.startsWith("image/")) {
-      setSelectedImage(file);
+    // If there was an image, we need to handle that too
+    if (pendingMessage.image_url) {
+      // Logic to handle image retry
     }
-  };
 
+    // Remove from pending messages
+    pendingMessages.current.delete(tempId);
+  }, []);
+
+  // Handle image upload
   const handleImageUpload = async () => {
     if (!selectedImage) return;
+
     try {
       setSending(true);
       const imageUrl = await uploadImage(selectedImage);
-      await handleSendMessage(new Event("submit") as any, imageUrl);
-    } catch (error) {
-      console.error("Error uploading image:", error);
+      await handleSendMessage(new Event("submit") as React.FormEvent, imageUrl);
+    } catch (err) {
+      console.error("Error uploading image:", err);
       toast.error("Failed to upload image");
     } finally {
-      setSelectedImage(null);
+      setSending(false);
     }
   };
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (selectedImage) {
-      await handleImageUpload();
-    } else if (newMessage.trim()) {
-      await handleSendMessage(e);
-    }
-  };
+  // Handle image selection
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  useEffect(() => {
-    setPageTitle("Chat");
-    checkUser();
-  }, []);
-
-  useEffect(() => {
-    if (selectedOrderId) {
-      // Fetch messages first
-      fetchMessages(selectedOrderId);
-
-      // Then set up subscription
-      const cleanup = subscribeToMessages();
-      return () => {
-        if (cleanup && typeof cleanup === "function") {
-          cleanup();
-        }
-      };
-    }
-  }, [selectedOrderId, subscribeToMessages]);
-
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      setIsTabFocused(document.visibilityState === "visible");
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isTabFocused) {
-      setUnreadMessages(new Set());
-    }
-  }, [isTabFocused]);
-
-  const checkUser = async () => {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.user) {
-        setInitialLoading(false);
-        return;
-      }
-
-      setUser(session.user);
-
-      // Fix admin check query with proper UUID casting
-      const { data: adminData, error: adminError } = await supabase
-        .from("admin_users")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .maybeSingle();
-
-      if (adminError) {
-        console.error("Error checking admin status:", adminError);
-      }
-
-      setIsAdmin(!!adminData);
-
-      // Fetch orders based on user role
-      if (adminData) {
-        await fetchAdminOrders();
-      } else {
-        await fetchUserOrders(session.user.id);
-      }
-
-      setInitialLoading(false);
-    } catch (error) {
-      console.error("Error checking user:", error);
-      setInitialLoading(false);
-    }
-  };
-
-  const fetchUserOrders = async (userId: string) => {
-    try {
-      const { data: ordersData, error } = await supabase
-        .from("orders")
-        .select("id, full_name")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setUserOrders(ordersData || []);
-      if (ordersData?.length > 0) {
-        setSelectedOrderId(ordersData[0].id);
-      }
-    } catch (error) {
-      console.error("Error fetching user orders:", error);
-      setError("Failed to load orders");
-    }
-  };
-
-  const fetchAdminOrders = async () => {
-    try {
-      const { data: ordersData, error } = await supabase
-        .from("orders")
-        .select(
-          `
-          id,
-          full_name,
-          messages (
-            id,
-            created_at
-          )
-        `
-        )
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setAdminOrders(ordersData || []);
-      if (ordersData?.length > 0) {
-        setSelectedOrderId(ordersData[0].id);
-      }
-    } catch (error) {
-      console.error("Error fetching admin orders:", error);
-      setError("Failed to load orders");
-    }
-  };
-
-  // Update fetchMessages to use pagination
-  const fetchMessages = useCallback(async (orderId: string) => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", orderId)
-        .order("created_at", { ascending: false })
-        .limit(MESSAGES_PER_PAGE)
-        .abortSignal(new AbortController().signal);
-
-      if (error) throw error;
-
-      setMessages(data.reverse());
-      setHasMore(data.length === MESSAGES_PER_PAGE);
-      setPage(1);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      toast.error("Failed to load messages. Please try again.");
-
-      // Show retry button
-      setError("Failed to load messages");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Add intersection observer for infinite scroll
-  useEffect(() => {
-    if (!lastMessageRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const first = entries[0];
-        if (first.isIntersecting && hasMore) {
-          loadMoreMessages();
-        }
-      },
-      { threshold: 0.1 }
-    );
-
-    observer.observe(lastMessageRef.current);
-    return () => observer.disconnect();
-  }, [hasMore]);
-
-  // Add function to load more messages
-  const loadMoreMessages = useCallback(async () => {
-    if (!selectedOrderId || !hasMore) return;
-
-    try {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("order_id", selectedOrderId)
-        .order("created_at", { ascending: false })
-        .range(page * MESSAGES_PER_PAGE, (page + 1) * MESSAGES_PER_PAGE - 1);
-
-      if (error) throw error;
-
-      if (data.length < MESSAGES_PER_PAGE) {
-        setHasMore(false);
-      }
-
-      setMessages((prev) => [...prev, ...data.reverse()]);
-      setPage((p) => p + 1);
-    } catch (error) {
-      console.error("Error loading more messages:", error);
-    }
-  }, [selectedOrderId, page, hasMore]);
-
-  // Update the scroll handler to handle both pagination and scroll position
-  const handleScroll = useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      if (!e.currentTarget) return;
-
-      // Handle infinite scroll
-      const { scrollTop } = e.currentTarget;
-      if (scrollTop < SCROLL_THRESHOLD && hasMore && !loading) {
-        loadMoreMessages();
-      }
-
-      // Handle scroll position tracking
-      handleScrollEvent(e);
-    },
-    [hasMore, loading, loadMoreMessages, handleScrollEvent]
-  );
-
-  // Load more messages when top is visible
-  useEffect(() => {
-    if (isTopVisible && hasMore && !loadingMore && selectedOrderId) {
-      loadMoreMessages();
-    }
-  }, [isTopVisible, hasMore, selectedOrderId]);
-
-  const handleNewMessage = (event: React.FormEvent) => {
-    event.preventDefault();
-
-    if (!newMessage.trim() && !selectedImage) {
-      return;
-    }
-
-    sendMessage(newMessage, selectedImage);
-    setNewMessage("");
-    setSelectedImage(null);
-    setImagePreview(null);
-  };
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-
-      // Validate file size (5MB max)
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error("Image must be less than 5MB");
-        return;
-      }
-
+    if (file.type.startsWith("image/")) {
       setSelectedImage(file);
 
       // Create preview
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
+      reader.onload = (e) => {
+        setImagePreview(e.target?.result as string);
       };
       reader.readAsDataURL(file);
-    }
-  };
-
-  const handleTyping = () => {
-    // Send typing indicator to other users
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-
-    setIsTyping(true);
-
-    typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
-    }, TYPING_DEBOUNCE);
-  };
-
-  const cancelImageUpload = () => {
-    setSelectedImage(null);
-    setImagePreview(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
-  // Add retry mechanism for failed message sends
-  const retrySendMessage = async (messageId: string) => {
-    const failedMessage = pendingMessages.current.get(messageId);
-    if (!failedMessage) return;
-
-    // Remove from pending messages
-    pendingMessages.current.delete(messageId);
-
-    // Try sending again
-    await sendMessage(failedMessage.content, null, failedMessage.id);
-  };
-
-  // Optimize message rendering with virtualization
-  useEffect(() => {
-    if (messageListRef.current && messages.length > 100) {
-      // Only apply virtualization for large message lists
-      const messageElements = messageListRef.current.children;
-      const viewportHeight = window.innerHeight;
-
-      const visibleMessages = messages.filter((_, index) => {
-        if (messageElements[index]) {
-          const rect = messageElements[index].getBoundingClientRect();
-          return rect.top < viewportHeight && rect.bottom > 0;
-        }
-        return false;
-      });
-
-      setVisibleMessages(visibleMessages);
     } else {
-      setVisibleMessages(messages);
+      toast.error("Please select an image file");
     }
-  }, [messages, messageListRef.current]);
+  };
 
-  if (initialLoading) {
-    return (
-      <PageContainer title="CHAT" user={null}>
-        <div className="h-screen flex items-center justify-center">
-          <LoadingSpinner size="lg" light />
-        </div>
-      </PageContainer>
-    );
-  }
+  // Filter orders based on search
+  const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
+    isAdmin ? adminOrders : userOrders
+  );
 
   return (
     <PageContainer title="CHAT" showBack user={user}>
-      {notification && (
-        <div className="fixed top-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg animate-fade-in">
-          {notification}
-        </div>
-      )}
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative">
-          {/* Mobile Order Toggle */}
-          <button
-            className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
-            onClick={() => setShowSidebar(!showSidebar)}
-            aria-label="Toggle orders sidebar"
-          >
-            <svg
-              className="w-6 h-6 text-white"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16m-7 6h7"
-              />
-            </svg>
-          </button>
-
-          {/* Orders Sidebar */}
+      <main className="max-w-screen-xl mx-auto pb-16">
+        <div className="flex h-[calc(100vh-5rem)]">
+          {/* Sidebar */}
           <div
-            className={`md:col-span-1 fixed md:relative inset-0 z-10 md:z-0 transform ${
+            className={`fixed inset-y-0 left-0 z-20 w-80 bg-black/80 backdrop-blur-md transform transition-transform duration-300 ease-in-out ${
               showSidebar ? "translate-x-0" : "-translate-x-full"
-            } md:translate-x-0 transition-transform duration-200 ease-in-out`}
+            } md:relative md:translate-x-0`}
           >
-            <div className="backdrop-blur-md bg-black/90 md:bg-black/30 h-full md:h-auto rounded-2xl p-4">
-              {/* Mobile Close Button */}
-              <div className="flex justify-between items-center mb-4 md:hidden">
-                <h2 className="text-lg font-medium text-white">
-                  {isAdmin ? "All Orders" : "Your Orders"}
-                </h2>
+            <div className="flex flex-col h-full p-4">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-white">Orders</h2>
                 <button
                   onClick={() => setShowSidebar(false)}
-                  className="p-2 hover:bg-white/10 rounded-lg"
-                  aria-label="Close sidebar"
+                  className="md:hidden text-white/70 hover:text-white"
                 >
-                  <svg
-                    className="w-6 h-6 text-white"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
+                  <XIcon className="w-6 h-6" />
                 </button>
               </div>
 
-              {/* Search Input */}
               <div className="mb-4">
                 <input
                   type="text"
                   placeholder="Search orders..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full p-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400"
-                  aria-label="Search orders"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                 />
               </div>
 
-              {/* Orders List */}
-              <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                {filteredOrders.length > 0 ? (
-                  ordersList
-                ) : (
-                  <div className="text-center p-4 text-gray-400">
+              <div className="flex-1 overflow-y-auto">
+                {filteredOrders.length === 0 ? (
+                  <div className="text-center text-white/50 py-8">
                     No orders found
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredOrders.map((order) => (
+                      <button
+                        key={order.id}
+                        onClick={() => {
+                          setSelectedOrderId(order.id);
+                          fetchMessages(order.id);
+                          setShowSidebar(false);
+                        }}
+                        className={`w-full text-left p-3 rounded-lg transition-colors ${
+                          selectedOrderId === order.id
+                            ? "bg-emerald-500/20 text-emerald-400"
+                            : "bg-white/5 text-white hover:bg-white/10"
+                        }`}
+                      >
+                        <div className="font-medium">
+                          Order #{order.id.slice(0, 8)}
+                        </div>
+                        {isAdmin && order.messages?.length && (
+                          <div className="text-xs text-emerald-400 mt-1">
+                            {order.messages.length} message
+                            {order.messages.length !== 1 ? "s" : ""}
+                          </div>
+                        )}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Chat Area */}
-          <div className="md:col-span-3">
-            <div className="backdrop-blur-md bg-black/30 rounded-2xl overflow-hidden">
-              {selectedOrderId ? (
-                <>
-                  {/* Messages Container */}
-                  <div
-                    ref={scrollRef}
-                    className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
-                    onScroll={handleScroll}
-                  >
-                    {/* Show loader at the top when loading more messages */}
-                    {hasMore && (
-                      <div ref={topLoaderRef} className="text-center py-2">
-                        {loadingMore ? (
-                          <span className="inline-block w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></span>
-                        ) : (
-                          <span className="text-gray-500 text-sm">
-                            Scroll for more
-                          </span>
-                        )}
-                      </div>
-                    )}
+          {/* Chat area */}
+          <div className="flex-1 flex flex-col h-full">
+            {/* Chat header */}
+            <div className="p-4 border-b border-white/10 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowSidebar(true)}
+                  className="md:hidden text-white/70 hover:text-white"
+                >
+                  <MenuIcon className="w-6 h-6" />
+                </button>
+                <h2 className="text-lg font-medium text-white">
+                  {selectedOrderId
+                    ? `Order #${selectedOrderId.slice(0, 8)}`
+                    : "Select an order"}
+                </h2>
+              </div>
+            </div>
 
-                    {error ? (
-                      <div className="flex flex-col items-center justify-center h-full space-y-4">
-                        <p className="text-red-400">{error}</p>
+            {/* Messages area */}
+            {selectedOrderId ? (
+              <>
+                <div className="flex-1 overflow-y-auto p-4">
+                  {loading ? (
+                    <div className="h-full flex items-center justify-center">
+                      <LoadingSpinner size="lg" light />
+                    </div>
+                  ) : error ? (
+                    <div className="h-full flex items-center justify-center">
+                      <div className="text-center">
+                        <p className="text-red-400 mb-2">{error}</p>
                         <button
-                          onClick={() => {
-                            setError(null);
-                            fetchMessages(selectedOrderId);
-                          }}
-                          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-white transition-colors"
+                          onClick={() => fetchMessages(selectedOrderId)}
+                          className="px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
                         >
-                          Retry
+                          Try Again
                         </button>
                       </div>
-                    ) : (
-                      <>
-                        {loading && (
-                          <div className="flex justify-center">
-                            <LoadingSpinner size="sm" light />
-                          </div>
-                        )}
-                        {messages.map((message, index) => (
-                          <motion.div
-                            key={message.id}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.3 }}
-                            ref={
-                              index === messages.length - 1
-                                ? lastMessageRef
-                                : null
-                            }
-                          >
-                            <MessageBubble
-                              message={message}
-                              isLatest={index === messages.length - 1}
-                              sending={messageQueue.current.has(message.id)}
-                              isUnread={unreadMessages.has(message.id)}
-                              isPending={pendingMessages.current.has(
-                                message.id
-                              )}
-                              onRetry={() => retrySendMessage(message.id)}
-                            />
-                          </motion.div>
-                        ))}
-                      </>
-                    )}
-                  </div>
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="h-full flex items-center justify-center">
+                      <div className="text-center text-white/50">
+                        <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>No messages yet</p>
+                        <p className="text-sm mt-2">
+                          Start the conversation by sending a message
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {messages.map((message, index) => (
+                        <MessageBubble
+                          key={message.id}
+                          message={message}
+                          isLatest={index === messages.length - 1}
+                          sending={false}
+                          isUnread={unreadMessages.has(message.id)}
+                          onRetry={() => handleRetry(message.id)}
+                          isPending={pendingMessages.current.has(message.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-                  {/* Message Input */}
-                  <form
-                    onSubmit={handleNewMessage}
-                    className="border-t border-white/10 p-4"
-                  >
+                {/* Message input */}
+                <div className="p-4 border-t border-white/10">
+                  <form onSubmit={handleSendMessage}>
                     {imagePreview && (
-                      <div className="relative mb-2 inline-block">
+                      <div className="mb-4 relative inline-block">
                         <img
                           src={imagePreview}
-                          alt="Selected image"
-                          className="h-20 rounded-lg object-cover mb-2"
+                          alt="Preview"
+                          className="max-h-40 rounded-lg"
                         />
                         <button
                           type="button"
-                          onClick={cancelImageUpload}
-                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"
-                          aria-label="Remove image"
+                          onClick={() => {
+                            setSelectedImage(null);
+                            setImagePreview(null);
+                          }}
+                          className="absolute -top-2 -right-2 bg-black/50 rounded-full p-1 text-white hover:bg-black/70 transition-colors"
                         >
-                          <XIcon size={16} />
+                          <XIcon className="w-4 h-4" />
                         </button>
                       </div>
                     )}
@@ -891,53 +505,51 @@ function ChatPage() {
                     <div className="flex gap-2">
                       <input
                         type="file"
+                        ref={fileInputRef}
+                        onChange={handleImageSelect}
                         accept="image/*"
                         className="hidden"
-                        ref={fileInputRef}
-                        onChange={handleImageChange}
-                        aria-label="Upload image"
                       />
 
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="p-2 hover:bg-gray-700 rounded-full transition-colors"
-                        aria-label="Upload image"
+                        className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
+                        disabled={sending}
                       >
-                        <ImageIcon className="w-6 h-6 text-gray-400" />
+                        <ImageIcon className="w-6 h-6" />
                       </button>
 
                       <input
                         type="text"
                         value={newMessage}
-                        onChange={(e) => {
-                          setNewMessage(e.target.value);
-                          handleTyping();
-                        }}
+                        onChange={(e) => setNewMessage(e.target.value)}
                         placeholder="Type your message..."
                         className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                        aria-label="Message"
+                        disabled={sending}
                       />
+
                       <button
                         type="submit"
                         disabled={
                           (!newMessage.trim() && !selectedImage) || sending
                         }
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        aria-label="Send message"
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {sending ? (
-                          <RefreshCw className="w-5 h-5 animate-spin" />
+                          <RefreshCw className="w-6 h-6 animate-spin" />
                         ) : (
-                          <Send className="w-5 h-5" />
+                          <Send className="w-6 h-6" />
                         )}
                       </button>
                     </div>
                   </form>
-                </>
-              ) : (
-                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-4 p-6">
-                  <ChatIcon className="w-12 h-12 text-emerald-500/50" />
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center text-white/50">
+                  <ChatIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
                   <p className="text-lg">Select an order to start chatting</p>
                   <p className="text-sm text-center max-w-md">
                     Choose an order from the sidebar to start a conversation
@@ -945,13 +557,13 @@ function ChatPage() {
                   </p>
                   <button
                     onClick={() => setShowSidebar(true)}
-                    className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-2"
+                    className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-4"
                   >
                     View Orders
                   </button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </main>
