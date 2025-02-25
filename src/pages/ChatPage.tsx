@@ -229,7 +229,34 @@ function ChatPage() {
     }
   };
 
-  // Fetch messages for selected order
+  // Fix the message marking as read functionality by implementing batching
+  // Add this helper function to batch updates
+  const updateMessagesInBatches = async (messageIds: string[]) => {
+    // Process in smaller batches to avoid URL length limits
+    const BATCH_SIZE = 10;
+    const batches = [];
+
+    for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+      const batch = messageIds.slice(i, i + BATCH_SIZE);
+      batches.push(batch);
+    }
+
+    try {
+      // Process each batch sequentially
+      for (const batchIds of batches) {
+        await supabase
+          .from("messages")
+          .update({ is_read: true })
+          .in("id", batchIds);
+      }
+      return true;
+    } catch (error) {
+      console.error("Error updating message read status:", error);
+      return false;
+    }
+  };
+
+  // Then modify the fetchMessages function to use this batched approach:
   const fetchMessages = useCallback(
     async (orderId: string) => {
       if (!orderId) return;
@@ -257,17 +284,15 @@ function ChatPage() {
 
         setMessages(data || []);
 
-        // Mark messages as read
+        // Mark messages as read using batched approach
         const unreadIds =
           data
             ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
             .map((m) => m.id) || [];
 
         if (unreadIds.length > 0) {
-          await supabase
-            .from("messages")
-            .update({ is_read: true })
-            .in("id", unreadIds);
+          // Use the batched update function instead of a single update
+          await updateMessagesInBatches(unreadIds);
         }
       } catch (err) {
         console.error("Error fetching messages:", err);
