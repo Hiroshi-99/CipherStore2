@@ -468,11 +468,68 @@ function ChatPage() {
     }
   };
 
-  // Enhanced file upload function
+  // Add this fallback upload function
+  const uploadImageToSupabaseDirectly = async (
+    file: File,
+    fileName: string
+  ): Promise<string | null> => {
+    try {
+      // Upload directly to Supabase storage
+      const { data, error } = await supabase.storage
+        .from("images")
+        .upload(`uploads/${fileName}`, file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (error) {
+        console.error("Error uploading to Supabase storage:", error);
+        return null;
+      }
+
+      // Get the public URL
+      const { data: urlData } = supabase.storage
+        .from("images")
+        .getPublicUrl(`uploads/${fileName}`);
+
+      return urlData.publicUrl;
+    } catch (err) {
+      console.error("Error in direct Supabase upload:", err);
+      return null;
+    }
+  };
+
+  // Add this local upload function for testing
+  const uploadImageLocally = async (file: File): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // This is a data URL that can be used directly in img src
+        resolve(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Update the uploadImageFile function to include the local option
   const uploadImageFile = async (file: File): Promise<string | null> => {
     try {
       // Show upload progress
       toast.loading("Uploading image...");
+
+      // For testing, use local upload
+      if (import.meta.env.DEV) {
+        const localUrl = await uploadImageLocally(file);
+        toast.success("Image uploaded locally (development mode)");
+        return localUrl;
+      }
+
+      // Get the current session for authentication
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        toast.error("You must be logged in to upload files");
+        return null;
+      }
 
       // Generate a unique file name
       const fileName = `${Date.now()}-${file.name.replace(
@@ -480,24 +537,50 @@ function ChatPage() {
         "_"
       )}`;
 
-      // Upload the file
-      const { data, error } = await uploadImage(file, fileName);
+      // Try the Netlify function first
+      try {
+        // Include the auth token in the upload request
+        const { data, error } = await uploadImage(
+          file,
+          fileName,
+          sessionData.session.access_token
+        );
 
-      if (error) {
-        console.error("Error uploading image:", error);
+        if (!error) {
+          // Get the public URL
+          const imageUrl = data?.path
+            ? `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${
+                data.path
+              }`
+            : null;
+
+          toast.success("Image uploaded successfully");
+          return imageUrl;
+        }
+
+        // If there's an error, log it but continue to the fallback
+        console.error(
+          "Error with Netlify function upload, trying fallback:",
+          error
+        );
+      } catch (netlifyError) {
+        console.error(
+          "Netlify function upload failed, trying fallback:",
+          netlifyError
+        );
+      }
+
+      // Fallback to direct Supabase upload
+      console.log("Using fallback upload method");
+      const directUrl = await uploadImageToSupabaseDirectly(file, fileName);
+
+      if (directUrl) {
+        toast.success("Image uploaded successfully (fallback method)");
+        return directUrl;
+      } else {
         toast.error("Failed to upload image. Please try again.");
         return null;
       }
-
-      // Get the public URL
-      const imageUrl = data?.path
-        ? `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${
-            data.path
-          }`
-        : null;
-
-      toast.success("Image uploaded successfully");
-      return imageUrl;
     } catch (err) {
       console.error("Error in uploadImageFile:", err);
       toast.error("An error occurred while uploading the image");
