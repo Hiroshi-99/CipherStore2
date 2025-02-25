@@ -71,6 +71,7 @@ function ChatPage() {
   const [lastScrollTop, setLastScrollTop] = useState(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [newMessagesBelowViewport, setNewMessagesBelowViewport] = useState(0);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
   // Authentication check
   useEffect(() => {
@@ -530,33 +531,33 @@ function ChatPage() {
       setImagePreview(null);
 
       // Send to database
-      try {
-        const { data, error } = await supabase
-          .from("messages")
-          .insert([
-            {
-              content: newMessage.trim(),
-              order_id: selectedOrderId,
-              user_id: user.id,
-              is_admin: isAdmin,
-              image_url: imageUrl,
-              user_name: userName,
-              user_avatar: userAvatar,
-            },
-          ])
-          .select()
-          .single();
+      const { data, error } = await supabase
+        .from("messages")
+        .insert([
+          {
+            content: newMessage.trim(),
+            order_id: selectedOrderId,
+            user_id: user.id,
+            is_admin: isAdmin,
+            image_url: imageUrl,
+            user_name: userName,
+            user_avatar: userAvatar,
+          },
+        ])
+        .select()
+        .single();
 
-        if (error) throw error;
+      if (error) throw error;
 
-        // Replace optimistic message with real one
-        setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
+      // Replace optimistic message with real one
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
 
-        // Clear pending message
-        pendingMessages.current.delete(tempId);
-      } catch (err) {
-        console.error("Error sending message:", err);
-        toast.error("Failed to send message. Message saved as draft.");
+      // Clear pending message
+      pendingMessages.current.delete(tempId);
+
+      // Play a sound when message is successfully sent
+      if (!isAdmin) {
+        playMessageSound();
       }
     } catch (err) {
       console.error("Error in handleSendMessage:", err);
@@ -827,10 +828,8 @@ function ChatPage() {
               if (exists) return prev;
 
               // Play sound if tab is not focused
-              if (!isTabFocused && messageSound.current) {
-                messageSound.current
-                  .play()
-                  .catch((err) => console.log("Error playing sound:", err));
+              if (!isTabFocused) {
+                playMessageSound();
               }
 
               // Add the new message
@@ -1071,19 +1070,83 @@ function ChatPage() {
     );
   };
 
-  // Add this component to your messages container
-  <div 
-    className="flex-1 overflow-y-auto p-4 relative" 
-    ref={messagesContainerRef}
-  >
-    {/* ... existing content ... */}
+  // 1. First, add this function to initialize the sound with user interaction
+  const initializeSound = () => {
+    if (!messageSound.current) {
+      // Create the audio element
+      messageSound.current = new Audio();
+      
+      // Use a base64 encoded short sound to avoid needing an external file
+      // This is a simple "ding" sound encoded as base64
+      messageSound.current.src = "data:audio/mp3;base64,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";
+      
+      // Set volume
+      messageSound.current.volume = 0.5;
+      
+      // Preload the sound
+      messageSound.current.load();
+      
+      console.log("Sound initialized");
+    }
+  };
+
+  // 2. Add this function to play the sound with error handling
+  const playMessageSound = () => {
+    if (!soundEnabled) return;
     
-    {/* Scroll to bottom button */}
-    <ScrollToBottomButton />
+    if (!messageSound.current) {
+      initializeSound();
+    }
     
-    {/* New messages indicator */}
-    <NewMessagesIndicator />
-  </div>
+    if (messageSound.current) {
+      // Reset the audio to the beginning
+      messageSound.current.currentTime = 0;
+      
+      // Play with error handling
+      messageSound.current.play().catch(err => {
+        console.log("Error playing sound:", err);
+        
+        // If autoplay is blocked, we need user interaction
+        if (err.name === 'NotAllowedError') {
+          console.log("Autoplay blocked. Sound will be enabled on next user interaction.");
+        }
+      });
+    }
+  };
+
+  // 3. Update the useEffect to initialize sound on user interaction
+  useEffect(() => {
+    // Initialize sound on first user interaction
+    const handleUserInteraction = () => {
+      initializeSound();
+      // Remove the event listeners after first interaction
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+    };
+    
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('keydown', handleUserInteraction);
+    
+    return () => {
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+    };
+  }, []);
+
+  // Add this function to toggle sound
+  const toggleSound = () => {
+    setSoundEnabled(!soundEnabled);
+    
+    // Initialize sound if not already done
+    if (!messageSound.current) {
+      initializeSound();
+    }
+    
+    // Play a test sound when enabling
+    if (!soundEnabled) {
+      playMessageSound();
+    }
+  };
 
   if (fallbackMode) {
     return (
@@ -1452,6 +1515,26 @@ function ChatPage() {
                     </span>
                   </div>
                 )}
+
+                {/* Sound toggle button */}
+                <button
+                  type="button"
+                  onClick={toggleSound}
+                  className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
+                  title={soundEnabled ? "Mute notifications" : "Enable notifications"}
+                >
+                  {soundEnabled ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M12 6a9 9 0 010 12m-4.5-9.5v3a2 2 0 002 2h3" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                    </svg>
+                  )}
+                </button>
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center">
