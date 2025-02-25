@@ -337,53 +337,57 @@ export async function getAllUsersClientSide() {
       };
     }
 
-    // Try to get other users if possible
-    let otherUsers = [];
-    try {
-      // Try to get users from the auth API if possible
-      const { data: authUsers, error: authError } =
-        await supabase.auth.admin.listUsers();
+    // Get all users from the users table
+    const { data: dbUsers, error: usersError } = await supabase
+      .from("users")
+      .select("*");
 
-      if (!authError && authUsers) {
-        otherUsers = authUsers.users.map((u) => ({
-          id: u.id,
-          email: u.email || "",
-          fullName: u.user_metadata?.full_name || "",
-          isAdmin: u.user_metadata?.role === "admin",
-          lastSignIn: u.last_sign_in_at,
-          createdAt: u.created_at,
-        }));
-      }
-    } catch (usersError) {
-      console.error("Could not fetch other users:", usersError);
+    if (usersError) {
+      console.error("Error fetching users:", usersError);
       // Continue with just the current user
     }
 
-    // Always include the current user
-    const userData = [
-      {
+    // Get all admin users
+    const { data: adminUsers, error: adminError } = await supabase
+      .from("admin_users")
+      .select("user_id");
+
+    if (adminError) {
+      console.error("Error fetching admin users:", adminError);
+    }
+
+    // Create a set of admin user IDs for quick lookup
+    const adminUserIds = new Set(
+      (adminUsers || []).map((admin) => admin.user_id)
+    );
+
+    // Format users with admin status
+    const formattedUsers = (dbUsers || []).map((dbUser) => ({
+      id: dbUser.id,
+      email: dbUser.email || "",
+      fullName: dbUser.full_name || "",
+      isAdmin: adminUserIds.has(dbUser.id),
+      lastSignIn: dbUser.last_sign_in,
+      createdAt: dbUser.created_at,
+    }));
+
+    // Always include the current user if not already in the list
+    const currentUserInList = formattedUsers.some((u) => u.id === user.id);
+
+    if (!currentUserInList) {
+      formattedUsers.push({
         id: user.id,
         email: user.email || "",
         fullName: user.user_metadata?.full_name || "",
         isAdmin: true, // Current user is admin (we checked above)
         lastSignIn: null,
         createdAt: user.created_at,
-      },
-    ];
-
-    // Add other users if we found any
-    if (otherUsers.length > 0) {
-      // Filter out duplicates (in case current user is in the list)
-      const otherUniqueUsers = otherUsers.filter((u) => u.id !== user.id);
-      return {
-        success: true,
-        data: [...userData, ...otherUniqueUsers],
-      };
+      });
     }
 
     return {
       success: true,
-      data: userData,
+      data: formattedUsers,
     };
   } catch (err) {
     console.error("Error in getAllUsersClientSide:", err);
