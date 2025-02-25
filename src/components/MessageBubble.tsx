@@ -23,6 +23,12 @@ export const MessageBubble = React.memo(function MessageBubble({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
 
+  const isAdmin = message.is_admin;
+
+  // Ensure user_name and user_avatar have fallback values
+  const userName = message.user_name || (isAdmin ? "Support" : "User");
+  const userAvatar = message.user_avatar || "";
+
   // Format timestamp as relative time
   const relativeTime = formatDistanceToNow(new Date(message.created_at), {
     addSuffix: true,
@@ -31,31 +37,34 @@ export const MessageBubble = React.memo(function MessageBubble({
   return (
     <div
       className={`flex items-start gap-3 ${
-        message.is_admin ? "justify-start" : "justify-end"
+        isAdmin ? "justify-start" : "justify-end"
       } ${isLatest && sending ? "opacity-50" : ""} ${
         isUnread ? "animate-highlight-fade" : ""
       }`}
       aria-live={isLatest ? "polite" : "off"}
     >
-      {message.is_admin && (
-        <img
-          src={message.user_avatar || "/default-avatar.png"}
-          alt={`${message.user_name}'s avatar`}
-          className="w-8 h-8 rounded-full"
-          loading="lazy"
-          width={32}
-          height={32}
-        />
+      {isAdmin && (
+        <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm overflow-hidden">
+          {userAvatar ? (
+            <img
+              src={userAvatar}
+              alt={userName}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            userName.charAt(0).toUpperCase()
+          )}
+        </div>
       )}
       <div
         className={`max-w-[70%] ${
-          message.is_admin ? "bg-white/10" : "bg-emerald-500/20"
+          isAdmin
+            ? "bg-blue-500/20 text-blue-100"
+            : "bg-emerald-500/20 text-emerald-100"
         } rounded-lg p-3 relative group`}
       >
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-medium text-white/90">
-            {message.user_name}
-          </span>
+          <span className="text-sm font-medium text-white/90">{userName}</span>
           <span
             className="text-xs text-white/50"
             title={new Date(message.created_at).toLocaleString()}
@@ -127,15 +136,18 @@ export const MessageBubble = React.memo(function MessageBubble({
           </div>
         )}
       </div>
-      {!message.is_admin && (
-        <img
-          src={message.user_avatar || "/default-avatar.png"}
-          alt={`${message.user_name}'s avatar`}
-          className="w-8 h-8 rounded-full"
-          loading="lazy"
-          width={32}
-          height={32}
-        />
+      {!isAdmin && (
+        <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white text-sm overflow-hidden">
+          {userAvatar ? (
+            <img
+              src={userAvatar}
+              alt={userName}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            userName.charAt(0).toUpperCase()
+          )}
+        </div>
       )}
     </div>
   );

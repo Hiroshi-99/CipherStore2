@@ -378,13 +378,24 @@ function ChatPage() {
           throw messagesError;
         }
 
+        // Process messages to ensure they have user_name and user_avatar
+        const processedMessages = (data || []).map((message) => {
+          // If message is missing user_name or user_avatar, add default values
+          return {
+            ...message,
+            user_name:
+              message.user_name || (message.is_admin ? "Support" : "User"),
+            user_avatar: message.user_avatar || "",
+          };
+        });
+
         // Set messages even if marking as read fails
-        setMessages(data || []);
+        setMessages(processedMessages);
 
         // Try to mark messages as read, but don't fail if it doesn't work
         try {
           const unreadIds =
-            data
+            processedMessages
               ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
               .map((m) => m.id) || [];
 
@@ -451,7 +462,7 @@ function ChatPage() {
     setSending(true);
 
     try {
-      let imageUrl: string | undefined;
+      let imageUrl: string | null = null;
 
       // Upload image if selected
       if (selectedImage) {
@@ -465,11 +476,21 @@ function ChatPage() {
         }
       }
 
+      // Get user profile information
+      const userName =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email?.split("@")[0] ||
+        "User";
+
+      const userAvatar =
+        user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
+
       // Create a temporary ID for optimistic UI
       const tempId = `temp-${Date.now()}`;
 
-      // Add optimistic message
-      const optimisticMessage = {
+      // Add optimistic message with complete profile info
+      const optimisticMessage: Message = {
         id: tempId,
         content: newMessage.trim(),
         order_id: selectedOrderId,
@@ -477,9 +498,9 @@ function ChatPage() {
         is_admin: isAdmin,
         created_at: new Date().toISOString(),
         is_read: false,
-        image_url: imageUrl || null,
-        user_name: user.user_metadata?.full_name || user.email || "User",
-        user_avatar: user.user_metadata?.avatar_url || null,
+        image_url: imageUrl,
+        user_name: userName,
+        user_avatar: userAvatar || "",
       };
 
       // Add to messages
@@ -489,6 +510,8 @@ function ChatPage() {
       pendingMessages.current.set(tempId, {
         content: newMessage.trim(),
         image_url: imageUrl,
+        user_name: userName,
+        user_avatar: userAvatar,
       });
 
       // Clear input
@@ -507,6 +530,8 @@ function ChatPage() {
               user_id: user.id,
               is_admin: isAdmin,
               image_url: imageUrl,
+              user_name: userName,
+              user_avatar: userAvatar,
             },
           ])
           .select()
@@ -539,6 +564,20 @@ function ChatPage() {
     setSending(true);
 
     try {
+      // Get user profile information
+      const userName =
+        pendingMessage.user_name ||
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email?.split("@")[0] ||
+        "User";
+
+      const userAvatar =
+        pendingMessage.user_avatar ||
+        user.user_metadata?.avatar_url ||
+        user.user_metadata?.picture ||
+        null;
+
       // Send to database
       const { data, error } = await supabase
         .from("messages")
@@ -549,6 +588,8 @@ function ChatPage() {
             user_id: user.id,
             is_admin: isAdmin,
             image_url: pendingMessage.image_url,
+            user_name: userName,
+            user_avatar: userAvatar,
           },
         ])
         .select()
@@ -675,6 +716,72 @@ function ChatPage() {
     } catch (err) {
       console.error("Error checking admin status:", err);
       return false;
+    }
+  };
+
+  // Add this function to create a minimal database schema if needed
+  const createMinimalSchema = async () => {
+    try {
+      // Check if we have permission to create tables
+      const { error: rpcError } = await supabase.rpc("check_admin_permission");
+
+      if (rpcError) {
+        console.error("No permission to create tables:", rpcError);
+        setFallbackMode(true);
+        return;
+      }
+
+      // Try to create messages table
+      const createMessagesSQL = `
+        CREATE TABLE IF NOT EXISTS public.messages (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          content TEXT NOT NULL,
+          order_id UUID NOT NULL,
+          user_id UUID NOT NULL,
+          is_admin BOOLEAN DEFAULT false,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          is_read BOOLEAN DEFAULT false,
+          image_url TEXT,
+          user_name TEXT,
+          user_avatar TEXT
+        );
+      `;
+
+      // Try to create orders table
+      const createOrdersSQL = `
+        CREATE TABLE IF NOT EXISTS public.orders (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          user_id UUID NOT NULL,
+          full_name TEXT NOT NULL,
+          email TEXT,
+          status TEXT DEFAULT 'pending',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `;
+
+      // Execute SQL (this requires admin privileges)
+      const { error: createMessagesError } = await supabase.rpc("execute_sql", {
+        sql: createMessagesSQL,
+      });
+
+      const { error: createOrdersError } = await supabase.rpc("execute_sql", {
+        sql: createOrdersSQL,
+      });
+
+      if (createMessagesError || createOrdersError) {
+        console.error(
+          "Error creating tables:",
+          createMessagesError || createOrdersError
+        );
+        setFallbackMode(true);
+      } else {
+        console.log("Successfully created minimal schema");
+        // Refresh the page to use the new tables
+        window.location.reload();
+      }
+    } catch (err) {
+      console.error("Error creating minimal schema:", err);
+      setFallbackMode(true);
     }
   };
 
