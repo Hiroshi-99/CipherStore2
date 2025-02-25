@@ -8,8 +8,6 @@ interface AccountDetails {
   name: string;
   accountId: string;
   password: string;
-  characterId?: string;
-  loginMethod?: string;
   viewed: boolean;
 }
 
@@ -79,21 +77,10 @@ const AccountDetailsView: React.FC<AccountDetailsViewProps> = ({
           <label className="block text-gray-600 mb-2">Password:</label>
           <div className="flex items-center">
             <div className="flex-1 bg-white p-3 rounded border border-gray-200">
-              {account.loginMethod ? (
-                <span>Use login method: {account.loginMethod}</span>
-              ) : (
-                account.password
-              )}
+              {account.password}
             </div>
             <button
-              onClick={() =>
-                copyToClipboard(
-                  account.loginMethod
-                    ? `Use login method: ${account.loginMethod}`
-                    : account.password,
-                  "Password"
-                )
-              }
+              onClick={() => copyToClipboard(account.password, "Password")}
               className="ml-2 p-2 bg-gray-200 hover:bg-gray-300 rounded transition-colors"
               title="Copy to clipboard"
             >
@@ -105,32 +92,6 @@ const AccountDetailsView: React.FC<AccountDetailsViewProps> = ({
             </button>
           </div>
         </div>
-
-        {(account.characterId || account.characterId === "") && (
-          <div>
-            <label className="block text-gray-600 mb-2">Character ID:</label>
-            <div className="flex items-center">
-              <div className="flex-1 bg-white p-3 rounded border border-gray-200 font-mono">
-                {account.characterId || "Not specified"}
-              </div>
-              {account.characterId && (
-                <button
-                  onClick={() =>
-                    copyToClipboard(account.characterId!, "Character ID")
-                  }
-                  className="ml-2 p-2 bg-gray-200 hover:bg-gray-300 rounded transition-colors"
-                  title="Copy to clipboard"
-                >
-                  {copiedField === "Character ID" ? (
-                    <Check size={20} className="text-green-500" />
-                  ) : (
-                    <Copy size={20} className="text-gray-600" />
-                  )}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {onClose && (

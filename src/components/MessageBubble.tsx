@@ -37,7 +37,9 @@ export const MessageBubble = React.memo(function MessageBubble({
   });
 
   // First, check if the message is an account details message
-  const isAccountDetails = message.is_account_details;
+  const isAccountDetails =
+    message.is_account_details ||
+    message.content.includes("**Account Details**");
 
   return (
     <div

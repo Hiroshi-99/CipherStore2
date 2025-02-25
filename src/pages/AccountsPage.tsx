@@ -125,7 +125,10 @@ function AccountsPage() {
       if (!orderError && orderData?.account_metadata) {
         return {
           ...account,
-          account_details: orderData.account_metadata,
+          account_details: {
+            accountId: orderData.account_metadata.accountId || "",
+            password: orderData.account_metadata.password || "",
+          },
         };
       }
 
@@ -139,8 +142,6 @@ function AccountsPage() {
           account_details: {
             accountId: data.accountId || data.email || data.username || "",
             password: data.password || "",
-            characterId: data.characterId || data.character_id || "",
-            loginMethod: data.loginMethod || data.login_method || "",
           },
         };
       }
@@ -152,9 +153,7 @@ function AccountsPage() {
           accountId: account.name.includes("#")
             ? `account${account.name.split("#")[1]}@example.com`
             : "",
-          password: "Use login method: Receive code from email",
-          characterId: "",
-          loginMethod: "Receive code from email",
+          password: "Please contact support for password",
         },
       };
     } catch (error) {
@@ -310,8 +309,6 @@ function AccountsPage() {
                     name: selectedAccount.name,
                     accountId: selectedAccount.account_details?.accountId || "",
                     password: selectedAccount.account_details?.password || "",
-                    characterId: selectedAccount.account_details?.characterId,
-                    loginMethod: selectedAccount.account_details?.loginMethod,
                     viewed: selectedAccount.viewed,
                   }}
                   onClose={() => setSelectedAccount(null)}

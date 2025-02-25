@@ -36,7 +36,7 @@ import PageContainer from "../components/PageContainer";
 import { motion, AnimatePresence } from "framer-motion";
 import { useOrderFilters } from "../hooks/useOrderFilters";
 import type { Order } from "../hooks/useOrderFilters";
-import { uuidCache } from "../utils/uuidUtils";
+import { safeUpdate } from "../lib/database";
 
 interface Admin {
   id: string;
@@ -51,7 +51,7 @@ type DateRange = {
 };
 
 // Add batch action types
-type BatchAction = "approve" | "reject" | "export" | "delete" | "clear-history";
+type BatchAction = "approve" | "reject" | "export" | "delete";
 
 // Add this interface for account details
 interface AccountDetails {
@@ -127,62 +127,6 @@ function AdminPage() {
     clearFilters: clearFilteredFilters,
   } = useOrderFilters(orders);
 
-  // Add useMemo for filtered orders to improve performance
-  const filteredAndSortedOrders = useMemo(() => {
-    return filteredOrders.slice().sort((a, b) => {
-      // Sort by selected order first
-      if (a.id === selectedOrderId) return -1;
-      if (b.id === selectedOrderId) return 1;
-
-      // Then sort by status (pending first)
-      if (a.status === "pending" && b.status !== "pending") return -1;
-      if (a.status !== "pending" && b.status === "pending") return 1;
-
-      // Then sort by date (newest first)
-      return (
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-    });
-  }, [filteredOrders, selectedOrderId]);
-
-  // Add virtualization for large lists
-  const renderVirtualizedList = () => {
-    return (
-      <div
-        className="space-y-4 overflow-auto"
-        style={{ maxHeight: "calc(100vh - 300px)" }}
-      >
-        {filteredAndSortedOrders.map((order) => (
-          <OrderItem
-            key={order.id}
-            order={order}
-            onPaymentAction={handlePaymentAction}
-            onImageView={(imageUrl) => {
-              setCurrentImageUrl(imageUrl);
-              setShowImageModal(true);
-            }}
-            onFileUpload={handleFileUpload}
-            isSelected={selectedOrders.has(order.id)}
-            onSelect={(selected) => {
-              setSelectedOrders((prev) => {
-                const next = new Set(prev);
-                if (selected) {
-                  next.add(order.id);
-                } else {
-                  next.delete(order.id);
-                }
-                return next;
-              });
-            }}
-            actionInProgress={actionInProgress}
-            onApprove={handleApprove}
-            onClearHistory={handleClearChatHistory}
-          />
-        ))}
-      </div>
-    );
-  };
-
   // Define handleApprove early in the component
   const handleApprove = useCallback(
     async (orderId: string) => {
@@ -192,10 +136,12 @@ function AdminPage() {
         setActionInProgress(orderId);
 
         // Update order status directly without prompting for file upload
-        const { error } = await supabase
-          .from("orders")
-          .update({ status: "approved" })
-          .eq("id", orderId);
+        const { error } = await safeUpdate(
+          "orders",
+          { status: "approved" },
+          "id",
+          orderId
+        );
 
         if (error) throw error;
 
@@ -389,86 +335,39 @@ function AdminPage() {
     );
   }, []);
 
-  // Add a function to export orders as CSV
-  const exportOrdersAsCSV = (orders: Order[]) => {
-    // Create CSV header
-    const headers = [
-      "ID",
-      "Name",
-      "Email",
-      "Status",
-      "Created At",
-      "Messages Count",
-    ];
+  // Add export function
+  const handleExport = useCallback(() => {
+    const csv = [
+      [
+        "Order ID",
+        "Name",
+        "Email",
+        "Status",
+        "Date",
+        "Has Account File",
+        "Messages",
+      ],
+      ...filteredOrders.map((order) => [
+        order.id,
+        order.full_name,
+        order.email,
+        order.status,
+        new Date(order.created_at).toLocaleString(),
+        order.account_file_url ? "Yes" : "No",
+        order.messages?.length || 0,
+      ]),
+    ]
+      .map((row) => row.join(","))
+      .join("\n");
 
-    // Create CSV rows
-    const rows = orders.map((order) => [
-      order.id,
-      order.full_name,
-      order.email,
-      order.status,
-      new Date(order.created_at).toLocaleString(),
-      order.messages?.length || 0,
-    ]);
-
-    // Combine header and rows
-    const csvContent = [
-      headers.join(","),
-      ...rows.map((row) => row.join(",")),
-    ].join("\n");
-
-    // Create a blob and download link
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute(
-      "download",
-      `orders-export-${new Date().toISOString().split("T")[0]}.csv`
-    );
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Update the handleExport function
-  const handleExport = () => {
-    const ordersToExport =
-      selectedOrders.size > 0
-        ? filteredOrders.filter((order) => selectedOrders.has(order.id))
-        : filteredOrders;
-
-    exportOrdersAsCSV(ordersToExport);
-
-    toast.success(`Exported ${ordersToExport.length} orders to CSV`, {
-      duration: 3000,
-    });
-  };
-
-  // Add a function to bulk update order statuses
-  const bulkUpdateOrderStatus = async (orderIds: string[], status: string) => {
-    try {
-      const { error } = await supabase
-        .from("orders")
-        .update({ status })
-        .in("id", orderIds);
-
-      if (error) throw error;
-
-      // Update local state
-      setOrders((prev) =>
-        prev.map((order) =>
-          orderIds.includes(order.id) ? { ...order, status } : order
-        )
-      );
-
-      return true;
-    } catch (error) {
-      console.error(`Error updating orders to ${status}:`, error);
-      return false;
-    }
-  };
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `orders-${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  }, [filteredOrders]);
 
   // Add stats display component
   const StatsDisplay = () => (
@@ -552,17 +451,15 @@ function AdminPage() {
                 { id: toastId, duration: 5000 }
               );
             }
-
-            // Clear selection
-            setSelectedOrders(new Set());
           } catch (error) {
             console.error("Error approving orders:", error);
             toast.error("Failed to approve orders. Please try again.", {
               id: toastId,
             });
-          } finally {
-            setIsBatchProcessing(false);
           }
+
+          // Clear selection
+          setSelectedOrders(new Set());
 
           break;
         }
@@ -585,56 +482,6 @@ function AdminPage() {
         case "delete": {
           if (!window.confirm(`Delete ${selectedOrders.size} orders?`)) return;
           // Implement delete logic here
-          break;
-        }
-        case "clear-history": {
-          if (selectedOrders.size === 0) {
-            toast.error("No orders selected");
-            return;
-          }
-
-          // Get selected order IDs
-          const orderIds = Array.from(selectedOrders);
-
-          // Show loading toast
-          const toastId = toast.loading(
-            `Clearing chat history for ${orderIds.length} orders...`
-          );
-
-          try {
-            // Delete all messages for these orders
-            const { error } = await supabase
-              .from("messages")
-              .delete()
-              .in("order_id", orderIds);
-
-            if (error) throw error;
-
-            // Update local state to reflect the cleared chat
-            setOrders((prev) =>
-              prev.map((order) =>
-                selectedOrders.has(order.id)
-                  ? { ...order, messages: [] }
-                  : order
-              )
-            );
-
-            toast.success(
-              `Chat history cleared for ${orderIds.length} orders!`,
-              { id: toastId }
-            );
-
-            // Clear selection
-            setSelectedOrders(new Set());
-          } catch (error) {
-            console.error("Error clearing chat history:", error);
-            toast.error("Failed to clear chat history. Please try again.", {
-              id: toastId,
-            });
-          } finally {
-            setIsBatchProcessing(false);
-          }
-
           break;
         }
       }
@@ -714,7 +561,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Update the handleAccountDetailsUpload function to use async UUID generation
+  // Simplified version that only sends a message without updating order metadata
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -763,12 +610,8 @@ function AdminPage() {
 Please keep these details secure. You can copy them by selecting the text.
       `.trim();
 
-      // Generate a proper UUID for the message
-      const messageId = await uuidCache.getUUID();
-
       // Create a message to send the account details
       const { error: messageError } = await supabase.from("messages").insert({
-        id: messageId, // Use the generated UUID
         order_id: selectedOrder.id,
         user_id: userData?.user?.id,
         content: formattedMessage,
@@ -776,7 +619,6 @@ Please keep these details secure. You can copy them by selecting the text.
         created_at: new Date().toISOString(),
         user_name: userName,
         user_avatar: userAvatar,
-        is_account_details: true,
       });
 
       if (messageError) {
@@ -803,555 +645,6 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
-  // Add this function to the AdminPage component to clear chat history
-  const handleClearChatHistory = async (orderId: string) => {
-    try {
-      if (!orderId || actionInProgress) return;
-
-      setActionInProgress(`clear-${orderId}`);
-      const toastId = toast.loading("Clearing chat history...");
-
-      // Delete all messages for this order
-      const { error } = await supabase
-        .from("messages")
-        .delete()
-        .eq("order_id", orderId);
-
-      if (error) {
-        console.error("Error clearing chat history:", error);
-        toast.error("Failed to clear chat history", { id: toastId });
-        return;
-      }
-
-      // Update local state to reflect the cleared chat
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === orderId ? { ...order, messages: [] } : order
-        )
-      );
-
-      toast.success("Chat history cleared successfully", { id: toastId });
-    } catch (err) {
-      console.error("Error clearing chat history:", err);
-      toast.error("Failed to clear chat history");
-    } finally {
-      setActionInProgress(null);
-    }
-  };
-
-  // Add a dashboard summary at the top
-  const renderDashboardSummary = () => {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 p-4 rounded-lg border border-blue-500/30">
-          <h3 className="text-blue-300 text-sm font-medium">Total Orders</h3>
-          <p className="text-white text-2xl font-bold">{stats.total}</p>
-        </div>
-        <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 p-4 rounded-lg border border-yellow-500/30">
-          <h3 className="text-yellow-300 text-sm font-medium">Pending</h3>
-          <p className="text-white text-2xl font-bold">{stats.pending}</p>
-        </div>
-        <div className="bg-gradient-to-br from-green-500/20 to-green-600/20 p-4 rounded-lg border border-green-500/30">
-          <h3 className="text-green-300 text-sm font-medium">Approved</h3>
-          <p className="text-white text-2xl font-bold">{stats.approved}</p>
-        </div>
-        <div className="bg-gradient-to-br from-red-500/20 to-red-600/20 p-4 rounded-lg border border-red-500/30">
-          <h3 className="text-red-300 text-sm font-medium">Rejected</h3>
-          <p className="text-white text-2xl font-bold">{stats.rejected}</p>
-        </div>
-      </div>
-    );
-  };
-
-  // Improve the search and filter UI
-  const renderSearchAndFilters = () => {
-    return (
-      <div className="bg-gray-800 p-4 rounded-lg mb-6">
-        <div className="flex flex-wrap items-center gap-4 mb-4">
-          <div className="flex-1 min-w-[200px]">
-            <div className="relative">
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setFilteredSearchTerm(e.target.value);
-
-                  // Debounce search
-                  if (searchDebounceRef.current) {
-                    clearTimeout(searchDebounceRef.current);
-                  }
-                  searchDebounceRef.current = setTimeout(() => {
-                    // Additional search logic if needed
-                  }, 300);
-                }}
-                placeholder="Search by name or email..."
-                className="w-full p-2 pl-10 bg-gray-700 border border-gray-600 rounded-md text-white"
-              />
-              <Search
-                className="absolute left-3 top-2.5 text-gray-400"
-                size={18}
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md flex items-center gap-2"
-          >
-            <Filter size={18} />
-            Filters
-            <span
-              className={`transition-transform ${
-                showFilters ? "rotate-180" : ""
-              }`}
-            >
-              ▼
-            </span>
-          </button>
-
-          <div className="relative">
-            <button
-              onClick={() => setShowBatchActions(!showBatchActions)}
-              disabled={selectedOrders.size === 0 || isBatchProcessing}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Batch Actions ({selectedOrders.size})
-              <span
-                className={`transition-transform ${
-                  showBatchActions ? "rotate-180" : ""
-                }`}
-              >
-                ▼
-              </span>
-            </button>
-
-            {showBatchActions && (
-              <div className="absolute top-full left-0 mt-1 w-48 bg-gray-800 rounded-md shadow-lg z-10">
-                <button
-                  onClick={() => handleBatchAction("approve")}
-                  disabled={isBatchProcessing}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
-                >
-                  <CheckCircle size={16} className="text-green-400" />
-                  Approve
-                </button>
-                <button
-                  onClick={() => handleBatchAction("reject")}
-                  disabled={isBatchProcessing}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
-                >
-                  <XCircle size={16} className="text-red-400" />
-                  Reject
-                </button>
-                <button
-                  onClick={() => handleBatchAction("export")}
-                  disabled={isBatchProcessing}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
-                >
-                  <Download size={16} className="text-blue-400" />
-                  Export
-                </button>
-                <button
-                  onClick={() => handleBatchAction("clear-history")}
-                  disabled={isBatchProcessing}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2"
-                >
-                  <RefreshCw size={16} className="text-yellow-400" />
-                  Clear Chat History
-                </button>
-                <button
-                  onClick={() => handleBatchAction("delete")}
-                  disabled={isBatchProcessing}
-                  className="w-full text-left px-4 py-2 hover:bg-gray-700 text-white flex items-center gap-2 border-t border-gray-600"
-                >
-                  <XCircle size={16} className="text-red-400" />
-                  Delete
-                </button>
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={() => fetchOrders()}
-            className="p-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md"
-            title="Refresh"
-          >
-            <RefreshCw size={18} className={refreshing ? "animate-spin" : ""} />
-          </button>
-        </div>
-
-        {showFilters && (
-          <div className="bg-gray-700 p-4 rounded-md space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-gray-300 text-sm mb-1">
-                  Status
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {["all", "pending", "approved", "rejected"].map((status) => (
-                    <button
-                      key={status}
-                      onClick={() => {
-                        setFilter(status as any);
-                        setFilteredSelectedStatuses(
-                          status === "all" ? [] : [status]
-                        );
-                      }}
-                      className={`px-3 py-1 rounded-md text-sm ${
-                        filter === status
-                          ? "bg-blue-500 text-white"
-                          : "bg-gray-600 text-gray-300 hover:bg-gray-500"
-                      }`}
-                    >
-                      {status.charAt(0).toUpperCase() + status.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-gray-300 text-sm mb-1">
-                  Date Range
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="date"
-                    value={
-                      filteredDateRange.start?.toISOString().split("T")[0] || ""
-                    }
-                    onChange={(e) => {
-                      const date = e.target.value
-                        ? new Date(e.target.value)
-                        : null;
-                      setFilteredDateRange({
-                        ...filteredDateRange,
-                        start: date,
-                      });
-                    }}
-                    className="p-2 bg-gray-600 border border-gray-500 rounded-md text-white text-sm"
-                  />
-                  <input
-                    type="date"
-                    value={
-                      filteredDateRange.end?.toISOString().split("T")[0] || ""
-                    }
-                    onChange={(e) => {
-                      const date = e.target.value
-                        ? new Date(e.target.value)
-                        : null;
-                      setFilteredDateRange({ ...filteredDateRange, end: date });
-                    }}
-                    className="p-2 bg-gray-600 border border-gray-500 rounded-md text-white text-sm"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-gray-300 text-sm mb-1">
-                  Sort By
-                </label>
-                <div className="flex gap-2">
-                  <select
-                    value={filteredSortBy}
-                    onChange={(e) => setFilteredSortBy(e.target.value as any)}
-                    className="p-2 bg-gray-600 border border-gray-500 rounded-md text-white"
-                  >
-                    <option value="date">Date</option>
-                    <option value="status">Status</option>
-                    <option value="name">Name</option>
-                  </select>
-                  <button
-                    onClick={() => toggleFilteredSort()}
-                    className="p-2 bg-gray-600 hover:bg-gray-500 rounded-md"
-                  >
-                    {filteredSortOrder === "asc" ? (
-                      <SortAsc size={18} className="text-white" />
-                    ) : (
-                      <SortDesc size={18} className="text-white" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  clearFilteredFilters();
-                  setFilter("all");
-                  setSearchTerm("");
-                }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-md text-sm"
-              >
-                Clear Filters
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Enhance the order details panel
-  const renderOrderDetails = () => {
-    if (!selectedOrder) {
-      return (
-        <div className="bg-gray-800 p-6 rounded-lg text-center">
-          <p className="text-gray-400">Select an order to view details</p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="bg-gray-800 rounded-lg overflow-hidden">
-        <div className="bg-gray-700 p-4 border-b border-gray-600">
-          <div className="flex justify-between items-center">
-            <h3 className="text-lg font-medium text-white">Order Details</h3>
-            <button
-              onClick={() => setSelectedOrderId(null)}
-              className="text-gray-400 hover:text-white"
-            >
-              <XCircle size={20} />
-            </button>
-          </div>
-        </div>
-
-        <div className="p-4 space-y-6">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <h4 className="text-gray-400 text-sm">Customer</h4>
-              <p className="text-white font-medium">
-                {selectedOrder.full_name}
-              </p>
-            </div>
-            <div>
-              <h4 className="text-gray-400 text-sm">Email</h4>
-              <p className="text-white">{selectedOrder.email}</p>
-            </div>
-            <div>
-              <h4 className="text-gray-400 text-sm">Order Date</h4>
-              <p className="text-white">
-                {new Date(selectedOrder.created_at).toLocaleString()}
-              </p>
-            </div>
-            <div>
-              <h4 className="text-gray-400 text-sm">Status</h4>
-              <StatusBadge status={selectedOrder.status} />
-            </div>
-          </div>
-
-          {selectedOrder.payment_proofs &&
-            selectedOrder.payment_proofs.length > 0 && (
-              <div>
-                <h4 className="text-gray-400 text-sm mb-2">Payment Proofs</h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {selectedOrder.payment_proofs.map((proof) => (
-                    <div
-                      key={proof.id}
-                      className="relative bg-gray-700 rounded-md overflow-hidden cursor-pointer group"
-                      onClick={() => {
-                        setCurrentImageUrl(proof.image_url);
-                        setShowImageModal(true);
-                      }}
-                    >
-                      <img
-                        src={proof.image_url}
-                        alt="Payment proof"
-                        className="w-full h-32 object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                        <Eye size={24} className="text-white" />
-                      </div>
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-2">
-                        <p className="text-white text-xs">
-                          {new Date(proof.created_at).toLocaleString()}
-                        </p>
-                        <StatusBadge status={proof.status} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-          <div
-            className="bg-gray-800 rounded-lg p-4 mb-4"
-            id="account-details-section"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="font-medium text-white">Account Details</h4>
-              {selectedOrder.account_details_sent && (
-                <span className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded-full">
-                  Sent
-                </span>
-              )}
-            </div>
-
-            {selectedOrder.status === "approved" &&
-              !selectedOrder.account_details_sent && (
-                <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/30 rounded-md animate-pulse-slow">
-                  <div className="flex items-center">
-                    <MessageCircle className="text-blue-400 mr-2" size={20} />
-                    <p className="text-blue-300 text-sm">
-                      <span className="font-medium">Action required:</span>{" "}
-                      Please enter the account details below to send them to the
-                      customer.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-            {selectedOrder.account_details_sent ? (
-              <div className="mb-4">
-                <div className="flex items-center mb-2">
-                  <MessageCircle className="text-blue-400 mr-2" size={20} />
-                  <span className="text-blue-300 text-sm">
-                    Account details sent on{" "}
-                    {new Date(
-                      selectedOrder.account_details_sent_at
-                    ).toLocaleString()}
-                  </span>
-                </div>
-
-                {selectedOrder.account_metadata && (
-                  <div className="mt-2 p-3 bg-gray-700/50 rounded-md text-sm">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <span className="text-gray-400">Account ID:</span>
-                        <div className="text-white font-mono">
-                          {selectedOrder.account_metadata.accountId}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-gray-400">Password:</span>
-                        <div className="text-white">
-                          {selectedOrder.account_metadata.password}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-gray-400 text-sm mb-1">
-                    Account ID / Email <span className="text-red-400">*</span>
-                  </label>
-                  <input
-                    id="account-id-input"
-                    type="text"
-                    value={accountDetails.accountId}
-                    onChange={(e) => {
-                      setAccountDetails((prev) => ({
-                        ...prev,
-                        accountId: e.target.value,
-                      }));
-                      // Clear error when typing
-                      if (e.target.value.trim()) {
-                        setFormErrors((prev) => ({
-                          ...prev,
-                          accountId: false,
-                        }));
-                      }
-                    }}
-                    placeholder="e.g., user123@example.com"
-                    className={`w-full p-2 bg-gray-700 border ${
-                      formErrors.accountId
-                        ? "border-red-500"
-                        : "border-gray-600"
-                    } rounded-md text-white`}
-                  />
-                  {formErrors.accountId && (
-                    <p className="text-red-400 text-xs mt-1">
-                      Account ID is required
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-gray-400 text-sm mb-1">
-                    Password
-                  </label>
-                  <input
-                    id="account-password-input"
-                    type="text"
-                    value={accountDetails.password}
-                    onChange={(e) =>
-                      setAccountDetails((prev) => ({
-                        ...prev,
-                        password: e.target.value,
-                      }))
-                    }
-                    placeholder="Enter password"
-                    className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
-                  />
-                </div>
-
-                <button
-                  onClick={handleAccountDetailsUpload}
-                  className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
-                  disabled={
-                    actionInProgress === "uploading" ||
-                    !selectedOrderId ||
-                    !accountDetails.accountId
-                  }
-                >
-                  {actionInProgress === "uploading" ? (
-                    <span className="flex items-center justify-center">
-                      <RefreshCw className="animate-spin mr-2 h-5 w-5" />
-                      Sending...
-                    </span>
-                  ) : (
-                    <span className="flex items-center justify-center">
-                      <MessageCircle className="mr-2 h-5 w-5" />
-                      Send Account Details
-                    </span>
-                  )}
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="flex space-x-2">
-            <Link
-              to={`/chat?order=${selectedOrder.id}`}
-              className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md flex items-center justify-center gap-2"
-            >
-              <MessageCircle size={18} />
-              Open Chat
-            </Link>
-
-            {selectedOrder.status === "pending" && (
-              <>
-                <button
-                  onClick={() => handleApprove(selectedOrder.id)}
-                  disabled={!!actionInProgress}
-                  className="flex-1 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-md flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  <CheckCircle size={18} />
-                  Approve
-                </button>
-
-                <button
-                  onClick={() =>
-                    handlePaymentAction(selectedOrder.id, "rejected")
-                  }
-                  disabled={!!actionInProgress}
-                  className="flex-1 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-md flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  <XCircle size={18} />
-                  Reject
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -1361,101 +654,372 @@ Please keep these details secure. You can copy them by selecting the text.
   }
 
   return (
-    <PageContainer title="Admin Dashboard" user={null}>
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <Toaster position="top-right" />
+    <PageContainer title="ADMIN" user={null}>
+      <Toaster position="top-right" />
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <StatsDisplay />
 
-        {loading ? (
-          <div className="flex justify-center items-center h-64">
-            <LoadingSpinner />
-          </div>
-        ) : (
-          <>
-            {renderDashboardSummary()}
-            {renderSearchAndFilters()}
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-semibold text-white">
-                    Orders ({filteredOrders.length})
-                  </h2>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setViewMode("list")}
-                      className={`p-2 rounded-md ${
-                        viewMode === "list"
-                          ? "bg-blue-500 text-white"
-                          : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                      }`}
-                      title="List view"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <line x1="8" y1="6" x2="21" y2="6"></line>
-                        <line x1="8" y1="12" x2="21" y2="12"></line>
-                        <line x1="8" y1="18" x2="21" y2="18"></line>
-                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() => setViewMode("grid")}
-                      className={`p-2 rounded-md ${
-                        viewMode === "grid"
-                          ? "bg-blue-500 text-white"
-                          : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                      }`}
-                      title="Grid view"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <rect x="3" y="3" width="7" height="7"></rect>
-                        <rect x="14" y="3" width="7" height="7"></rect>
-                        <rect x="14" y="14" width="7" height="7"></rect>
-                        <rect x="3" y="14" width="7" height="7"></rect>
-                      </svg>
-                    </button>
-                  </div>
+        <div className="backdrop-blur-md bg-black/30 p-6 rounded-2xl">
+          {/* Batch Actions */}
+          <AnimatePresence>
+            {selectedOrders.size > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="mb-4 p-4 bg-white/5 rounded-lg flex items-center justify-between"
+              >
+                <div className="text-white">
+                  {selectedOrders.size} orders selected
                 </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleBatchAction("approve")}
+                    className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30"
+                    disabled={isBatchProcessing}
+                  >
+                    Approve All
+                  </button>
+                  <button
+                    onClick={() => handleBatchAction("reject")}
+                    className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30"
+                    disabled={isBatchProcessing}
+                  >
+                    Reject All
+                  </button>
+                  <button
+                    onClick={() => handleBatchAction("export")}
+                    className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30"
+                    disabled={isBatchProcessing}
+                  >
+                    Export Selected
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-                {renderVirtualizedList()}
+          {/* Update Controls section */}
+          <div className="flex flex-wrap items-center gap-4 mb-6">
+            <div className="flex-1 flex flex-wrap items-center gap-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 w-5 h-5" />
+                <input
+                  type="text"
+                  placeholder="Search orders..."
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="pl-10 pr-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
               </div>
 
-              <div>{renderOrderDetails()}</div>
-            </div>
-          </>
-        )}
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                title="Toggle filters"
+              >
+                <Filter className="w-5 h-5 text-white" />
+              </button>
 
-        {showImageModal && currentImageUrl && (
-          <ImageModal
-            imageUrl={currentImageUrl}
-            onClose={() => {
-              setShowImageModal(false);
-              setCurrentImageUrl("");
-            }}
-          />
-        )}
-      </div>
+              <button
+                onClick={handleExport}
+                className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg flex items-center gap-2"
+                title="Export to CSV"
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
+            </div>
+
+            {/* View mode toggle */}
+            <div className="flex items-center gap-2 bg-white/5 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode("list")}
+                className={`p-2 rounded ${
+                  viewMode === "list" ? "bg-white/10" : ""
+                }`}
+              >
+                List
+              </button>
+              <button
+                onClick={() => setViewMode("grid")}
+                className={`p-2 rounded ${
+                  viewMode === "grid" ? "bg-white/10" : ""
+                }`}
+              >
+                Grid
+              </button>
+            </div>
+          </div>
+
+          {/* Filters panel */}
+          {showFilters && (
+            <div className="mb-6 p-4 bg-white/5 rounded-lg">
+              <h3 className="text-white mb-4">Filters</h3>
+              <div className="flex flex-wrap gap-4">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-white/70" />
+                  <input
+                    type="date"
+                    onChange={(e) =>
+                      setFilteredDateRange((prev) => ({
+                        ...prev,
+                        start: e.target.value ? new Date(e.target.value) : null,
+                      }))
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  />
+                  <span className="text-white/70">to</span>
+                  <input
+                    type="date"
+                    onChange={(e) =>
+                      setFilteredDateRange((prev) => ({
+                        ...prev,
+                        end: e.target.value ? new Date(e.target.value) : null,
+                      }))
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-white/70" />
+                  <select
+                    multiple
+                    value={filteredSelectedStatuses}
+                    onChange={(e) =>
+                      setFilteredSelectedStatuses(
+                        Array.from(
+                          e.target.selectedOptions,
+                          (option) => option.value
+                        )
+                      )
+                    }
+                    className="bg-white/10 border border-white/20 rounded px-2 py-1 text-white"
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="active">Active</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Orders List/Grid */}
+          <div
+            className={
+              viewMode === "grid"
+                ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                : "space-y-6"
+            }
+          >
+            {loading ? (
+              <div className="text-center py-12">
+                <LoadingSpinner size="lg" light />
+              </div>
+            ) : filteredOrders.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-white/70 text-lg">No orders found</p>
+                <p className="text-white/50 text-sm mt-2">
+                  {searchTerm || filter !== "all"
+                    ? "Try adjusting your search or filter"
+                    : "New orders will appear here"}
+                </p>
+              </div>
+            ) : (
+              filteredOrders.map((order) => (
+                <OrderItem
+                  key={order.id}
+                  order={order}
+                  onPaymentAction={handlePaymentAction}
+                  onImageView={(imageUrl) => {
+                    setCurrentImageUrl(imageUrl);
+                    setShowImageModal(true);
+                  }}
+                  onFileUpload={handleFileUploadSuccess}
+                  isSelected={selectedOrders.has(order.id)}
+                  onSelect={(selected) => {
+                    setSelectedOrders((prev) => {
+                      const next = new Set(prev);
+                      if (selected) {
+                        next.add(order.id);
+                      } else {
+                        next.delete(order.id);
+                      }
+                      return next;
+                    });
+                  }}
+                  actionInProgress={actionInProgress}
+                  onApprove={handleApprove}
+                />
+              ))
+            )}
+          </div>
+
+          {/* Order Details Section */}
+          <div className="mt-4 space-y-4">
+            <div className="mt-6 border-t border-gray-700 pt-4">
+              <h3 className="text-lg font-medium mb-3 text-white">
+                Account Management
+              </h3>
+
+              <div
+                className="bg-gray-800 rounded-lg p-4 mb-4"
+                id="account-details-section"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-medium text-white">Account Details</h4>
+                  {selectedOrder?.account_details_sent && (
+                    <span className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded-full">
+                      Sent
+                    </span>
+                  )}
+                </div>
+
+                {selectedOrder?.status === "approved" &&
+                  !selectedOrder?.account_details_sent && (
+                    <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/30 rounded-md animate-pulse-slow">
+                      <div className="flex items-center">
+                        <MessageCircle
+                          className="text-blue-400 mr-2"
+                          size={20}
+                        />
+                        <p className="text-blue-300 text-sm">
+                          <span className="font-medium">Action required:</span>{" "}
+                          Please enter the account details below to send them to
+                          the customer.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                {selectedOrder?.account_details_sent ? (
+                  <div className="mb-4">
+                    <div className="flex items-center mb-2">
+                      <MessageCircle className="text-blue-400 mr-2" size={20} />
+                      <span className="text-gray-300">
+                        Account details sent on{" "}
+                        {new Date(
+                          selectedOrder.account_details_sent_at
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+
+                    {selectedOrder.account_metadata && (
+                      <div className="mt-2 p-3 bg-gray-700/50 rounded-md text-sm">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-gray-400">Account ID:</span>
+                            <div className="text-white font-mono">
+                              {selectedOrder.account_metadata.accountId}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="text-gray-400">Password:</span>
+                            <div className="text-white">
+                              {selectedOrder.account_metadata.password}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-gray-400 text-sm mb-3">
+                    No account details have been sent for this order yet.
+                  </p>
+                )}
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Account ID / Email <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      id="account-id-input"
+                      type="text"
+                      value={accountDetails.accountId}
+                      onChange={(e) => {
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          accountId: e.target.value,
+                        }));
+                        // Clear error when typing
+                        if (e.target.value.trim()) {
+                          setFormErrors((prev) => ({
+                            ...prev,
+                            accountId: false,
+                          }));
+                        }
+                      }}
+                      placeholder="e.g., user123@example.com"
+                      className={`w-full p-2 bg-gray-700 border ${
+                        formErrors.accountId
+                          ? "border-red-500"
+                          : "border-gray-600"
+                      } rounded-md text-white`}
+                    />
+                    {formErrors.accountId && (
+                      <p className="text-red-400 text-xs mt-1">
+                        Account ID is required
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-400 text-sm mb-1">
+                      Password
+                    </label>
+                    <input
+                      id="account-password-input"
+                      type="text"
+                      value={accountDetails.password}
+                      onChange={(e) =>
+                        setAccountDetails((prev) => ({
+                          ...prev,
+                          password: e.target.value,
+                        }))
+                      }
+                      placeholder="Enter password"
+                      className="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleAccountDetailsUpload}
+                    className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
+                    disabled={
+                      actionInProgress === "uploading" ||
+                      !selectedOrderId ||
+                      !accountDetails.accountId
+                    }
+                  >
+                    {actionInProgress === "uploading" ? (
+                      <span className="flex items-center justify-center">
+                        <RefreshCw className="animate-spin mr-2 h-5 w-5" />
+                        Sending...
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center">
+                        <MessageCircle className="mr-2 h-5 w-5" />
+                        Send Account Details
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Image Modal with zoom and navigation */}
+      {showImageModal && (
+        <ImageModal
+          imageUrl={currentImageUrl}
+          onClose={() => setShowImageModal(false)}
+        />
+      )}
     </PageContainer>
   );
 }
@@ -1469,7 +1033,6 @@ const OrderItem = React.memo(function OrderItem({
   onSelect,
   actionInProgress,
   onApprove,
-  onClearHistory,
 }: {
   order: Order;
   onPaymentAction: (orderId: string, status: string) => void;
@@ -1479,7 +1042,6 @@ const OrderItem = React.memo(function OrderItem({
   onSelect: (selected: boolean) => void;
   actionInProgress: string | null;
   onApprove: (orderId: string) => void;
-  onClearHistory: (orderId: string) => void;
 }) {
   const messageCount = order.messages?.length || 0;
 
@@ -1561,15 +1123,6 @@ const OrderItem = React.memo(function OrderItem({
           >
             <MessageCircle className="text-white" size={20} />
           </Link>
-
-          {messageCount > 0 && (
-            <ActionButton
-              icon={<RefreshCw className="text-yellow-400" size={20} />}
-              onClick={() => onClearHistory(order.id)}
-              disabled={actionInProgress !== null}
-              title="Clear chat history"
-            />
-          )}
         </div>
       </div>
 

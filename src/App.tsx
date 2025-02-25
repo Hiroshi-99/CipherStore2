@@ -8,23 +8,10 @@ import ChatPage from "./pages/ChatPage";
 import AdminGuard from "./components/AdminGuard";
 import { setPageTitle } from "./utils/title";
 import Fireflies from "./components/Fireflies";
-import { ensureDatabaseSchema } from "./utils/dbUtils";
 
 function App() {
   useEffect(() => {
     setPageTitle(""); // This will just show "Cipher"
-    // Initialize database schema
-    ensureDatabaseSchema()
-      .then((success) => {
-        if (success) {
-          console.log("Database schema initialized successfully");
-        } else {
-          console.warn("Failed to initialize database schema");
-        }
-      })
-      .catch((err) => {
-        console.error("Error initializing database schema:", err);
-      });
   }, []);
 
   return (
