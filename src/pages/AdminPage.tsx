@@ -25,6 +25,10 @@ import {
   Clock,
   User,
   Upload,
+  Trash2,
+  CheckSquare,
+  XSquare,
+  MessageSquare,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import FileUpload from "../components/FileUpload";
@@ -128,6 +132,20 @@ function AdminPage() {
   const [selectedTab, setSelectedTab] = useState("users");
   const [fallbackMode, setFallbackMode] = useState(false);
   const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>("all");
+  const [orderDateRange, setOrderDateRange] = useState<{
+    start: Date | null;
+    end: Date | null;
+  }>({ start: null, end: null });
+  const [orderSearchQuery, setOrderSearchQuery] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [isOrderActionInProgress, setIsOrderActionInProgress] = useState(false);
+  const [selectedOrderDetail, setSelectedOrderDetail] = useState<Order | null>(
+    null
+  );
 
   // This will define the selectedOrder based on the selectedOrderId
   const selectedOrder = selectedOrderId
@@ -178,12 +196,6 @@ function AdminPage() {
         );
 
         // Show success message with account details prompt
-        toast.success(
-          "Order approved! Please enter account details to send to the customer.",
-          { duration: 5000 }
-        );
-
-        // Select the order for account details entry
         setSelectedOrderId(orderId);
 
         // Scroll to the account details section
@@ -212,39 +224,56 @@ function AdminPage() {
   );
 
   useEffect(() => {
-    setPageTitle("Admin");
+    setPageTitle("ADMIN");
     fetchOrders();
     checkAdminStatus();
   }, []);
 
-  const fetchOrders = useCallback(async () => {
+  const fetchOrders = async () => {
+    setRefreshing(true);
+
     try {
-      setError(null);
+      // Get all orders with payment proofs
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
         .select(
           `
           *,
-          payment_proofs(id, image_url, status),
-          messages(id)
+          payment_proofs:payment_proofs(*)
         `
         )
         .order("created_at", { ascending: false });
 
-      if (ordersError) throw ordersError;
-      setOrders(ordersData || []);
+      if (ordersError) {
+        console.error("Error fetching orders:", ordersError);
+        toast.error("Failed to load orders");
+        return;
+      }
 
-      // Update stats
-      setStats(calculateStats(ordersData || []));
-    } catch (error) {
-      console.error("Error fetching orders:", error);
-      setError("Failed to load orders");
+      if (ordersData) {
+        setOrders(ordersData);
+
+        // Calculate statistics
+        const total = ordersData.length;
+        const pending = ordersData.filter(
+          (order) => order.status === "pending"
+        ).length;
+        const active = ordersData.filter(
+          (order) => order.status === "active"
+        ).length;
+        const rejected = ordersData.filter(
+          (order) => order.status === "rejected"
+        ).length;
+
+        setStats({ total, pending, active, rejected });
+      }
+    } catch (err) {
+      console.error("Error in fetchOrders:", err);
       toast.error("Failed to load orders");
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  };
 
   const checkAdminStatus = async () => {
     try {
@@ -866,6 +895,623 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add this function to handle batch actions on orders
+  const handleOrderBatchAction = async (
+    action: "approve" | "reject" | "export" | "delete"
+  ) => {
+    if (selectedOrderIds.size === 0) {
+      toast.error("No orders selected");
+      return;
+    }
+
+    setIsOrderActionInProgress(true);
+
+    try {
+      const orderIds = Array.from(selectedOrderIds);
+
+      switch (action) {
+        case "approve":
+          toast.info(`Approving ${orderIds.length} orders...`);
+
+          // Process each order sequentially
+          for (const orderId of orderIds) {
+            await safeUpdate("orders", { status: "active" }, "id", orderId);
+          }
+
+          toast.success(`${orderIds.length} orders approved`);
+          break;
+
+        case "reject":
+          toast.info(`Rejecting ${orderIds.length} orders...`);
+
+          for (const orderId of orderIds) {
+            await safeUpdate("orders", { status: "rejected" }, "id", orderId);
+          }
+
+          toast.success(`${orderIds.length} orders rejected`);
+          break;
+
+        case "export":
+          toast.info("Preparing export...");
+          setIsExporting(true);
+
+          // Get the selected orders
+          const { data: selectedOrders } = await supabase
+            .from("orders")
+            .select("*")
+            .in("id", orderIds);
+
+          if (selectedOrders && selectedOrders.length > 0) {
+            // Format the data for export
+            const exportData = selectedOrders.map((order) => ({
+              ID: order.id,
+              Name: order.full_name,
+              Email: order.email,
+              Status: order.status,
+              Created: new Date(order.created_at).toLocaleString(),
+              // Add other fields as needed
+            }));
+
+            // Convert to CSV
+            const headers = Object.keys(exportData[0]);
+            const csvContent = [
+              headers.join(","),
+              ...exportData.map((row) =>
+                headers
+                  .map((header) =>
+                    JSON.stringify(row[header as keyof typeof row])
+                  )
+                  .join(",")
+              ),
+            ].join("\n");
+
+            // Create download link
+            const blob = new Blob([csvContent], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `orders-export-${
+              new Date().toISOString().split("T")[0]
+            }.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            toast.success(`Exported ${selectedOrders.length} orders`);
+          } else {
+            toast.error("No orders found to export");
+          }
+
+          setIsExporting(false);
+          break;
+
+        case "delete":
+          if (
+            confirm(
+              `Are you sure you want to delete ${orderIds.length} orders? This action cannot be undone.`
+            )
+          ) {
+            toast.info(`Deleting ${orderIds.length} orders...`);
+
+            const { error } = await supabase
+              .from("orders")
+              .delete()
+              .in("id", orderIds);
+
+            if (error) {
+              toast.error(`Error deleting orders: ${error.message}`);
+            } else {
+              toast.success(`${orderIds.length} orders deleted`);
+              // Refresh the orders list
+              fetchOrders();
+            }
+          }
+          break;
+      }
+
+      // Clear selection after action
+      setSelectedOrderIds(new Set());
+    } catch (err) {
+      console.error(`Error performing batch action ${action}:`, err);
+      toast.error(`Failed to ${action} orders`);
+    } finally {
+      setIsOrderActionInProgress(false);
+    }
+  };
+
+  // Add this function to filter orders
+  const getFilteredOrders = () => {
+    let filtered = [...orders];
+
+    // Filter by status
+    if (orderStatusFilter !== "all") {
+      filtered = filtered.filter((order) => order.status === orderStatusFilter);
+    }
+
+    // Filter by date range
+    if (orderDateRange.start) {
+      filtered = filtered.filter(
+        (order) => new Date(order.created_at) >= (orderDateRange.start as Date)
+      );
+    }
+
+    if (orderDateRange.end) {
+      const endDate = new Date(orderDateRange.end as Date);
+      endDate.setHours(23, 59, 59, 999); // End of day
+      filtered = filtered.filter(
+        (order) => new Date(order.created_at) <= endDate
+      );
+    }
+
+    // Filter by search query
+    if (orderSearchQuery) {
+      const query = orderSearchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (order) =>
+          order.full_name?.toLowerCase().includes(query) ||
+          order.email?.toLowerCase().includes(query) ||
+          order.id?.toLowerCase().includes(query)
+      );
+    }
+
+    return filtered;
+  };
+
+  // Add this to your JSX where the Orders tab content should be
+  const renderOrdersTab = () => (
+    <div className="mt-6">
+      {/* Order management tools */}
+      <div className="bg-white/5 rounded-lg p-4 mb-6">
+        <div className="flex flex-wrap gap-4 items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-white">Order Management</h2>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => fetchOrders()}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+              disabled={refreshing}
+            >
+              {refreshing ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              Refresh
+            </button>
+
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className="flex items-center gap-2 px-3 py-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+            >
+              <Filter className="w-4 h-4" />
+              Filters
+            </button>
+          </div>
+        </div>
+
+        {/* Filters panel */}
+        {showFilters && (
+          <div className="bg-white/5 rounded-lg p-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-white/70 mb-2">Status</label>
+                <select
+                  value={orderStatusFilter}
+                  onChange={(e) => setOrderStatusFilter(e.target.value)}
+                  className="w-full bg-white/10 border border-white/20 rounded px-3 py-2 text-white"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="pending">Pending</option>
+                  <option value="active">Active</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-white/70 mb-2">Date Range</label>
+                <div className="flex gap-2">
+                  <input
+                    type="date"
+                    value={
+                      orderDateRange.start
+                        ? orderDateRange.start.toISOString().split("T")[0]
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setOrderDateRange({
+                        ...orderDateRange,
+                        start: e.target.value ? new Date(e.target.value) : null,
+                      })
+                    }
+                    className="flex-1 bg-white/10 border border-white/20 rounded px-3 py-2 text-white"
+                  />
+                  <span className="text-white/50 self-center">to</span>
+                  <input
+                    type="date"
+                    value={
+                      orderDateRange.end
+                        ? orderDateRange.end.toISOString().split("T")[0]
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setOrderDateRange({
+                        ...orderDateRange,
+                        end: e.target.value ? new Date(e.target.value) : null,
+                      })
+                    }
+                    className="flex-1 bg-white/10 border border-white/20 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-white/70 mb-2">Search</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={orderSearchQuery}
+                    onChange={(e) => setOrderSearchQuery(e.target.value)}
+                    placeholder="Search by name, email..."
+                    className="w-full bg-white/10 border border-white/20 rounded pl-10 pr-3 py-2 text-white"
+                  />
+                  <Search className="absolute left-3 top-2.5 text-white/50 w-4 h-4" />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => {
+                  setOrderStatusFilter("all");
+                  setOrderDateRange({ start: null, end: null });
+                  setOrderSearchQuery("");
+                }}
+                className="px-3 py-1 text-sm text-white/70 hover:text-white transition-colors"
+              >
+                Clear Filters
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Batch actions */}
+        {selectedOrderIds.size > 0 && (
+          <div className="bg-white/5 rounded-lg p-4 mb-4">
+            <div className="flex items-center justify-between">
+              <span className="text-white">
+                {selectedOrderIds.size} order
+                {selectedOrderIds.size !== 1 ? "s" : ""} selected
+              </span>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleOrderBatchAction("approve")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
+                >
+                  <CheckSquare className="w-4 h-4" />
+                  Approve
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("reject")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                >
+                  <XSquare className="w-4 h-4" />
+                  Reject
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("export")}
+                  disabled={isOrderActionInProgress || isExporting}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+                >
+                  {isExporting ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  Export
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("delete")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Orders list */}
+      <div className="space-y-4">
+        {getFilteredOrders().length === 0 ? (
+          <div className="bg-white/5 rounded-lg p-8 text-center">
+            <p className="text-white/70">No orders found</p>
+          </div>
+        ) : (
+          getFilteredOrders().map((order) => (
+            <div
+              key={order.id}
+              className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedOrderIds.has(order.id)}
+                    onChange={(e) => {
+                      const newSelected = new Set(selectedOrderIds);
+                      if (e.target.checked) {
+                        newSelected.add(order.id);
+                      } else {
+                        newSelected.delete(order.id);
+                      }
+                      setSelectedOrderIds(newSelected);
+                    }}
+                    className="mt-1 w-4 h-4 accent-emerald-500"
+                  />
+
+                  <div>
+                    <h3 className="text-lg font-medium text-white">
+                      {order.full_name}
+                    </h3>
+                    <p className="text-white/70">{order.email}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs ${
+                          order.status === "active"
+                            ? "bg-green-500/20 text-green-400"
+                            : order.status === "rejected"
+                            ? "bg-red-500/20 text-red-400"
+                            : "bg-yellow-500/20 text-yellow-400"
+                        }`}
+                      >
+                        {order.status.toUpperCase()}
+                      </span>
+                      <span className="text-white/50 text-xs">
+                        {new Date(order.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  {order.status === "pending" && (
+                    <>
+                      <button
+                        onClick={() => handleApprove(order.id)}
+                        disabled={!!actionInProgress}
+                        className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+                        title="Approve order"
+                      >
+                        <CheckCircle className="w-5 h-5" />
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          handlePaymentAction(order.id, "rejected")
+                        }
+                        disabled={!!actionInProgress}
+                        className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+                        title="Reject order"
+                      >
+                        <XCircle className="w-5 h-5" />
+                      </button>
+                    </>
+                  )}
+
+                  <Link
+                    to={`/chat?order=${order.id}`}
+                    className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                    title="Chat with customer"
+                  >
+                    <MessageSquare className="w-5 h-5" />
+                  </Link>
+
+                  {order.status === "active" && !order.account_file_url && (
+                    <button
+                      onClick={() => setSelectedOrderId(order.id)}
+                      className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+                      title="Upload account file"
+                    >
+                      <Upload className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  // Add this function to calculate order statistics
+  const calculateOrderStats = () => {
+    const total = orders.length;
+    const pending = orders.filter((order) => order.status === "pending").length;
+    const active = orders.filter((order) => order.status === "active").length;
+    const rejected = orders.filter(
+      (order) => order.status === "rejected"
+    ).length;
+    const withAccountFiles = orders.filter(
+      (order) => order.account_file_url
+    ).length;
+
+    return { total, pending, active, rejected, withAccountFiles };
+  };
+
+  // Add this function to view order details
+  const viewOrderDetails = (order: Order) => {
+    setSelectedOrderDetail(order);
+  };
+
+  // Add this component at the end of your component
+  const OrderDetailModal = () => {
+    if (!selectedOrderDetail) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+        <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="p-6">
+            <div className="flex justify-between items-start mb-6">
+              <h2 className="text-xl font-bold text-white">Order Details</h2>
+              <button
+                onClick={() => setSelectedOrderDetail(null)}
+                className="text-white/70 hover:text-white"
+              >
+                <XCircle className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-white/70 mb-2">Customer Information</h3>
+                <div className="bg-white/5 rounded-lg p-4">
+                  <p className="text-white">
+                    <span className="text-white/70">Name:</span>{" "}
+                    {selectedOrderDetail.full_name}
+                  </p>
+                  <p className="text-white">
+                    <span className="text-white/70">Email:</span>{" "}
+                    {selectedOrderDetail.email}
+                  </p>
+                  <p className="text-white">
+                    <span className="text-white/70">Status:</span>
+                    <span
+                      className={`ml-2 px-2 py-0.5 rounded text-xs ${
+                        selectedOrderDetail.status === "active"
+                          ? "bg-green-500/20 text-green-400"
+                          : selectedOrderDetail.status === "rejected"
+                          ? "bg-red-500/20 text-red-400"
+                          : "bg-yellow-500/20 text-yellow-400"
+                      }`}
+                    >
+                      {selectedOrderDetail.status.toUpperCase()}
+                    </span>
+                  </p>
+                  <p className="text-white">
+                    <span className="text-white/70">Created:</span>{" "}
+                    {new Date(selectedOrderDetail.created_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              {selectedOrderDetail.payment_proofs &&
+                selectedOrderDetail.payment_proofs.length > 0 && (
+                  <div>
+                    <h3 className="text-white/70 mb-2">Payment Proofs</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {selectedOrderDetail.payment_proofs.map(
+                        (proof, index) => (
+                          <div
+                            key={index}
+                            className="bg-white/5 rounded-lg p-4"
+                          >
+                            <img
+                              src={proof.image_url}
+                              alt={`Payment proof ${index + 1}`}
+                              className="w-full h-auto rounded-lg mb-2 cursor-pointer"
+                              onClick={() => {
+                                setCurrentImageUrl(proof.image_url);
+                                setShowImageModal(true);
+                              }}
+                            />
+                            <p className="text-white/70 text-sm">
+                              Status:{" "}
+                              <span
+                                className={`${
+                                  proof.status === "approved"
+                                    ? "text-green-400"
+                                    : proof.status === "rejected"
+                                    ? "text-red-400"
+                                    : "text-yellow-400"
+                                }`}
+                              >
+                                {proof.status.toUpperCase()}
+                              </span>
+                            </p>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {selectedOrderDetail.account_file_url ? (
+                <div>
+                  <h3 className="text-white/70 mb-2">Account File</h3>
+                  <div className="bg-white/5 rounded-lg p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-white">Account file uploaded</p>
+                      <p className="text-white/70 text-sm">
+                        {new URL(selectedOrderDetail.account_file_url).pathname
+                          .split("/")
+                          .pop()}
+                      </p>
+                    </div>
+                    <a
+                      href={selectedOrderDetail.account_file_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                    >
+                      <Download className="w-5 h-5" />
+                    </a>
+                  </div>
+                </div>
+              ) : selectedOrderDetail.status === "active" ? (
+                <div>
+                  <h3 className="text-white/70 mb-2">Account File</h3>
+                  <div className="bg-white/5 rounded-lg p-4">
+                    <p className="text-white/70 mb-2">
+                      No account file uploaded yet
+                    </p>
+                    <FileUpload
+                      orderId={selectedOrderDetail.id}
+                      onUploadSuccess={(fileUrl) => {
+                        handleFileUploadSuccess(
+                          selectedOrderDetail.id,
+                          fileUrl
+                        );
+                        setSelectedOrderDetail({
+                          ...selectedOrderDetail,
+                          account_file_url: fileUrl,
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex justify-end gap-3 mt-6">
+                <Link
+                  to={`/chat?order=${selectedOrderDetail.id}`}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                >
+                  Open Chat
+                </Link>
+                <button
+                  onClick={() => setSelectedOrderDetail(null)}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -1102,15 +1748,7 @@ Please keep these details secure. You can copy them by selecting the text.
           )}
 
           {/* Orders Tab */}
-          {selectedTab === "orders" && (
-            <div>
-              <h2 className="text-xl text-white mb-6">Order Management</h2>
-              {/* Order management UI would go here */}
-              <p className="text-white/70">
-                Order management functionality coming soon.
-              </p>
-            </div>
-          )}
+          {selectedTab === "orders" && renderOrdersTab()}
 
           {/* Settings Tab */}
           {selectedTab === "settings" && (
@@ -1124,6 +1762,7 @@ Please keep these details secure. You can copy them by selecting the text.
           )}
         </div>
       </main>
+      {selectedOrderDetail && <OrderDetailModal />}
     </PageContainer>
   );
 }
@@ -1225,7 +1864,7 @@ const OrderItem = React.memo(function OrderItem({
             className="p-2 hover:bg-white/10 rounded-full transition-colors"
             title="Open chat"
           >
-            <MessageCircle className="text-white" size={20} />
+            <MessageSquare className="text-white" size={20} />
           </Link>
         </div>
       </div>
