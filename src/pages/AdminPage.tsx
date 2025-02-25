@@ -37,6 +37,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useOrderFilters } from "../hooks/useOrderFilters";
 import type { Order } from "../hooks/useOrderFilters";
 import { safeUpdate } from "../lib/database";
+import { generateUUID } from "../utils/uuid";
 
 interface Admin {
   id: string;
@@ -561,7 +562,7 @@ function AdminPage() {
     return !Object.values(errors).some(Boolean);
   };
 
-  // Simplified version that only sends a message without updating order metadata
+  // Update the handleAccountDetailsUpload function
   const handleAccountDetailsUpload = async () => {
     try {
       if (!selectedOrderId) {
@@ -587,7 +588,7 @@ function AdminPage() {
         return;
       }
 
-      // Create account details object - simplified
+      // Create account details object
       const accountData = {
         accountId: accountDetails.accountId,
         password: accountDetails.password,
@@ -600,7 +601,7 @@ function AdminPage() {
         userData?.user?.user_metadata?.avatar_url ||
         "/images/support-avatar.png";
 
-      // Create a formatted message with account details - simplified
+      // Create a formatted message with account details
       const formattedMessage = `
 **Account Details**
 
@@ -610,8 +611,12 @@ function AdminPage() {
 Please keep these details secure. You can copy them by selecting the text.
       `.trim();
 
+      // Generate a proper UUID for the message
+      const messageId = generateUUID();
+
       // Create a message to send the account details
       const { error: messageError } = await supabase.from("messages").insert({
+        id: messageId,
         order_id: selectedOrder.id,
         user_id: userData?.user?.id,
         content: formattedMessage,
@@ -632,7 +637,7 @@ Please keep these details secure. You can copy them by selecting the text.
         id: toastId,
       });
 
-      // Reset form - simplified
+      // Reset form
       setAccountDetails({
         accountId: "",
         password: "",

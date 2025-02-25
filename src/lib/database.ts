@@ -80,3 +80,35 @@ export const safeUpdate = async (
     return { data: null, error: err };
   }
 };
+
+/**
+ * Safely inserts a record, handling missing columns gracefully
+ * @param table The table name
+ * @param data The data to insert
+ * @returns The result of the insert operation
+ */
+export const safeInsert = async (table: string, data: Record<string, any>) => {
+  try {
+    // Filter out any columns that don't exist
+    const safeData: Record<string, any> = {};
+
+    // Check each column
+    for (const [key, value] of Object.entries(data)) {
+      const exists = await checkColumnExists(table, key);
+      if (exists) {
+        safeData[key] = value;
+      }
+    }
+
+    // If there are no safe columns to insert, return early
+    if (Object.keys(safeData).length === 0) {
+      return { data: null, error: null };
+    }
+
+    // Insert with only the columns that exist
+    return await supabase.from(table).insert(safeData).select();
+  } catch (err) {
+    console.error(`Error in safeInsert for ${table}:`, err);
+    return { data: null, error: err };
+  }
+};
