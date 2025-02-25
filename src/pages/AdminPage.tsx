@@ -183,6 +183,57 @@ function AdminPage() {
     await fetchOrders();
   };
 
+  const handleApprove = async (orderId: string) => {
+    try {
+      setActionInProgress(orderId);
+
+      // Update order status directly without prompting for file upload
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "approved" })
+        .eq("id", orderId);
+
+      if (error) throw error;
+
+      // Update local state
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === orderId ? { ...order, status: "approved" } : order
+        )
+      );
+
+      // Show success message with account details prompt
+      toast.success(
+        "Order approved! Please enter account details to send to the customer.",
+        { duration: 5000 }
+      );
+
+      // Select the order for account details entry
+      setSelectedOrderId(orderId);
+
+      // Scroll to the account details section
+      const accountDetailsSection = document.getElementById(
+        "account-details-section"
+      );
+      if (accountDetailsSection) {
+        accountDetailsSection.scrollIntoView({ behavior: "smooth" });
+
+        // Focus on the first input field after a short delay
+        setTimeout(() => {
+          const accountIdInput = document.getElementById("account-id-input");
+          if (accountIdInput) {
+            (accountIdInput as HTMLInputElement).focus();
+          }
+        }, 500);
+      }
+    } catch (error) {
+      console.error("Error approving order:", error);
+      toast.error("Failed to approve order. Please try again.");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
   const handlePaymentAction = useCallback(
     async (orderId: string, status: "approved" | "rejected") => {
       if (actionInProgress) return;
@@ -324,24 +375,76 @@ function AdminPage() {
 
   // Add batch action handler
   const handleBatchAction = async (action: BatchAction) => {
-    if (selectedOrders.size === 0 || isBatchProcessing) return;
-    setIsBatchProcessing(true);
-
     try {
+      setIsBatchProcessing(true);
+
       switch (action) {
-        case "approve":
+        case "approve": {
+          // Get selected order IDs
+          const orderIds = Array.from(selectedOrders);
+
+          // Update all selected orders to approved status
+          const { error } = await supabase
+            .from("orders")
+            .update({ status: "approved" })
+            .in("id", orderIds);
+
+          if (error) throw error;
+
+          // Update local state
+          setOrders((prev) =>
+            prev.map((order) =>
+              selectedOrders.has(order.id)
+                ? { ...order, status: "approved" }
+                : order
+            )
+          );
+
+          // Show success message with account details prompt
+          if (orderIds.length === 1) {
+            toast.success(
+              "Order approved! Please enter account details to send to the customer.",
+              { duration: 5000 }
+            );
+
+            // Select the single order for account details entry
+            setSelectedOrderId(orderIds[0]);
+
+            // Scroll to the account details section
+            const accountDetailsSection = document.getElementById(
+              "account-details-section"
+            );
+            if (accountDetailsSection) {
+              accountDetailsSection.scrollIntoView({ behavior: "smooth" });
+
+              // Focus on the first input field after a short delay
+              setTimeout(() => {
+                const accountIdInput =
+                  document.getElementById("account-id-input");
+                if (accountIdInput) {
+                  (accountIdInput as HTMLInputElement).focus();
+                }
+              }, 500);
+            }
+          } else {
+            toast.success(
+              `${orderIds.length} orders approved! Please enter account details for each order individually.`,
+              { duration: 5000 }
+            );
+          }
+
+          // Clear selection
+          setSelectedOrders(new Set());
+
+          break;
+        }
         case "reject": {
           await Promise.all(
             Array.from(selectedOrders).map((orderId) =>
-              handlePaymentAction(
-                orderId,
-                action === "approve" ? "approved" : "rejected"
-              )
+              handlePaymentAction(orderId, "rejected")
             )
           );
-          toast.success(
-            `Successfully ${action}ed ${selectedOrders.size} orders`
-          );
+          toast.success(`Successfully rejected ${selectedOrders.size} orders`);
           break;
         }
         case "export": {
@@ -358,10 +461,10 @@ function AdminPage() {
         }
       }
     } catch (err) {
+      console.error(`Failed to ${action} orders:`, err);
       toast.error(`Failed to ${action} orders`);
     } finally {
       setIsBatchProcessing(false);
-      setSelectedOrders(new Set());
     }
   };
 
@@ -752,7 +855,10 @@ Please keep these details secure. You can copy them by selecting the text.
                 Account Management
               </h3>
 
-              <div className="bg-gray-800 rounded-lg p-4 mb-4">
+              <div
+                className="bg-gray-800 rounded-lg p-4 mb-4"
+                id="account-details-section"
+              >
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="font-medium text-white">Account Details</h4>
                   {selectedOrder?.account_details_sent && (
@@ -761,6 +867,23 @@ Please keep these details secure. You can copy them by selecting the text.
                     </span>
                   )}
                 </div>
+
+                {selectedOrder?.status === "approved" &&
+                  !selectedOrder?.account_details_sent && (
+                    <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/30 rounded-md animate-pulse-slow">
+                      <div className="flex items-center">
+                        <MessageCircle
+                          className="text-blue-400 mr-2"
+                          size={20}
+                        />
+                        <p className="text-blue-300 text-sm">
+                          <span className="font-medium">Action required:</span>{" "}
+                          Please enter the account details below to send them to
+                          the customer.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                 {selectedOrder?.account_details_sent ? (
                   <div className="mb-4">
@@ -818,6 +941,7 @@ Please keep these details secure. You can copy them by selecting the text.
                       Account ID / Email
                     </label>
                     <input
+                      id="account-id-input"
                       type="text"
                       value={accountDetails.accountId}
                       onChange={(e) =>
@@ -836,6 +960,7 @@ Please keep these details secure. You can copy them by selecting the text.
                       Password
                     </label>
                     <input
+                      id="account-password-input"
                       type="text"
                       value={accountDetails.password}
                       onChange={(e) =>
@@ -1004,12 +1129,10 @@ const OrderCard = React.memo(function OrderCard({
               {proof.status === "pending" && (
                 <div className="flex items-center gap-2">
                   <ActionButton
-                    icon={
-                      <CheckCircle className="text-emerald-400" size={20} />
-                    }
-                    onClick={() => onPaymentAction(order.id, "approved")}
-                    disabled={!!actionInProgress}
-                    title="Approve payment"
+                    icon={<CheckCircle className="text-green-400" size={20} />}
+                    onClick={() => handleApprove(order.id)}
+                    disabled={actionInProgress !== null}
+                    title="Approve order"
                   />
                   <ActionButton
                     icon={<XCircle className="text-red-400" size={20} />}
