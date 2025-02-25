@@ -1,26 +1,40 @@
 import React from "react";
 import Header from "./Header";
-import { User } from "@supabase/supabase-js";
+import type { User } from "@supabase/supabase-js";
 
 interface PageContainerProps {
-  children: React.ReactNode;
-  title?: string;
-  user?: User | null;
+  title: string;
   showBack?: boolean;
+  user: User | null;
+  children: React.ReactNode;
 }
 
-const PageContainer: React.FC<PageContainerProps> = ({
+function PageContainer({
+  title,
+  showBack,
+  user,
   children,
-  title = "App",
-  user = null,
-  showBack = false,
-}) => {
+}: PageContainerProps) {
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header title={title} user={user} showBack={showBack} />
-      <main className="flex-1">{children}</main>
+    <div className="min-h-screen relative">
+      {/* Background */}
+      <div
+        className="absolute inset-0 z-0"
+        style={{
+          backgroundImage: 'url("https://i.imgur.com/crS3FrR.jpeg")',
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "brightness(0.7)",
+        }}
+      />
+
+      {/* Content */}
+      <div className="relative z-10">
+        <Header title={title} showBack={showBack} user={user} />
+        {children}
+      </div>
     </div>
   );
-};
+}
 
 export default PageContainer;

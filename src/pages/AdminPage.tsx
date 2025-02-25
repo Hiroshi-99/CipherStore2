@@ -104,6 +104,11 @@ function AdminPage() {
     loginMethod: "Receive code from email",
   });
 
+  // This will define the selectedOrder based on the selectedOrderId
+  const selectedOrder = selectedOrderId
+    ? orders.find((order) => order.id === selectedOrderId)
+    : null;
+
   // Use the custom hook for order filtering
   const {
     searchTerm: filteredSearchTerm,
