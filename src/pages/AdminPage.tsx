@@ -256,46 +256,6 @@ function AdminPage() {
     );
   }, []);
 
-  // Filter and sort orders
-  const filteredOrders = useMemo(() => {
-    return orders
-      .filter((order) => {
-        const matchesSearch =
-          order.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          order.email.toLowerCase().includes(searchTerm.toLowerCase());
-
-        const matchesDateRange =
-          (!dateRange.start || new Date(order.created_at) >= dateRange.start) &&
-          (!dateRange.end || new Date(order.created_at) <= dateRange.end);
-
-        const matchesStatus =
-          selectedStatuses.length === 0 ||
-          selectedStatuses.includes(order.status);
-
-        return matchesSearch && matchesDateRange && matchesStatus;
-      })
-      .sort((a, b) => {
-        switch (sortBy) {
-          case "date":
-            return sortOrder === "asc"
-              ? new Date(a.created_at).getTime() -
-                  new Date(b.created_at).getTime()
-              : new Date(b.created_at).getTime() -
-                  new Date(a.created_at).getTime();
-          case "status":
-            return sortOrder === "asc"
-              ? a.status.localeCompare(b.status)
-              : b.status.localeCompare(a.status);
-          case "name":
-            return sortOrder === "asc"
-              ? a.full_name.localeCompare(b.full_name)
-              : b.full_name.localeCompare(a.full_name);
-          default:
-            return 0;
-        }
-      });
-  }, [orders, searchTerm, dateRange, selectedStatuses, sortBy, sortOrder]);
-
   // Add export function
   const handleExport = useCallback(() => {
     const csv = [
