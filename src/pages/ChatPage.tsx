@@ -794,54 +794,66 @@ function ChatPage() {
   // Add this near your other useEffect hooks
   useEffect(() => {
     if (!selectedOrderId || !user) return;
-    
+
     // Set up real-time subscription for new messages
     const subscription = supabase
       .channel(`order-${selectedOrderId}`)
       .on(
-        'postgres_changes',
+        "postgres_changes",
         {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `order_id=eq.${selectedOrderId}`
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `order_id=eq.${selectedOrderId}`,
         },
         (payload) => {
           // Only add the message if it's not from the current user
           // This prevents duplicate messages since we already add them optimistically
           const newMessage = payload.new as Message;
-          
+
           if (newMessage.user_id !== user.id) {
-            console.log('Received new message:', newMessage);
-            
+            console.log("Received new message:", newMessage);
+
             // Add the message to the UI
             setMessages((prev) => {
               // Check if we already have this message (avoid duplicates)
-              const exists = prev.some(m => m.id === newMessage.id);
+              const exists = prev.some((m) => m.id === newMessage.id);
               if (exists) return prev;
-              
+
               // Play sound if tab is not focused
               if (!isTabFocused && messageSound.current) {
-                messageSound.current.play().catch(err => console.log('Error playing sound:', err));
+                messageSound.current
+                  .play()
+                  .catch((err) => console.log("Error playing sound:", err));
               }
-              
+
               // Add the new message
-              return [...prev, {
-                ...newMessage,
-                user_name: newMessage.user_name || (newMessage.is_admin ? "Support" : "User"),
-                user_avatar: newMessage.user_avatar || "",
-              }];
+              return [
+                ...prev,
+                {
+                  ...newMessage,
+                  user_name:
+                    newMessage.user_name ||
+                    (newMessage.is_admin ? "Support" : "User"),
+                  user_avatar: newMessage.user_avatar || "",
+                },
+              ];
             });
-            
+
             // If the tab is not focused, add to unread messages
             if (!isTabFocused) {
-              setUnreadMessages(prev => new Set(prev).add(newMessage.id));
-              
+              setUnreadMessages((prev) => new Set(prev).add(newMessage.id));
+
               // Show a notification
-              if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification('New Message', {
-                  body: `${newMessage.user_name || 'Someone'}: ${newMessage.content}`,
-                  icon: '/favicon.ico'
+              if (
+                "Notification" in window &&
+                Notification.permission === "granted"
+              ) {
+                new Notification("New Message", {
+                  body: `${newMessage.user_name || "Someone"}: ${
+                    newMessage.content
+                  }`,
+                  icon: "/favicon.ico",
                 });
               }
             }
@@ -849,24 +861,26 @@ function ChatPage() {
         }
       )
       .on(
-        'postgres_changes',
+        "postgres_changes",
         {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'messages',
-          filter: `order_id=eq.${selectedOrderId}`
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `order_id=eq.${selectedOrderId}`,
         },
         (payload) => {
           // Handle message updates (like read status)
           const updatedMessage = payload.new as Message;
-          
-          setMessages((prev) => 
-            prev.map(m => m.id === updatedMessage.id ? {...m, ...updatedMessage} : m)
+
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === updatedMessage.id ? { ...m, ...updatedMessage } : m
+            )
           );
         }
       )
       .subscribe();
-    
+
     // Clean up subscription when component unmounts or selectedOrderId changes
     return () => {
       supabase.removeChannel(subscription);
@@ -876,92 +890,95 @@ function ChatPage() {
   // Add this to track tab focus/blur
   useEffect(() => {
     const handleVisibilityChange = () => {
-      setIsTabFocused(document.visibilityState === 'visible');
-      
+      setIsTabFocused(document.visibilityState === "visible");
+
       // If tab becomes visible, clear unread messages
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === "visible") {
         setUnreadMessages(new Set());
       }
     };
-    
+
     const handleFocus = () => setIsTabFocused(true);
     const handleBlur = () => setIsTabFocused(false);
-    
+
     // Add event listeners
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('blur', handleBlur);
-    
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", handleBlur);
+
     // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
+    if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
     }
-    
+
     // Clean up
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", handleBlur);
     };
   }, []);
 
   // Add this function to handle typing events
   const handleTyping = useCallback(() => {
     if (!selectedOrderId || !user) return;
-    
+
     // Send typing event
     supabase.channel(`typing-${selectedOrderId}`).send({
-      type: 'broadcast',
-      event: 'typing',
+      type: "broadcast",
+      event: "typing",
       payload: {
         user_id: user.id,
-        user_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
-        is_admin: isAdmin
-      }
+        user_name:
+          user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+        is_admin: isAdmin,
+      },
     });
-    
+
     // Clear previous timeout
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    
+
     // Set new timeout to stop typing after 3 seconds
     typingTimeoutRef.current = setTimeout(() => {
       supabase.channel(`typing-${selectedOrderId}`).send({
-        type: 'broadcast',
-        event: 'stop_typing',
+        type: "broadcast",
+        event: "stop_typing",
         payload: {
-          user_id: user.id
-        }
+          user_id: user.id,
+        },
       });
-    }, [selectedOrderId, user, isAdmin]);
+    }, 3000);
+  }, [selectedOrderId, user, isAdmin]);
 
   // Add this effect to listen for typing events
   useEffect(() => {
     if (!selectedOrderId) return;
-    
-    const typingChannel = supabase.channel(`typing-${selectedOrderId}`)
-      .on('broadcast', { event: 'typing' }, (payload) => {
+
+    const typingChannel = supabase
+      .channel(`typing-${selectedOrderId}`)
+      .on("broadcast", { event: "typing" }, (payload) => {
         // Ignore own typing events
         if (payload.payload.user_id === user?.id) return;
-        
+
         // Add user to typing users
-        setTypingUsers(prev => {
+        setTypingUsers((prev) => {
           const newSet = new Set(prev);
           newSet.add(payload.payload.user_name);
           return newSet;
         });
       })
-      .on('broadcast', { event: 'stop_typing' }, (payload) => {
+      .on("broadcast", { event: "stop_typing" }, (payload) => {
         // Remove user from typing users
-        setTypingUsers(prev => {
+        setTypingUsers((prev) => {
           const newSet = new Set(prev);
           newSet.delete(payload.payload.user_name);
           return newSet;
         });
       })
       .subscribe();
-    
+
     return () => {
       supabase.removeChannel(typingChannel);
     };
@@ -976,13 +993,13 @@ function ChatPage() {
   // Initialize the sound in useEffect
   useEffect(() => {
     // Create audio element for message notification sound
-    messageSound.current = new Audio('/message-sound.mp3'); // Add this sound file to your public folder
+    messageSound.current = new Audio("/message-sound.mp3"); // Add this sound file to your public folder
     messageSound.current.volume = 0.5;
   }, []);
 
   // Add this function to scroll to bottom
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   // Call this function when messages change
@@ -1337,7 +1354,8 @@ function ChatPage() {
                 {/* Typing indicator */}
                 {typingUsers.size > 0 && (
                   <div className="px-4 py-2 text-sm text-white/60 italic">
-                    {Array.from(typingUsers).join(', ')} {typingUsers.size === 1 ? 'is' : 'are'} typing...
+                    {Array.from(typingUsers).join(", ")}{" "}
+                    {typingUsers.size === 1 ? "is" : "are"} typing...
                     <span className="inline-block ml-1">
                       <span className="animate-bounce">.</span>
                       <span className="animate-bounce delay-100">.</span>
