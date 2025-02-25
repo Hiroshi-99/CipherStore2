@@ -1,7 +1,9 @@
 import { Handler } from "@netlify/functions";
 import { createClient } from "@supabase/supabase-js";
-import busboy from "busboy";
+import * as formidable from "formidable";
 import { Buffer } from "buffer";
+import { IncomingForm } from "formidable";
+import fs from "fs";
 
 // Initialize Supabase client with admin privileges
 const supabaseAdmin = createClient(
@@ -170,51 +172,35 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Handle file upload using busboy
+    // Use formidable to parse the form data
+    const form = new IncomingForm();
+
     return new Promise((resolve, reject) => {
-      const bb = busboy({ headers: event.headers as any });
-      let fileName = "";
-      let fileBuffer: Buffer | null = null;
-      let fileType = "";
-
-      bb.on("file", (name, file, info) => {
-        const { filename, mimeType } = info;
-        const chunks: Buffer[] = [];
-
-        fileName = filename;
-        fileType = mimeType;
-
-        file.on("data", (data) => {
-          chunks.push(data);
-        });
-
-        file.on("end", () => {
-          fileBuffer = Buffer.concat(chunks);
-        });
-      });
-
-      bb.on("field", (name, val) => {
-        if (name === "fileName" && val) {
-          fileName = val;
+      form.parse(event.body, async (err, fields, files) => {
+        if (err) {
+          logError(err, "form parsing");
+          resolve({
+            statusCode: 500,
+            body: JSON.stringify({ error: "Failed to parse form data" }),
+          });
+          return;
         }
-      });
 
-      bb.on("finish", async () => {
+        const file = files.file[0];
+        const fileName = fields.fileName
+          ? fields.fileName[0]
+          : file.originalFilename;
+
         try {
-          if (!fileBuffer) {
-            resolve({
-              statusCode: 400,
-              body: JSON.stringify({ error: "No file provided" }),
-            });
-            return;
-          }
+          // Read the file
+          const fileData = await fs.promises.readFile(file.filepath);
 
           // Upload to Supabase Storage
           const uploadPath = `uploads/${fileName}`;
           const { error: uploadError } = await supabaseAdmin.storage
             .from("images")
-            .upload(uploadPath, fileBuffer, {
-              contentType: fileType,
+            .upload(uploadPath, fileData, {
+              contentType: file.mimetype,
               upsert: true,
             });
 
@@ -250,24 +236,6 @@ export const handler: Handler = async (event) => {
           });
         }
       });
-
-      bb.on("error", (error) => {
-        logError(error, "busboy");
-        resolve({
-          statusCode: 500,
-          body: JSON.stringify({ error: "Failed to parse form data" }),
-        });
-      });
-
-      // Pass the raw request body to busboy
-      bb.write(
-        Buffer.from(
-          event.isBase64Encoded
-            ? Buffer.from(event.body, "base64").toString()
-            : event.body
-        )
-      );
-      bb.end();
     });
   } catch (error) {
     logError(error, "handler");
