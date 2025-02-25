@@ -33,21 +33,8 @@ import { toast, Toaster } from "sonner";
 import LoadingSpinner from "../components/LoadingSpinner";
 import PageContainer from "../components/PageContainer";
 import { motion, AnimatePresence } from "framer-motion";
-
-interface Order {
-  id: string;
-  full_name: string;
-  email: string;
-  status: string;
-  created_at: string;
-  account_file_url?: string;
-  payment_proofs?: {
-    id: string;
-    image_url: string;
-    status: string;
-  }[];
-  messages?: { id: string }[];
-}
+import { useOrderFilters } from "../hooks/useOrderFilters";
+import type { Order } from "../hooks/useOrderFilters";
 
 interface Admin {
   id: string;
@@ -101,6 +88,24 @@ function AdminPage() {
   const searchDebounceRef = useRef<NodeJS.Timeout>();
   const [showImageModal, setShowImageModal] = useState(false);
   const [currentImageUrl, setCurrentImageUrl] = useState("");
+
+  // Use the custom hook for order filtering
+  const {
+    searchTerm: filteredSearchTerm,
+    setSearchTerm: setFilteredSearchTerm,
+    selectedStatuses: filteredSelectedStatuses,
+    setSelectedStatuses: setFilteredSelectedStatuses,
+    dateRange: filteredDateRange,
+    setDateRange: setFilteredDateRange,
+    sortBy: filteredSortBy,
+    setSortBy: setFilteredSortBy,
+    sortOrder: filteredSortOrder,
+    setSortOrder: setFilteredSortOrder,
+    toggleSort: toggleFilteredSort,
+    filteredOrders,
+    stats: filteredStats,
+    clearFilters: clearFilteredFilters,
+  } = useOrderFilters(orders);
 
   useEffect(() => {
     setPageTitle("Admin");
@@ -386,7 +391,7 @@ function AdminPage() {
       clearTimeout(searchDebounceRef.current);
     }
     searchDebounceRef.current = setTimeout(() => {
-      setSearchTerm(value);
+      setFilteredSearchTerm(value);
     }, 300);
   };
 
@@ -512,7 +517,7 @@ function AdminPage() {
                   <input
                     type="date"
                     onChange={(e) =>
-                      setDateRange((prev) => ({
+                      setFilteredDateRange((prev) => ({
                         ...prev,
                         start: e.target.value ? new Date(e.target.value) : null,
                       }))
@@ -523,7 +528,7 @@ function AdminPage() {
                   <input
                     type="date"
                     onChange={(e) =>
-                      setDateRange((prev) => ({
+                      setFilteredDateRange((prev) => ({
                         ...prev,
                         end: e.target.value ? new Date(e.target.value) : null,
                       }))
@@ -536,9 +541,9 @@ function AdminPage() {
                   <Clock className="w-4 h-4 text-white/70" />
                   <select
                     multiple
-                    value={selectedStatuses}
+                    value={filteredSelectedStatuses}
                     onChange={(e) =>
-                      setSelectedStatuses(
+                      setFilteredSelectedStatuses(
                         Array.from(
                           e.target.selectedOptions,
                           (option) => option.value
@@ -804,4 +809,4 @@ const ImageModal = React.memo(function ImageModal({
   );
 });
 
-export default AdminPage;
+export default React.memo(AdminPage);

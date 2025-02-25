@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import LoadingSpinner from "./LoadingSpinner";
 import type { Message } from "../types/chat";
+import { formatDistanceToNow } from "date-fns";
 
 interface MessageBubbleProps {
   message: Message;
@@ -19,6 +20,14 @@ export const MessageBubble = React.memo(function MessageBubble({
   onRetry,
   isPending,
 }: MessageBubbleProps) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
+
+  // Format timestamp as relative time
+  const relativeTime = formatDistanceToNow(new Date(message.created_at), {
+    addSuffix: true,
+  });
+
   return (
     <div
       className={`flex items-start gap-3 ${
@@ -26,11 +35,12 @@ export const MessageBubble = React.memo(function MessageBubble({
       } ${isLatest && sending ? "opacity-50" : ""} ${
         isUnread ? "animate-highlight-fade" : ""
       }`}
+      aria-live={isLatest ? "polite" : "off"}
     >
       {message.is_admin && (
         <img
           src={message.user_avatar || "/default-avatar.png"}
-          alt="Avatar"
+          alt={`${message.user_name}'s avatar`}
           className="w-8 h-8 rounded-full"
           loading="lazy"
           width={32}
@@ -46,8 +56,11 @@ export const MessageBubble = React.memo(function MessageBubble({
           <span className="text-sm font-medium text-white/90">
             {message.user_name}
           </span>
-          <span className="text-xs text-white/50">
-            {new Date(message.created_at).toLocaleString()}
+          <span
+            className="text-xs text-white/50"
+            title={new Date(message.created_at).toLocaleString()}
+          >
+            {relativeTime}
           </span>
         </div>
         {message.content && (
@@ -56,12 +69,42 @@ export const MessageBubble = React.memo(function MessageBubble({
           </p>
         )}
         {message.image_url && (
-          <img
-            src={message.image_url}
-            alt="Chat image"
-            className="max-w-full rounded-lg mt-2"
-            loading="lazy"
-          />
+          <div
+            className={`relative ${
+              !imageLoaded && !imageError ? "min-h-[100px]" : ""
+            }`}
+          >
+            {!imageLoaded && !imageError && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <LoadingSpinner size="sm" light />
+              </div>
+            )}
+            {imageError ? (
+              <div className="bg-white/5 p-3 rounded text-center">
+                <p className="text-red-400 text-sm">Failed to load image</p>
+                <button
+                  onClick={() => {
+                    setImageError(false);
+                    setImageLoaded(false);
+                  }}
+                  className="text-xs text-emerald-400 hover:underline mt-1"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <img
+                src={message.image_url}
+                alt="Chat image"
+                className={`max-w-full rounded-lg mt-2 transition-opacity ${
+                  imageLoaded ? "opacity-100" : "opacity-0"
+                }`}
+                loading="lazy"
+                onLoad={() => setImageLoaded(true)}
+                onError={() => setImageError(true)}
+              />
+            )}
+          </div>
         )}
         {isPending && (
           <button
@@ -70,12 +113,16 @@ export const MessageBubble = React.memo(function MessageBubble({
               onRetry();
             }}
             className="absolute -bottom-6 left-0 text-xs text-red-400 hover:text-red-300 transition-colors bg-black/50 px-2 py-1 rounded"
+            aria-label="Retry sending message"
           >
             Retry
           </button>
         )}
         {sending && (
-          <div className="absolute right-2 bottom-2">
+          <div
+            className="absolute right-2 bottom-2"
+            aria-label="Sending message"
+          >
             <LoadingSpinner size="sm" light />
           </div>
         )}
@@ -83,7 +130,7 @@ export const MessageBubble = React.memo(function MessageBubble({
       {!message.is_admin && (
         <img
           src={message.user_avatar || "/default-avatar.png"}
-          alt="Avatar"
+          alt={`${message.user_name}'s avatar`}
           className="w-8 h-8 rounded-full"
           loading="lazy"
           width={32}

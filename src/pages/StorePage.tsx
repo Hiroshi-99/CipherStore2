@@ -92,6 +92,23 @@ function StorePage() {
     }
   };
 
+  // Add skeleton UI when loading
+  const renderProductSkeleton = () => (
+    <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl w-full max-w-md animate-pulse">
+      <div className="h-10 bg-white/20 rounded mb-8"></div>
+      <div className="h-12 w-32 bg-emerald-400/30 rounded mx-auto mb-8"></div>
+      <div className="space-y-4 mb-8">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center gap-3">
+            <div className="w-5 h-5 rounded-full bg-emerald-400/30"></div>
+            <div className="h-6 w-32 bg-white/20 rounded"></div>
+          </div>
+        ))}
+      </div>
+      <div className="h-12 bg-white/20 rounded"></div>
+    </div>
+  );
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">

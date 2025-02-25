@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Header from "../components/Header";
 import { setPageTitle } from "../utils/title";
+import { toast } from "sonner";
 
 interface InboxMessage {
   id: string;
@@ -102,6 +103,27 @@ function InboxPage() {
       );
     } catch (error) {
       console.error("Error marking message as read:", error);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    if (!user || messages.filter((m) => !m.is_read).length === 0) return;
+
+    try {
+      const { error } = await supabase
+        .from("inbox_messages")
+        .update({ is_read: true })
+        .eq("user_id", user.id)
+        .in("is_read", [false]);
+
+      if (error) throw error;
+
+      setMessages((prev) => prev.map((msg) => ({ ...msg, is_read: true })));
+
+      toast.success("Marked all messages as read");
+    } catch (error) {
+      console.error("Error marking all as read:", error);
+      toast.error("Failed to mark messages as read");
     }
   };
 

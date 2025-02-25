@@ -6,17 +6,26 @@ import React, {
   useMemo,
 } from "react";
 import { supabase } from "../lib/supabase";
-import Header from "../components/Header";
-import { Send, RefreshCw, Image as ImageIcon } from "lucide-react";
+import {
+  Send,
+  RefreshCw,
+  Image as ImageIcon,
+  Menu as MenuIcon,
+  X as XIcon,
+  MessageSquare as ChatIcon,
+} from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { setPageTitle } from "../utils/title";
 import PageContainer from "../components/PageContainer";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { Toaster, toast } from "sonner";
+import { toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
-import type { Message, Order } from "../types/chat";
+import type { Message } from "../types/chat";
 import { useMessageScroll } from "../hooks/useMessageScroll";
+import { useOrderFilters } from "../hooks/useOrderFilters";
+import { motion } from "framer-motion";
+import { useInView } from "react-intersection-observer";
 
 interface ChatProps {
   orderId: string;
@@ -25,6 +34,7 @@ interface ChatProps {
 // Add these constants outside component
 const MESSAGES_PER_PAGE = 50;
 const SCROLL_THRESHOLD = 300;
+const TYPING_DEBOUNCE = 1000;
 
 function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -35,10 +45,10 @@ function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userOrders, setUserOrders] = useState<
-    { id: string; full_name: string }[]
+    { id: string; full_name: string; messages?: { id: string }[] }[]
   >([]);
   const [adminOrders, setAdminOrders] = useState<
-    { id: string; full_name: string }[]
+    { id: string; full_name: string; messages?: { id: string }[] }[]
   >([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -47,11 +57,14 @@ function ChatPage() {
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [notification, setNotification] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Add message queue for optimistic updates
   const messageQueue = useRef<Set<string>>(new Set());
   const pendingMessages = useRef<Map<string, Message>>(new Map());
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Add virtual scrolling state
   const [visibleMessages, setVisibleMessages] = useState<Message[]>([]);
@@ -64,6 +77,17 @@ function ChatPage() {
   // Add pagination state
   const [hasMore, setHasMore] = useState(true);
   const [page, setPage] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Order filtering
+  const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
+    isAdmin ? adminOrders : userOrders
+  );
+
+  const { ref: topLoaderRef, inView: isTopVisible } = useInView({
+    threshold: 0.1,
+  });
+
   const {
     scrollRef,
     lastMessageRef,
@@ -79,17 +103,15 @@ function ChatPage() {
         onClick={() => {
           setSelectedOrderId(order.id);
           setShowSidebar(false);
+          fetchMessages(order.id);
         }}
-        className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+        className={`w-full text-left p-3 rounded-lg mb-2 transition-colors ${
           selectedOrderId === order.id
             ? "bg-emerald-500/20 text-emerald-400"
-            : "text-white/70 hover:bg-white/10"
+            : "hover:bg-gray-800 text-white"
         }`}
       >
-        <div className="font-medium">{order.full_name}</div>
-        <div className="text-sm text-white/50">
-          Order #{order.id.slice(0, 8)}
-        </div>
+        <div className="font-medium">Order #{order.id.slice(0, 8)}</div>
         {isAdmin && order.messages?.length && (
           <div className="text-xs text-emerald-400 mt-1">
             {order.messages.length} messages
@@ -97,7 +119,7 @@ function ChatPage() {
         )}
       </button>
     ));
-  }, [isAdmin, adminOrders, userOrders, selectedOrderId]);
+  }, [isAdmin, userOrders, adminOrders, selectedOrderId, fetchMessages]);
 
   // Memoize messages list
   const messagesList = useMemo(() => {
@@ -114,7 +136,7 @@ function ChatPage() {
 
   // Initialize audio on mount
   useEffect(() => {
-    notificationSound.current = new Audio("/sounds/gg.mp3");
+    notificationSound.current = new Audio("/notification.mp3");
     notificationSound.current.volume = 0.5;
 
     return () => {
@@ -578,6 +600,101 @@ function ChatPage() {
     [hasMore, loading, loadMoreMessages, handleScrollEvent]
   );
 
+  // Load more messages when top is visible
+  useEffect(() => {
+    if (isTopVisible && hasMore && !loadingMore && selectedOrderId) {
+      loadMoreMessages();
+    }
+  }, [isTopVisible, hasMore, selectedOrderId]);
+
+  const handleNewMessage = (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!newMessage.trim() && !selectedImage) {
+      return;
+    }
+
+    sendMessage(newMessage, selectedImage);
+    setNewMessage("");
+    setSelectedImage(null);
+    setImagePreview(null);
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+
+      // Validate file size (5MB max)
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error("Image must be less than 5MB");
+        return;
+      }
+
+      setSelectedImage(file);
+
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleTyping = () => {
+    // Send typing indicator to other users
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    setIsTyping(true);
+
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+    }, TYPING_DEBOUNCE);
+  };
+
+  const cancelImageUpload = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // Add retry mechanism for failed message sends
+  const retrySendMessage = async (messageId: string) => {
+    const failedMessage = pendingMessages.current.get(messageId);
+    if (!failedMessage) return;
+
+    // Remove from pending messages
+    pendingMessages.current.delete(messageId);
+
+    // Try sending again
+    await sendMessage(failedMessage.content, null, failedMessage.id);
+  };
+
+  // Optimize message rendering with virtualization
+  useEffect(() => {
+    if (messageListRef.current && messages.length > 100) {
+      // Only apply virtualization for large message lists
+      const messageElements = messageListRef.current.children;
+      const viewportHeight = window.innerHeight;
+
+      const visibleMessages = messages.filter((_, index) => {
+        if (messageElements[index]) {
+          const rect = messageElements[index].getBoundingClientRect();
+          return rect.top < viewportHeight && rect.bottom > 0;
+        }
+        return false;
+      });
+
+      setVisibleMessages(visibleMessages);
+    } else {
+      setVisibleMessages(messages);
+    }
+  }, [messages, messageListRef.current]);
+
   if (initialLoading) {
     return (
       <PageContainer title="CHAT" user={null}>
@@ -601,6 +718,7 @@ function ChatPage() {
           <button
             className="md:hidden fixed bottom-4 right-4 z-20 bg-emerald-500 p-3 rounded-full shadow-lg"
             onClick={() => setShowSidebar(!showSidebar)}
+            aria-label="Toggle orders sidebar"
           >
             <svg
               className="w-6 h-6 text-white"
@@ -632,6 +750,7 @@ function ChatPage() {
                 <button
                   onClick={() => setShowSidebar(false)}
                   className="p-2 hover:bg-white/10 rounded-lg"
+                  aria-label="Close sidebar"
                 >
                   <svg
                     className="w-6 h-6 text-white"
@@ -649,9 +768,27 @@ function ChatPage() {
                 </button>
               </div>
 
+              {/* Search Input */}
+              <div className="mb-4">
+                <input
+                  type="text"
+                  placeholder="Search orders..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full p-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400"
+                  aria-label="Search orders"
+                />
+              </div>
+
               {/* Orders List */}
               <div className="space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
-                {ordersList}
+                {filteredOrders.length > 0 ? (
+                  ordersList
+                ) : (
+                  <div className="text-center p-4 text-gray-400">
+                    No orders found
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -667,13 +804,26 @@ function ChatPage() {
                     className="h-[calc(100vh-16rem)] md:h-[600px] overflow-y-auto p-4 md:p-6 space-y-4"
                     onScroll={handleScroll}
                   >
+                    {/* Show loader at the top when loading more messages */}
+                    {hasMore && (
+                      <div ref={topLoaderRef} className="text-center py-2">
+                        {loadingMore ? (
+                          <span className="inline-block w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></span>
+                        ) : (
+                          <span className="text-gray-500 text-sm">
+                            Scroll for more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {error ? (
                       <div className="flex flex-col items-center justify-center h-full space-y-4">
                         <p className="text-red-400">{error}</p>
                         <button
                           onClick={() => {
                             setError(null);
-                            fetchMessages(selectedOrderId!);
+                            fetchMessages(selectedOrderId);
                           }}
                           className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-white transition-colors"
                         >
@@ -682,36 +832,34 @@ function ChatPage() {
                       </div>
                     ) : (
                       <>
-                        {hasMore && (
-                          <div className="h-4">
-                            {loading && (
-                              <div className="flex justify-center">
-                                <LoadingSpinner size="sm" light />
-                              </div>
-                            )}
+                        {loading && (
+                          <div className="flex justify-center">
+                            <LoadingSpinner size="sm" light />
                           </div>
                         )}
                         {messages.map((message, index) => (
-                          <div
+                          <motion.div
                             key={message.id}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.3 }}
                             ref={
                               index === messages.length - 1
                                 ? lastMessageRef
-                                : undefined
+                                : null
                             }
-                            data-message-id={message.id}
                           >
                             <MessageBubble
                               message={message}
                               isLatest={index === messages.length - 1}
                               sending={messageQueue.current.has(message.id)}
                               isUnread={unreadMessages.has(message.id)}
-                              onRetry={() => retryMessage(message.id)}
                               isPending={pendingMessages.current.has(
                                 message.id
                               )}
+                              onRetry={() => retrySendMessage(message.id)}
                             />
-                          </div>
+                          </motion.div>
                         ))}
                       </>
                     )}
@@ -719,22 +867,42 @@ function ChatPage() {
 
                   {/* Message Input */}
                   <form
-                    onSubmit={handleFormSubmit}
+                    onSubmit={handleNewMessage}
                     className="border-t border-white/10 p-4"
                   >
+                    {imagePreview && (
+                      <div className="relative mb-2 inline-block">
+                        <img
+                          src={imagePreview}
+                          alt="Selected image"
+                          className="h-20 rounded-lg object-cover mb-2"
+                        />
+                        <button
+                          type="button"
+                          onClick={cancelImageUpload}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1"
+                          aria-label="Remove image"
+                        >
+                          <XIcon size={16} />
+                        </button>
+                      </div>
+                    )}
+
                     <div className="flex gap-2">
                       <input
                         type="file"
                         accept="image/*"
                         className="hidden"
                         ref={fileInputRef}
-                        onChange={handleImageSelect}
+                        onChange={handleImageChange}
+                        aria-label="Upload image"
                       />
 
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
                         className="p-2 hover:bg-gray-700 rounded-full transition-colors"
+                        aria-label="Upload image"
                       >
                         <ImageIcon className="w-6 h-6 text-gray-400" />
                       </button>
@@ -742,9 +910,13 @@ function ChatPage() {
                       <input
                         type="text"
                         value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
+                        onChange={(e) => {
+                          setNewMessage(e.target.value);
+                          handleTyping();
+                        }}
                         placeholder="Type your message..."
                         className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        aria-label="Message"
                       />
                       <button
                         type="submit"
@@ -752,6 +924,7 @@ function ChatPage() {
                           (!newMessage.trim() && !selectedImage) || sending
                         }
                         className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        aria-label="Send message"
                       >
                         {sending ? (
                           <RefreshCw className="w-5 h-5 animate-spin" />
@@ -763,9 +936,19 @@ function ChatPage() {
                   </form>
                 </>
               ) : (
-                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-2">
-                  <p>Select an order to start chatting</p>
-                  <p className="text-sm">Your conversations will appear here</p>
+                <div className="h-[calc(100vh-16rem)] md:h-[600px] flex flex-col items-center justify-center text-white/50 space-y-4 p-6">
+                  <ChatIcon className="w-12 h-12 text-emerald-500/50" />
+                  <p className="text-lg">Select an order to start chatting</p>
+                  <p className="text-sm text-center max-w-md">
+                    Choose an order from the sidebar to start a conversation
+                    with support
+                  </p>
+                  <button
+                    onClick={() => setShowSidebar(true)}
+                    className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-2"
+                  >
+                    View Orders
+                  </button>
                 </div>
               )}
             </div>

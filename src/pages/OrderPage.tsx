@@ -25,6 +25,7 @@ function OrderPage() {
   const [paymentProof, setPaymentProof] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setPageTitle("Order");
@@ -171,6 +172,26 @@ function OrderPage() {
     }
   };
 
+  const validateForm = () => {
+    const errors: Record<string, string> = {};
+
+    if (!formData.name.trim()) {
+      errors.name = "Name is required";
+    }
+
+    if (!formData.email.trim()) {
+      errors.email = "Email is required";
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      errors.email = "Email is invalid";
+    }
+
+    if (!paymentProof) {
+      errors.paymentProof = "Payment proof is required";
+    }
+
+    return errors;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || isSubmitting) return;
@@ -178,16 +199,16 @@ function OrderPage() {
     setIsSubmitting(true);
     setIsUploading(true);
 
+    const validationErrors = validateForm();
+    if (Object.keys(validationErrors).length > 0) {
+      // Set errors in state and display to user
+      setFormErrors(validationErrors);
+      setIsSubmitting(false);
+      setIsUploading(false);
+      return;
+    }
+
     try {
-      // Validate form data
-      if (!formData.name.trim() || !formData.email.trim()) {
-        throw new Error("Please fill in all required fields");
-      }
-
-      if (!paymentProof) {
-        throw new Error("Please upload your payment proof");
-      }
-
       // Generate a unique ID for the order
       const tempOrderId = crypto.randomUUID();
 
