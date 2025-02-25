@@ -50,6 +50,8 @@ import {
   getLocalUsers,
   getAllUsersClientSide,
 } from "../lib/adminService";
+import OrderDetailModal from "../components/admin/OrderDetailModal";
+import AccountDetailsForm from "../components/admin/AccountDetailsForm";
 
 interface Admin {
   id: string;
@@ -172,8 +174,8 @@ function AdminPage() {
 
   // Define handleApprove early in the component
   const handleApprove = async (orderId: string) => {
-      try {
-        setActionInProgress(orderId);
+    try {
+      setActionInProgress(orderId);
 
       // Update the order status to active
       const { error } = await supabase
@@ -187,7 +189,7 @@ function AdminPage() {
         return;
       }
 
-        // Update local state
+      // Update local state
       setOrders(
         orders.map((order) =>
           order.id === orderId ? { ...order, status: "active" } : order
@@ -241,9 +243,9 @@ function AdminPage() {
     } catch (err) {
       console.error("Error in handleReject:", err);
       toast.error("Failed to reject order");
-      } finally {
-        setActionInProgress(null);
-      }
+    } finally {
+      setActionInProgress(null);
+    }
   };
 
   useEffect(() => {
@@ -252,10 +254,42 @@ function AdminPage() {
     checkAdminStatus();
   }, []);
 
+  // Optimize the fetchOrders function with caching
   const fetchOrders = async () => {
     setRefreshing(true);
 
     try {
+      // Check if we have cached orders and they're less than 30 seconds old
+      const cachedOrders = localStorage.getItem("admin_orders_cache");
+      const cachedTimestamp = localStorage.getItem("admin_orders_timestamp");
+
+      if (cachedOrders && cachedTimestamp) {
+        const timestamp = parseInt(cachedTimestamp, 10);
+        const now = Date.now();
+
+        // If cache is less than 30 seconds old, use it
+        if (now - timestamp < 30000) {
+          const parsedOrders = JSON.parse(cachedOrders);
+          setOrders(parsedOrders);
+
+          // Calculate statistics efficiently
+          const statusCounts = parsedOrders.reduce((counts, order) => {
+            counts[order.status] = (counts[order.status] || 0) + 1;
+            return counts;
+          }, {} as Record<string, number>);
+
+          setStats({
+            total: parsedOrders.length,
+            pending: statusCounts.pending || 0,
+            approved: statusCounts.active || 0,
+            rejected: statusCounts.rejected || 0,
+          });
+
+          setRefreshing(false);
+          return;
+        }
+      }
+
       // Use a more efficient query with pagination
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
@@ -275,6 +309,10 @@ function AdminPage() {
       }
 
       if (ordersData) {
+        // Cache the orders
+        localStorage.setItem("admin_orders_cache", JSON.stringify(ordersData));
+        localStorage.setItem("admin_orders_timestamp", Date.now().toString());
+
         // Use a more efficient way to update state
         setOrders(ordersData);
 
@@ -522,6 +560,7 @@ function AdminPage() {
                     (accountIdInput as HTMLInputElement).focus();
                   }
                 }, 500);
+              }
             } else {
               toast.success(
                 `${orderIds.length} orders approved! Please enter account details for each order individually.`,
@@ -721,6 +760,109 @@ Please keep these details secure. You can copy them by selecting the text.
     } catch (err) {
       console.error("Error handling account details upload:", err);
       toast.error("Failed to send account details. Please try again.");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  // Add this function to deliver account details to users
+  const deliverAccountDetails = async (
+    orderId: string,
+    accountDetails: AccountDetails
+  ) => {
+    try {
+      setActionInProgress(orderId);
+
+      // Validate account details
+      if (!accountDetails.accountId.trim()) {
+        toast.error("Account ID is required");
+        return false;
+      }
+
+      // Update the order with account details
+      const { error: updateError } = await supabase
+        .from("orders")
+        .update({
+          account_id: accountDetails.accountId,
+          account_password: accountDetails.password,
+          delivery_date: new Date().toISOString(),
+          status: "delivered",
+        })
+        .eq("id", orderId);
+
+      if (updateError) {
+        console.error(
+          "Error updating order with account details:",
+          updateError
+        );
+        toast.error("Failed to deliver account details");
+        return false;
+      }
+
+      // Send a message to the user with their account details
+      const { data: orderData } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+
+      if (orderData) {
+        // Create a message with the account details
+        const message = {
+          id: generateUUID(),
+          order_id: orderId,
+          content: `Your account is ready! Here are your login details:\n\nAccount ID: ${accountDetails.accountId}\nPassword: ${accountDetails.password}\n\nPlease save these details securely.`,
+          created_at: new Date().toISOString(),
+          user_id: null, // System message
+          is_read: false,
+          user_name: "Support Team",
+          user_avatar: "https://i.imgur.com/eyaDC8l.png",
+        };
+
+        // Insert the message
+        const { error: messageError } = await supabase
+          .from("messages")
+          .insert(message);
+
+        if (messageError) {
+          console.error("Error sending account details message:", messageError);
+          // Continue anyway since the order was updated
+        }
+      }
+
+      // Update local state
+      setOrders(
+        orders.map((order) =>
+          order.id === orderId
+            ? {
+                ...order,
+                status: "delivered",
+                account_id: accountDetails.accountId,
+                account_password: accountDetails.password,
+              }
+            : order
+        )
+      );
+
+      toast.success("Account details delivered successfully");
+
+      // Reset the account details form
+      setAccountDetails({
+        accountId: "",
+        password: "",
+      });
+
+      // Close any modals
+      setSelectedOrderId(null);
+
+      // Refresh orders to get the latest data
+      fetchOrders();
+
+      return true;
+    } catch (err) {
+      console.error("Error in deliverAccountDetails:", err);
+      toast.error("Failed to deliver account details");
+      return false;
     } finally {
       setActionInProgress(null);
     }
@@ -1012,194 +1154,484 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
-  // Replace the entire handleOrderBatchAction function with this corrected version
+  // Add this function to handle batch actions on orders
   const handleOrderBatchAction = async (action: BatchAction) => {
     if (selectedOrderIds.size === 0) {
       toast.error("No orders selected");
       return;
     }
-    
+
     setIsOrderActionInProgress(true);
-    const toastId = toast.loading(`Processing ${action} action...`);
-    
+
     try {
       const orderIds = Array.from(selectedOrderIds);
-      
-      if (action === "approve") {
-        try {
-          toast.loading(`Approving ${orderIds.length} orders...`, { id: toastId });
-          
+
+      switch (action) {
+        case "approve":
+          toast.info(`Approving ${orderIds.length} orders...`);
+
           // Use a more efficient batch update
           if (orderIds.length > 0) {
             const { error } = await supabase
               .from("orders")
               .update({ status: "active" })
               .in("id", orderIds);
-            
+
             if (error) {
               throw error;
             }
           }
-          
-          toast.success(`${orderIds.length} orders approved`, { id: toastId });
-        } catch (error) {
-          console.error("Error approving orders:", error);
-          toast.error("Failed to approve orders. Please try again.", { id: toastId });
-          return;
-        }
-      } 
-      else if (action === "reject") {
-        try {
-          toast.loading(`Rejecting ${orderIds.length} orders...`, { id: toastId });
-          
+
+          toast.success(`${orderIds.length} orders approved`);
+          break;
+
+        case "reject":
+          toast.info(`Rejecting ${orderIds.length} orders...`);
+
           // Use a more efficient batch update
           if (orderIds.length > 0) {
             const { error } = await supabase
               .from("orders")
               .update({ status: "rejected" })
               .in("id", orderIds);
-            
+
             if (error) {
               throw error;
             }
           }
-          
-          toast.success(`${orderIds.length} orders rejected`, { id: toastId });
-        } catch (error) {
-          console.error("Error rejecting orders:", error);
-          toast.error("Failed to reject orders. Please try again.", { id: toastId });
-          return;
-        }
-      }
-      else if (action === "export") {
-        try {
-          toast.loading("Preparing export...", { id: toastId });
+
+          toast.success(`${orderIds.length} orders rejected`);
+          break;
+
+        case "export":
+          toast.info("Preparing export...");
           setIsExporting(true);
-          
-          // Get full order details for selected orders
-          const selectedOrders = orders.filter(order => 
-            selectedOrderIds.has(order.id)
-          );
-          
-          if (selectedOrders.length > 0) {
-            // Create CSV content
-            const headers = [
-              "ID", 
-              "Name", 
-              "Email", 
-              "Status", 
-              "Created At", 
-              "Account Email", 
-              "Account Password"
-            ];
-            
-            const rows = selectedOrders.map(order => [
-              order.id,
-              order.full_name,
-              order.email,
-              order.status,
-              new Date(order.created_at).toLocaleString(),
-              order.account_email || "",
-              order.account_password || ""
-            ]);
-            
+
+          // Get the selected orders
+          const { data: selectedOrders } = await supabase
+            .from("orders")
+            .select("*")
+            .in("id", orderIds);
+
+          if (selectedOrders && selectedOrders.length > 0) {
+            // Format the data for export
+            const exportData = selectedOrders.map((order) => ({
+              ID: order.id,
+              Name: order.full_name,
+              Email: order.email,
+              Status: order.status,
+              Created: new Date(order.created_at).toLocaleString(),
+              // Add other fields as needed
+            }));
+
+            // Convert to CSV
+            const headers = Object.keys(exportData[0]);
             const csvContent = [
               headers.join(","),
-              ...rows.map(row => row.join(","))
+              ...exportData.map((row) =>
+                headers
+                  .map((header) =>
+                    JSON.stringify(row[header as keyof typeof row])
+                  )
+                  .join(",")
+              ),
             ].join("\n");
-            
+
             // Create download link
             const blob = new Blob([csvContent], { type: "text/csv" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = `orders-export-${new Date().toISOString().split("T")[0]}.csv`;
+            a.download = `orders-export-${
+              new Date().toISOString().split("T")[0]
+            }.csv`;
             document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(url);
             document.body.removeChild(a);
-            
-            toast.success(`Exported ${selectedOrders.length} orders`, { id: toastId });
+
+            toast.success(`Exported ${selectedOrders.length} orders`);
           } else {
-            toast.error("No orders found to export", { id: toastId });
+            toast.error("No orders found to export");
           }
-        } catch (error) {
-          console.error("Error exporting orders:", error);
-          toast.error("Failed to export orders", { id: toastId });
-          return;
-        } finally {
+
           setIsExporting(false);
-        }
-      }
-      else if (action === "delete") {
-        try {
-          if (confirm(`Are you sure you want to delete ${orderIds.length} orders? This action cannot be undone.`)) {
-            toast.loading(`Deleting ${orderIds.length} orders...`, { id: toastId });
-            
+          break;
+
+        case "delete":
+          if (
+            confirm(
+              `Are you sure you want to delete ${orderIds.length} orders? This action cannot be undone.`
+            )
+          ) {
+            toast.info(`Deleting ${orderIds.length} orders...`);
+
             const { error } = await supabase
               .from("orders")
               .delete()
               .in("id", orderIds);
-            
+
             if (error) {
-              throw error;
+              toast.error(`Error deleting orders: ${error.message}`);
+            } else {
+              toast.success(`${orderIds.length} orders deleted`);
             }
-            
-            toast.success(`${orderIds.length} orders deleted`, { id: toastId });
-          } else {
-            toast.dismiss(toastId);
-            setIsOrderActionInProgress(false);
-            return;
           }
-        } catch (error) {
-          console.error("Error deleting orders:", error);
-          toast.error(`Error deleting orders: ${error.message || "Unknown error"}`, { id: toastId });
-          return;
-        }
+          break;
       }
-      
+
       // Refresh orders to get the latest data
       fetchOrders();
-      
+
       // Clear selection after action
       setSelectedOrderIds(new Set());
     } catch (err) {
       console.error(`Error performing batch action ${action}:`, err);
-      toast.error(`Failed to ${action} orders`, { id: toastId });
+      toast.error(`Failed to ${action} orders`);
     } finally {
       setIsOrderActionInProgress(false);
     }
+  };
+
+  // Add this function to filter orders
+  const getFilteredOrders = () => {
+    return orders.filter((order) => {
+      // Filter by status
+      if (orderStatusFilter !== "all" && order.status !== orderStatusFilter) {
+        return false;
+      }
+
+      // Filter by search query
+      if (
+        orderSearchQuery &&
+        !order.full_name
+          .toLowerCase()
+          .includes(orderSearchQuery.toLowerCase()) &&
+        !order.email.toLowerCase().includes(orderSearchQuery.toLowerCase())
+      ) {
+        return false;
+      }
+
+      // Filter by date range
+      if (
+        orderDateRange.start &&
+        new Date(order.created_at) < orderDateRange.start
+      ) {
+        return false;
+      }
+
+      if (orderDateRange.end) {
+        const endDate = new Date(orderDateRange.end);
+        endDate.setHours(23, 59, 59, 999); // Set to end of day
+        if (new Date(order.created_at) > endDate) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  };
+
+  // Add this function to calculate order statistics
+  const calculateOrderStats = () => {
+    const total = orders.length;
+    const pending = orders.filter((order) => order.status === "pending").length;
+    const active = orders.filter((order) => order.status === "active").length;
+    const rejected = orders.filter(
+      (order) => order.status === "rejected"
+    ).length;
+    const withAccountFiles = orders.filter(
+      (order) => order.account_file_url
+    ).length;
+
+    return { total, pending, active, rejected, withAccountFiles };
+  };
+
+  // Add this function to view order details
+  const viewOrderDetails = (order: Order) => {
+    setSelectedOrderDetail(order);
+  };
+
+  // Add this component for the account details form
+  const AccountDetailsForm = ({ orderId }: { orderId: string }) => {
+    const [localAccountDetails, setLocalAccountDetails] = useState({
+      accountId: "",
+      password: "",
+    });
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+
+      if (!localAccountDetails.accountId.trim()) {
+        toast.error("Account ID is required");
+        return;
+      }
+
+      setIsSubmitting(true);
+
+      const success = await deliverAccountDetails(orderId, localAccountDetails);
+
+      if (success) {
+        // Reset form
+        setLocalAccountDetails({
+          accountId: "",
+          password: "",
+        });
+      }
+
+      setIsSubmitting(false);
+    };
+
+    const generateRandomPassword = () => {
+      const chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+      let password = "";
+      for (let i = 0; i < 12; i++) {
+        password += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      setLocalAccountDetails((prev) => ({ ...prev, password }));
+    };
+
+    return (
+      <div className="bg-white/5 rounded-lg p-6 mt-4">
+        <h3 className="text-lg font-medium text-white mb-4">
+          Deliver Account Details
+        </h3>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="accountId" className="block text-white/70 mb-2">
+              Account ID / Email <span className="text-red-400">*</span>
+            </label>
+            <input
+              id="accountId"
+              type="text"
+              value={localAccountDetails.accountId}
+              onChange={(e) =>
+                setLocalAccountDetails((prev) => ({
+                  ...prev,
+                  accountId: e.target.value,
+                }))
+              }
+              className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+              placeholder="Enter account ID or email"
+              required
+            />
+          </div>
+
+          <div>
+            <label htmlFor="password" className="block text-white/70 mb-2">
+              Password
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="password"
+                type="text"
+                value={localAccountDetails.password}
+                onChange={(e) =>
+                  setLocalAccountDetails((prev) => ({
+                    ...prev,
+                    password: e.target.value,
+                  }))
+                }
+                className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                placeholder="Enter password (optional)"
+              />
+              <button
+                type="button"
+                onClick={generateRandomPassword}
+                className="px-3 py-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+              >
+                Generate
+              </button>
+            </div>
+            <p className="text-white/50 text-sm mt-1">
+              Leave blank to only deliver the account ID
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-3 mt-6">
+            <button
+              type="button"
+              onClick={() => setSelectedOrderId(null)}
+              className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded transition-colors"
+              disabled={isSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center gap-2"
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Delivering...
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" />
+                  Deliver Account
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  };
+
+  // Add this function to render the settings tab
+  const renderSettingsTab = () => {
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
+
+        <div className="space-y-6">
+          {/* System Settings */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">System Settings</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-white/70 mb-2">Site Name</label>
+                <input
+                  type="text"
+                  value="Cipher Admin"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <div>
+                <label className="block text-white/70 mb-2">
+                  Support Email
+                </label>
+                <input
+                  type="email"
+                  value="support@example.com"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="maintenance-mode"
+                  checked={false}
+                  onChange={() => {}}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <label htmlFor="maintenance-mode" className="ml-2 text-white">
+                  Enable Maintenance Mode
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <button
+                onClick={() => toast.info("Settings saved (demo)")}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors"
+              >
+                Save Settings
+              </button>
+            </div>
+          </div>
+
+          {/* Database Management */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">Database Management</h3>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Backup Database</h4>
+                  <p className="text-white/70 text-sm">
+                    Create a backup of the current database
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.info("Database backup initiated (demo)")}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                >
+                  Create Backup
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Clear Cache</h4>
+                  <p className="text-white/70 text-sm">
+                    Clear the system cache
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.success("Cache cleared (demo)")}
+                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
+                >
+                  Clear Cache
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Danger Zone */}
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
+            <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Reset All Settings</h4>
+                  <p className="text-white/70 text-sm">
+                    Reset all settings to default values
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Are you sure you want to reset all settings? This cannot be undone."
+                      )
+                    ) {
+                      toast.success("Settings reset to defaults (demo)");
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
+                >
+                  Reset Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // Add this function to render the orders tab
   const renderOrdersTab = () => {
     const stats = calculateOrderStats();
     const filteredOrders = getFilteredOrders();
-    
+
     return (
       <div>
         <h2 className="text-xl text-white mb-6">Order Management</h2>
-        
+
         {/* Order Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white/5 rounded-lg p-4">
-            <h3 className="text-white/70 text-sm uppercase">Total</h3>
-            <p className="text-2xl font-bold text-white mt-1">{stats.total}</p>
-          </div>
-          <div className="bg-white/5 rounded-lg p-4">
-            <h3 className="text-white/70 text-sm uppercase">Pending</h3>
-            <p className="text-2xl font-bold text-white mt-1">{stats.pending}</p>
-          </div>
-          <div className="bg-white/5 rounded-lg p-4">
-            <h3 className="text-white/70 text-sm uppercase">Active</h3>
-            <p className="text-2xl font-bold text-white mt-1">{stats.approved}</p>
-          </div>
-          <div className="bg-white/5 rounded-lg p-4">
-            <h3 className="text-white/70 text-sm uppercase">Rejected</h3>
-            <p className="text-2xl font-bold text-white mt-1">{stats.rejected}</p>
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+          {Object.entries(stats).map(([key, value]) => (
+            <div key={key} className="bg-white/5 rounded-lg p-4">
+              <h3 className="text-white/70 text-sm uppercase">
+                {key.replace(/([A-Z])/g, " $1").trim()}
+              </h3>
+              <p className="text-2xl font-bold text-white mt-1">{value}</p>
+            </div>
+          ))}
         </div>
-        
+
         {/* Filters and Search */}
         <div className="bg-white/5 rounded-lg p-4 mb-6">
           <div className="flex flex-wrap gap-4">
@@ -1218,7 +1650,7 @@ Please keep these details secure. You can copy them by selecting the text.
                   size={18}
                 />
               </div>
-              </div>
+            </div>
 
             <div>
               <label className="block text-white/70 mb-2 text-sm">Status</label>
@@ -1233,84 +1665,69 @@ Please keep these details secure. You can copy them by selecting the text.
                 <option value="rejected">Rejected</option>
               </select>
             </div>
-            
-            <div>
-              <label className="block text-white/70 mb-2 text-sm">Actions</label>
-              <button
-                onClick={() => fetchOrders()}
-                className="bg-blue-500/20 text-blue-400 rounded-lg px-4 py-2 hover:bg-blue-500/30 transition-colors flex items-center gap-2"
-              >
-                <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
-                Refresh
-              </button>
-            </div>
           </div>
         </div>
-        
-        {/* Orders List */}
-        <div className="bg-white/5 rounded-lg p-4">
-          {/* Batch Actions */}
-          {selectedOrderIds.size > 0 ? (
-            <div className="mb-4 p-3 bg-white/10 rounded-lg">
-              <div className="flex items-center justify-between">
-                <p className="text-white">
-                  {selectedOrderIds.size}{" "}
-                  {selectedOrderIds.size === 1 ? "order" : "orders"} selected
-                </p>
-                
-                <div className="flex gap-2">
-              <button
-                    onClick={() => handleOrderBatchAction("approve")}
-                    disabled={isOrderActionInProgress}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
-                  >
-                    <CheckSquare className="w-4 h-4" />
-                    Approve
-              </button>
 
-              <button
-                    onClick={() => handleOrderBatchAction("reject")}
-                    disabled={isOrderActionInProgress}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                  >
-                    <XSquare className="w-4 h-4" />
-                    Reject
-              </button>
-                  
-              <button
-                    onClick={() => handleOrderBatchAction("export")}
-                    disabled={isOrderActionInProgress || isExporting}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-                  >
-                    <FileText className="w-4 h-4" />
-                    Export
-                  </button>
-                  
-                  <button
-                    onClick={() => setSelectedOrderIds(new Set())}
-                    className="flex items-center gap-1 px-3 py-1.5 bg-gray-500/20 text-gray-400 rounded hover:bg-gray-500/30 transition-colors"
-                  >
-                    Clear
-              </button>
+        {/* Batch Actions */}
+        {selectedOrderIds.size > 0 && (
+          <div className="bg-white/5 rounded-lg p-4 mb-6">
+            <div className="flex items-center justify-between">
+              <p className="text-white">
+                {selectedOrderIds.size}{" "}
+                {selectedOrderIds.size === 1 ? "order" : "orders"} selected
+              </p>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleOrderBatchAction("approve")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
+                >
+                  <CheckSquare className="w-4 h-4" />
+                  Approve
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("reject")}
+                  disabled={isOrderActionInProgress}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                >
+                  <XSquare className="w-4 h-4" />
+                  Reject
+                </button>
+
+                <button
+                  onClick={() => handleOrderBatchAction("export")}
+                  disabled={isOrderActionInProgress || isExporting}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+                >
+                  {isExporting ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  Export
+                </button>
+              </div>
             </div>
           </div>
-            </div>
-          ) : null}
-          
-          {/* Orders */}
+        )}
+
+        {/* Orders list */}
+        <div className="space-y-4">
           {filteredOrders.length === 0 ? (
-            <div className="text-center py-8">
+            <div className="bg-white/5 rounded-lg p-8 text-center">
               <p className="text-white/70">No orders found</p>
             </div>
           ) : (
             filteredOrders.map((order) => (
               <div
                 key={order.id}
-                className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors mb-3"
+                className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-3">
-                  <input
+                    <input
                       type="checkbox"
                       checked={selectedOrderIds.has(order.id)}
                       onChange={(e) => {
@@ -1322,11 +1739,13 @@ Please keep these details secure. You can copy them by selecting the text.
                         }
                         setSelectedOrderIds(newSelected);
                       }}
-                      className="mt-1 w-4 h-4 accent-blue-500"
+                      className="mt-1 w-4 h-4 accent-emerald-500"
                     />
-                    
+
                     <div>
-                      <h3 className="text-white font-medium">{order.full_name}</h3>
+                      <h3 className="text-lg font-medium text-white">
+                        {order.full_name}
+                      </h3>
                       <p className="text-white/70">{order.email}</p>
                       <div className="flex items-center gap-2 mt-1">
                         <span
@@ -1343,10 +1762,10 @@ Please keep these details secure. You can copy them by selecting the text.
                         <span className="text-white/50 text-xs">
                           {new Date(order.created_at).toLocaleString()}
                         </span>
-                </div>
-              </div>
-            </div>
-                  
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex gap-2">
                     <button
                       onClick={() => setSelectedOrderDetail(order)}
@@ -1355,7 +1774,7 @@ Please keep these details secure. You can copy them by selecting the text.
                     >
                       <Eye className="w-5 h-5" />
                     </button>
-                    
+
                     {order.status === "pending" && (
                       <>
                         <button
@@ -1366,7 +1785,7 @@ Please keep these details secure. You can copy them by selecting the text.
                         >
                           <CheckCircle className="w-5 h-5" />
                         </button>
-                        
+
                         <button
                           onClick={() => handleReject(order.id)}
                           disabled={!!actionInProgress}
@@ -1377,7 +1796,7 @@ Please keep these details secure. You can copy them by selecting the text.
                         </button>
                       </>
                     )}
-                    
+
                     <Link
                       to={`/chat?order=${order.id}`}
                       className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
@@ -1385,134 +1804,207 @@ Please keep these details secure. You can copy them by selecting the text.
                     >
                       <MessageSquare className="w-5 h-5" />
                     </Link>
-                    
+
                     {order.status === "active" && !order.account_file_url && (
                       <button
-                        onClick={() => setSelectedOrderDetail(order)}
+                        onClick={() => setSelectedOrderId(order.id)}
                         className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
                         title="Upload account file"
                       >
                         <Upload className="w-5 h-5" />
                       </button>
                     )}
+                  </div>
+                </div>
               </div>
-              </div>
-              </div>
-              ))
-            )}
-          </div>
+            ))
+          )}
+        </div>
       </div>
     );
   };
 
-  // Add this function to render the settings tab
-  const renderSettingsTab = () => {
-    return (
-      <div>
-        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
-        
-        <div className="space-y-6">
-          {/* System Settings */}
-          <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg text-white mb-4">System Settings</h3>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-white/70 mb-2">Site Name</label>
-                <input
-                  type="text"
-                  value="Cipher Admin"
-                  onChange={() => {}}
-                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-                </div>
+  // Update the OrderDetailModal component
+  const OrderDetailModal = () => {
+    if (!selectedOrderDetail) return null;
 
-              <div>
-                <label className="block text-white/70 mb-2">Support Email</label>
-                <input
-                  type="email"
-                  value="support@example.com"
-                  onChange={() => {}}
-                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-              </div>
-              
-                      <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="maintenance-mode"
-                  checked={false}
-                  onChange={() => {}}
-                  className="w-4 h-4 accent-emerald-500"
-                />
-                <label htmlFor="maintenance-mode" className="ml-2 text-white">
-                  Enable Maintenance Mode
-                </label>
-                      </div>
-                    </div>
-            
-            <div className="mt-6">
+    return (
+      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+        <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="p-6">
+            <div className="flex justify-between items-start mb-6">
+              <h2 className="text-xl font-bold text-white">Order Details</h2>
               <button
-                onClick={() => toast.info("Settings saved (demo)")}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors"
+                onClick={() => setSelectedOrderDetail(null)}
+                className="text-white/70 hover:text-white"
               >
-                Save Settings
+                <XCircle className="w-6 h-6" />
               </button>
             </div>
-                    </div>
 
-          {/* Maintenance */}
-          <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg text-white mb-4">Maintenance</h3>
-            
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                          <div>
-                  <h4 className="text-white">Database Backup</h4>
-                  <p className="text-white/70 text-sm">Create a backup of the database</p>
-                            </div>
-                <button
-                  onClick={() => toast.info("Database backup initiated (demo)")}
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-white/70 mb-2">Customer Information</h3>
+                <div className="bg-white/5 rounded-lg p-4">
+                  <p className="text-white">
+                    <span className="text-white/70">Name:</span>{" "}
+                    {selectedOrderDetail.full_name}
+                  </p>
+                  <p className="text-white">
+                    <span className="text-white/70">Email:</span>{" "}
+                    {selectedOrderDetail.email}
+                  </p>
+                  <p className="text-white">
+                    <span className="text-white/70">Status:</span>
+                    <span
+                      className={`ml-2 px-2 py-0.5 rounded text-xs ${
+                        selectedOrderDetail.status === "active"
+                          ? "bg-green-500/20 text-green-400"
+                          : selectedOrderDetail.status === "rejected"
+                          ? "bg-red-500/20 text-red-400"
+                          : selectedOrderDetail.status === "delivered"
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "bg-yellow-500/20 text-yellow-400"
+                      }`}
+                    >
+                      {selectedOrderDetail.status.toUpperCase()}
+                    </span>
+                  </p>
+                  <p className="text-white">
+                    <span className="text-white/70">Created:</span>{" "}
+                    {new Date(selectedOrderDetail.created_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              {/* Payment Proofs Section */}
+              {selectedOrderDetail.payment_proofs &&
+                selectedOrderDetail.payment_proofs.length > 0 && (
+                  <div>
+                    <h3 className="text-white/70 mb-2">Payment Proofs</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {selectedOrderDetail.payment_proofs.map(
+                        (proof, index) => (
+                          <div
+                            key={index}
+                            className="bg-white/5 rounded-lg p-4"
+                          >
+                            <img
+                              src={proof.image_url}
+                              alt={`Payment proof ${index + 1}`}
+                              className="w-full h-auto rounded-lg mb-2 cursor-pointer"
+                              onClick={() => {
+                                setCurrentImageUrl(proof.image_url);
+                                setShowImageModal(true);
+                              }}
+                            />
+                            <p className="text-white/70 text-sm">
+                              Status:{" "}
+                              <span
+                                className={`${
+                                  proof.status === "approved"
+                                    ? "text-green-400"
+                                    : proof.status === "rejected"
+                                    ? "text-red-400"
+                                    : "text-yellow-400"
+                                }`}
+                              >
+                                {proof.status.toUpperCase()}
+                              </span>
+                            </p>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {/* Account Details Section */}
+              {selectedOrderDetail.account_id ? (
+                <div>
+                  <h3 className="text-white/70 mb-2">Account Details</h3>
+                  <div className="bg-white/5 rounded-lg p-4">
+                    <p className="text-white">
+                      <span className="text-white/70">Account ID:</span>{" "}
+                      {selectedOrderDetail.account_id}
+                    </p>
+                    {selectedOrderDetail.account_password && (
+                      <p className="text-white">
+                        <span className="text-white/70">Password:</span>{" "}
+                        {selectedOrderDetail.account_password}
+                      </p>
+                    )}
+                    {selectedOrderDetail.delivery_date && (
+                      <p className="text-white">
+                        <span className="text-white/70">Delivered:</span>{" "}
+                        {new Date(
+                          selectedOrderDetail.delivery_date
+                        ).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : selectedOrderDetail.status === "active" ? (
+                <AccountDetailsForm orderId={selectedOrderDetail.id} />
+              ) : null}
+
+              {/* Account File Section */}
+              {selectedOrderDetail.account_file_url ? (
+                <div>
+                  <h3 className="text-white/70 mb-2">Account File</h3>
+                  <div className="bg-white/5 rounded-lg p-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-white">Account file uploaded</p>
+                      <p className="text-white/70 text-sm">
+                        {new URL(selectedOrderDetail.account_file_url).pathname
+                          .split("/")
+                          .pop()}
+                      </p>
+                    </div>
+                    <a
+                      href={selectedOrderDetail.account_file_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                    >
+                      <Download className="w-5 h-5" />
+                    </a>
+                  </div>
+                </div>
+              ) : selectedOrderDetail.status === "active" &&
+                !selectedOrderDetail.account_id ? (
+                <div>
+                  <h3 className="text-white/70 mb-2">Account File</h3>
+                  <div className="bg-white/5 rounded-lg p-4">
+                    <p className="text-white/70 mb-2">
+                      No account file uploaded yet
+                    </p>
+                    <FileUpload
+                      orderId={selectedOrderDetail.id}
+                      onUploadSuccess={(fileUrl) => {
+                        onFileUpload(selectedOrderDetail.id, fileUrl);
+                        setSelectedOrderDetail({
+                          ...selectedOrderDetail,
+                          account_file_url: fileUrl,
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex justify-end gap-3 mt-6">
+                <Link
+                  to={`/chat?order=${selectedOrderDetail.id}`}
                   className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
                 >
-                  Create Backup
-                </button>
-                          </div>
-              
-              <div className="flex items-center justify-between">
-                          <div>
-                  <h4 className="text-white">Clear Cache</h4>
-                  <p className="text-white/70 text-sm">Clear the system cache</p>
-                            </div>
+                  Open Chat
+                </Link>
                 <button
-                  onClick={() => toast.success("Cache cleared (demo)")}
-                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
+                  onClick={() => setSelectedOrderDetail(null)}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
                 >
-                  Clear Cache
-                </button>
-                          </div>
-                        </div>
-                      </div>
-          
-          {/* Danger Zone */}
-          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
-            <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
-
-                <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                  <div>
-                  <h4 className="text-white">Reset All Settings</h4>
-                  <p className="text-white/70 text-sm">Reset all settings to default values</p>
-                </div>
-                <button
-                  onClick={() => {
-                    if (confirm("Are you sure you want to reset all settings? This cannot be undone.")) {
-                      toast.success("Settings reset to defaults (demo)");
-                    }
-                  }}
-                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
-                >
-                  Reset Settings
+                  Close
                 </button>
               </div>
             </div>
@@ -1547,7 +2039,7 @@ Please keep these details secure. You can copy them by selecting the text.
             >
               Go Home
             </button>
-                  </div>
+          </div>
         </div>
       </PageContainer>
     );
@@ -1599,12 +2091,12 @@ Please keep these details secure. You can copy them by selecting the text.
 
           {/* User Management Tab */}
           {selectedTab === "users" && (
-                  <div>
+            <div>
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl text-white">User Management</h2>
                 <div className="relative">
-                    <input
-                      type="text"
+                  <input
+                    type="text"
                     placeholder="Search users..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
@@ -1627,7 +2119,7 @@ Please keep these details secure. You can copy them by selecting the text.
                     </svg>
                   </div>
                 </div>
-                  </div>
+              </div>
 
               {/* Users Table */}
               <div className="overflow-x-auto">
@@ -1665,9 +2157,9 @@ Please keep these details secure. You can copy them by selecting the text.
                           </td>
                           <td className="px-4 py-3">
                             {user.isAdmin ? (
-                  <button
+                              <button
                                 onClick={() => handleRevokeAdmin(user.id)}
-                    disabled={
+                                disabled={
                                   actionInProgress === user.id ||
                                   user.id === currentUser.id
                                 }
@@ -1682,8 +2174,8 @@ Please keep these details secure. You can copy them by selecting the text.
                                   <span className="flex items-center">
                                     <LoadingSpinner size="sm" light />
                                     <span className="ml-2">Revoking...</span>
-                      </span>
-                    ) : (
+                                  </span>
+                                ) : (
                                   "Revoke Admin"
                                 )}
                               </button>
@@ -1701,11 +2193,11 @@ Please keep these details secure. You can copy them by selecting the text.
                                   <span className="flex items-center">
                                     <LoadingSpinner size="sm" light />
                                     <span className="ml-2">Granting...</span>
-                      </span>
+                                  </span>
                                 ) : (
                                   "Make Admin"
-                    )}
-                  </button>
+                                )}
+                              </button>
                             )}
                           </td>
                         </tr>
@@ -1734,7 +2226,7 @@ Please keep these details secure. You can copy them by selecting the text.
                     )}
                   </tbody>
                 </table>
-                </div>
+              </div>
 
               <div className="mt-6 p-4 bg-white/5 rounded-lg">
                 <h3 className="text-lg font-medium mb-4">Add Admin User</h3>
@@ -1752,9 +2244,9 @@ Please keep these details secure. You can copy them by selecting the text.
                   >
                     Add Admin
                   </button>
+                </div>
               </div>
             </div>
-          </div>
           )}
 
           {/* Orders Tab */}
@@ -1764,399 +2256,15 @@ Please keep these details secure. You can copy them by selecting the text.
           {selectedTab === "settings" && renderSettingsTab()}
         </div>
       </main>
-      {selectedOrderDetail && <OrderDetailModal />}
+      <OrderDetailModal
+        selectedOrderDetail={selectedOrderDetail}
+        setSelectedOrderDetail={setSelectedOrderDetail}
+        onFileUpload={onFileUpload}
+        setCurrentImageUrl={setCurrentImageUrl}
+        setShowImageModal={setShowImageModal}
+      />
     </PageContainer>
   );
 }
 
-const OrderItem = React.memo(function OrderItem({
-  order,
-  onPaymentAction,
-  onImageView,
-  onFileUpload,
-  isSelected,
-  onSelect,
-  actionInProgress,
-  onApprove,
-}: {
-  order: Order;
-  onPaymentAction: (orderId: string, status: string) => void;
-  onImageView: (imageUrl: string) => void;
-  onFileUpload: (orderId: string, fileUrl: string) => void;
-  isSelected: boolean;
-  onSelect: (selected: boolean) => void;
-  actionInProgress: string | null;
-  onApprove: (orderId: string) => void;
-}) {
-  const messageCount = order.messages?.length || 0;
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className={`relative bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors ${
-        isSelected ? "ring-2 ring-emerald-500" : ""
-      }`}
-    >
-      <div className="absolute top-2 right-2">
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={(e) => onSelect(e.target.checked)}
-          className="w-4 h-4 accent-emerald-500"
-        />
-      </div>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex-1">
-          <h3 className="text-lg font-semibold text-white">
-            {order.full_name}
-          </h3>
-          <p className="text-white/70">{order.email}</p>
-          <p className="text-sm text-white/50">
-            {new Date(order.created_at).toLocaleString()}
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <StatusBadge status={order.status} />
-            {order.account_file_url && (
-              <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
-                HAS ACCOUNT FILE
-              </span>
-            )}
-            {messageCount > 0 && (
-              <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
-                {messageCount} MESSAGES
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {order.payment_proofs?.map((proof) => (
-            <div key={proof.id} className="flex items-center gap-2">
-              <button
-                onClick={() => onImageView(proof.image_url)}
-                className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                title="View payment proof"
-              >
-                <Eye className="text-white" size={20} />
-              </button>
-              {proof.status === "pending" && (
-                <div className="flex items-center gap-2">
-                  <ActionButton
-                    icon={<CheckCircle className="text-green-400" size={20} />}
-                    onClick={() => onApprove(order.id)}
-                    disabled={actionInProgress !== null}
-                    title="Approve order"
-                  />
-                  <ActionButton
-                    icon={<XCircle className="text-red-400" size={20} />}
-                    onClick={() => onPaymentAction(order.id, "rejected")}
-                    disabled={!!actionInProgress}
-                    title="Reject payment"
-                  />
-                </div>
-              )}
-            </div>
-          ))}
-
-          <Link
-            to={`/chat?order=${order.id}`}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
-            title="Open chat"
-          >
-            <MessageSquare className="text-white" size={20} />
-          </Link>
-        </div>
-      </div>
-
-      {order.status === "active" && !order.account_file_url && (
-        <div className="mt-4">
-          <FileUpload
-            orderId={order.id}
-            onUploadSuccess={(fileUrl) => onFileUpload(order.id, fileUrl)}
-          />
-        </div>
-      )}
-    </motion.div>
-  );
-});
-
-const StatusBadge = React.memo(function StatusBadge({
-  status,
-}: {
-  status: string;
-}) {
-  const getStatusStyle = () => {
-    switch (status) {
-      case "active":
-        return "bg-emerald-400/20 text-emerald-400";
-      case "rejected":
-        return "bg-red-400/20 text-red-400";
-      default:
-        return "bg-yellow-400/20 text-yellow-400";
-    }
-  };
-
-  return (
-    <span className={`px-2 py-1 rounded text-xs ${getStatusStyle()}`}>
-      {status.toUpperCase()}
-    </span>
-  );
-});
-
-const ActionButton = React.memo(function ActionButton({
-  icon,
-  onClick,
-  disabled,
-  title,
-}: {
-  icon: React.ReactNode;
-  onClick: () => void;
-  disabled: boolean;
-  title: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-      title={title}
-    >
-      {icon}
-    </button>
-  );
-});
-
-const ImageModal = React.memo(function ImageModal({
-  imageUrl,
-  onClose,
-}: {
-  imageUrl: string;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
-      onClick={onClose}
-    >
-      <div
-        className="relative max-w-4xl w-full mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <img src={imageUrl} alt="Payment Proof" className="w-full rounded-lg" />
-        <button
-          className="absolute -top-4 -right-4 bg-white/10 hover:bg-white/20 rounded-full p-2 text-white transition-colors"
-          onClick={onClose}
-        >
-          <XCircle size={24} />
-        </button>
-      </div>
-    </div>
-  );
-});
-
-const OrderDetailModal = () => {
-  if (!selectedOrderDetail) return null;
-
-  const [showDeliveryForm, setShowDeliveryForm] = useState(false);
-
-  return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6">
-          <div className="flex justify-between items-start mb-6">
-            <h2 className="text-xl font-bold text-white">Order Details</h2>
-            <button
-              onClick={() => setSelectedOrderDetail(null)}
-              className="text-white/70 hover:text-white"
-            >
-              <XCircle className="w-6 h-6" />
-            </button>
-          </div>
-
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-white/70 mb-2">Customer Information</h3>
-              <div className="bg-white/5 rounded-lg p-4">
-                <p className="text-white">
-                  <span className="text-white/70">Name:</span>{" "}
-                  {selectedOrderDetail.full_name}
-                </p>
-                <p className="text-white">
-                  <span className="text-white/70">Email:</span>{" "}
-                  {selectedOrderDetail.email}
-                </p>
-                <p className="text-white">
-                  <span className="text-white/70">Status:</span>
-                  <span
-                    className={`ml-2 px-2 py-0.5 rounded text-xs ${
-                      selectedOrderDetail.status === "active"
-                        ? "bg-green-500/20 text-green-400"
-                        : selectedOrderDetail.status === "rejected"
-                        ? "bg-red-500/20 text-red-400"
-                        : "bg-yellow-500/20 text-yellow-400"
-                    }`}
-                  >
-                    {selectedOrderDetail.status.toUpperCase()}
-                  </span>
-                </p>
-                <p className="text-white">
-                  <span className="text-white/70">Created:</span>{" "}
-                  {new Date(selectedOrderDetail.created_at).toLocaleString()}
-                </p>
-              </div>
-            </div>
-
-            {/* Account Details Section */}
-            {selectedOrderDetail.status === "active" && (
-              <div>
-                <h3 className="text-white/70 mb-2">Account Details</h3>
-                {selectedOrderDetail.account_email &&
-                selectedOrderDetail.account_password ? (
-                  <div className="bg-white/5 rounded-lg p-4">
-                    <p className="text-white">
-                      <span className="text-white/70">Account Email:</span>{" "}
-                      {selectedOrderDetail.account_email}
-                    </p>
-                    <p className="text-white">
-                      <span className="text-white/70">Account Password:</span>{" "}
-                      {selectedOrderDetail.account_password}
-                    </p>
-                    {selectedOrderDetail.account_delivered_at && (
-                      <p className="text-white">
-                        <span className="text-white/70">Delivered:</span>{" "}
-                        {new Date(
-                          selectedOrderDetail.account_delivered_at
-                        ).toLocaleString()}
-                      </p>
-                    )}
-                  </div>
-                ) : showDeliveryForm ? (
-                  <AccountDeliveryForm
-                    orderId={selectedOrderDetail.id}
-                    onSubmit={(details) => {
-                      handleDeliverAccount(selectedOrderDetail.id, details);
-                      setShowDeliveryForm(false);
-                    }}
-                    onCancel={() => setShowDeliveryForm(false)}
-                  />
-                ) : (
-                  <div className="bg-white/5 rounded-lg p-4">
-                    <p className="text-white/70 mb-2">
-                      No account details provided yet
-                    </p>
-                    <button
-                      onClick={() => setShowDeliveryForm(true)}
-                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center gap-2"
-                    >
-                      <Send className="w-4 h-4" />
-                      Deliver Account Details
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {selectedOrderDetail.payment_proofs &&
-              selectedOrderDetail.payment_proofs.length > 0 && (
-                <div>
-                  <h3 className="text-white/70 mb-2">Payment Proofs</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {selectedOrderDetail.payment_proofs.map((proof, index) => (
-                      <div key={index} className="bg-white/5 rounded-lg p-4">
-                        <img
-                          src={proof.image_url}
-                          alt={`Payment proof ${index + 1}`}
-                          className="w-full h-auto rounded-lg mb-2 cursor-pointer"
-                          onClick={() => {
-                            setCurrentImageUrl(proof.image_url);
-                            setShowImageModal(true);
-                          }}
-                        />
-                        <p className="text-white/70 text-sm">
-                          Status:{" "}
-                          <span
-                            className={`${
-                              proof.status === "approved"
-                                ? "text-green-400"
-                                : proof.status === "rejected"
-                                ? "text-red-400"
-                                : "text-yellow-400"
-                            }`}
-                          >
-                            {proof.status.toUpperCase()}
-                          </span>
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-            {selectedOrderDetail.account_file_url ? (
-              <div>
-                <h3 className="text-white/70 mb-2">Account File</h3>
-                <div className="bg-white/5 rounded-lg p-4 flex items-center justify-between">
-                  <div>
-                    <p className="text-white">Account file uploaded</p>
-                    <p className="text-white/70 text-sm">
-                      {new URL(selectedOrderDetail.account_file_url).pathname
-                        .split("/")
-                        .pop()}
-                    </p>
-                  </div>
-                  <a
-                    href={selectedOrderDetail.account_file_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                  >
-                    <Download className="w-5 h-5" />
-                  </a>
-                </div>
-              </div>
-            ) : selectedOrderDetail.status === "active" ? (
-              <div>
-                <h3 className="text-white/70 mb-2">Account File</h3>
-                <div className="bg-white/5 rounded-lg p-4">
-                  <p className="text-white/70 mb-2">
-                    No account file uploaded yet
-                  </p>
-                  <FileUpload
-                    orderId={selectedOrderDetail.id}
-                    onUploadSuccess={(fileUrl) => {
-                      onFileUpload(selectedOrderDetail.id, fileUrl);
-                      setSelectedOrderDetail({
-                        ...selectedOrderDetail,
-                        account_file_url: fileUrl,
-                      });
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            <div className="flex justify-end gap-3 mt-6">
-              <Link
-                to={`/chat?order=${selectedOrderDetail.id}`}
-                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-              >
-                Open Chat
-              </Link>
-              <button
-                onClick={() => setSelectedOrderDetail(null)}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default React.memo(AdminPage);
+export default AdminPage;

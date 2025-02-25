@@ -7,9 +7,9 @@ export interface Order {
   status: string;
   created_at: string;
   account_file_url?: string;
-  account_email?: string;
+  account_id?: string;
   account_password?: string;
-  account_delivered_at?: string;
+  delivery_date?: string;
   payment_proofs?: {
     id: string;
     image_url: string;

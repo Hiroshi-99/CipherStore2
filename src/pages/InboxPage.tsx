@@ -90,23 +90,19 @@ function InboxPage() {
   const markAsRead = async (messageId: string) => {
     try {
       const { error } = await supabase
-        .from("messages")
+        .from("inbox_messages")
         .update({ is_read: true })
         .eq("id", messageId);
 
-      if (error) {
-        console.error("Error marking message as read:", error);
-        return;
-      }
+      if (error) throw error;
 
-      // Update local state
-      setMessages(
-        messages.map((msg) =>
+      setMessages((prev) =>
+        prev.map((msg) =>
           msg.id === messageId ? { ...msg, is_read: true } : msg
         )
       );
-    } catch (err) {
-      console.error("Error in markAsRead:", err);
+    } catch (error) {
+      console.error("Error marking message as read:", error);
     }
   };
 
@@ -128,76 +124,6 @@ function InboxPage() {
     } catch (error) {
       console.error("Error marking all as read:", error);
       toast.error("Failed to mark messages as read");
-    }
-  };
-
-  const deleteMessage = async (messageId: string) => {
-    if (!confirm("Are you sure you want to delete this message?")) {
-      return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from("messages")
-        .delete()
-        .eq("id", messageId);
-
-      if (error) {
-        console.error("Error deleting message:", error);
-        toast.error("Failed to delete message");
-        return;
-      }
-
-      // Update local state
-      setMessages(messages.filter((msg) => msg.id !== messageId));
-      toast.success("Message deleted successfully");
-    } catch (err) {
-      console.error("Error in deleteMessage:", err);
-      toast.error("Failed to delete message");
-    }
-  };
-
-  const sendReply = async (messageId: string, content: string) => {
-    if (!content.trim()) {
-      toast.error("Message cannot be empty");
-      return;
-    }
-
-    try {
-      const originalMessage = messages.find((msg) => msg.id === messageId);
-
-      if (!originalMessage) {
-        toast.error("Original message not found");
-        return;
-      }
-
-      const newMessage = {
-        id: generateUUID(),
-        order_id: originalMessage.order_id,
-        content,
-        created_at: new Date().toISOString(),
-        user_id: user?.id,
-        is_read: false,
-        user_name: user?.user_metadata.fullName || "Admin",
-        user_avatar: "https://i.imgur.com/eyaDC8l.png",
-      };
-
-      const { error } = await supabase.from("messages").insert(newMessage);
-
-      if (error) {
-        console.error("Error sending reply:", error);
-        toast.error("Failed to send reply");
-        return;
-      }
-
-      toast.success("Reply sent successfully");
-
-      // Clear the reply input
-      setReplyContent("");
-      setReplyingTo(null);
-    } catch (err) {
-      console.error("Error in sendReply:", err);
-      toast.error("Failed to send reply");
     }
   };
 
