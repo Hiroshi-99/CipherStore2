@@ -798,14 +798,22 @@ Please keep these details secure. You can copy them by selecting the text.
     }
 
     try {
-      // First get the user ID from the email
-      const { data: userWithEmail, error: userError } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", newAdminEmail.trim())
-        .single();
+      // First check if the user exists in auth
+      const {
+        data: { users },
+        error: authError,
+      } = await supabase.auth.admin.listUsers();
 
-      if (userError || !userWithEmail) {
+      if (authError) {
+        console.error("Error fetching users:", authError);
+        toast.error("Could not verify user email");
+        return;
+      }
+
+      // Find the user with the matching email
+      const userWithEmail = users.find((u) => u.email === newAdminEmail.trim());
+
+      if (!userWithEmail) {
         toast.error("User not found with that email");
         return;
       }
