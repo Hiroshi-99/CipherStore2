@@ -27,9 +27,6 @@ import { useMessageScroll } from "../hooks/useMessageScroll";
 import { useOrderFilters } from "../hooks/useOrderFilters";
 import { motion } from "framer-motion";
 import { useInView } from "react-intersection-observer";
-import { RealtimeChannel } from "@supabase/supabase-js";
-import { useMediaQuery } from "../hooks/useMediaQuery";
-import { useSwipeable } from "react-swipeable";
 
 // Constants
 const MESSAGES_PER_PAGE = 50;
@@ -63,30 +60,11 @@ function ChatPage() {
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [fallbackMode, setFallbackMode] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const realtimeSubscription = useRef<RealtimeChannel | null>(null);
-  const isMobile = useMediaQuery("(max-width: 768px)");
-  const swipeHandlers = useSwipeable({
-    onSwipedRight: () => {
-      if (isMobile && !showSidebar) {
-        setShowSidebar(true);
-      }
-    },
-    onSwipedLeft: () => {
-      if (isMobile && showSidebar) {
-        setShowSidebar(false);
-      }
-    },
-    trackMouse: false,
-  });
-  const [refreshing, setRefreshing] = useState(false);
-  const pullStartY = useRef(0);
-  const pullMoveY = useRef(0);
-  const distanceThreshold = 100;
-  const refreshAreaRef = useRef<HTMLDivElement>(null);
-  const [fallbackMode, setFallbackMode] = useState(false);
-  const [initializing, setInitializing] = useState(true);
+  const messageSound = useRef<HTMLAudioElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Authentication check
   useEffect(() => {
@@ -107,69 +85,36 @@ function ChatPage() {
 
         setUser(session.user);
 
-        // Use a simpler admin check initially
-        let adminStatus = false;
-
-        try {
-          // First check user metadata
-          if (
-            session.user.user_metadata?.role === "admin" ||
-            session.user.user_metadata?.isAdmin === true
-          ) {
-            adminStatus = true;
-          } else {
-            // Then try known admin IDs
-            const knownAdminIds = [
-              "febded26-f3f6-4aec-9668-b6898de96ca3",
-              // Add more admin IDs as needed
-            ];
-
-            if (knownAdminIds.includes(session.user.id)) {
-              adminStatus = true;
-            }
-          }
-        } catch (adminCheckErr) {
-          console.error("Error in admin check:", adminCheckErr);
-          // Continue with non-admin status
-        }
-
+        // Improved admin check
+        const adminStatus = await checkIfAdmin(session.user.id);
         setIsAdmin(adminStatus);
         console.log("User is admin:", adminStatus);
 
         // Fetch orders based on user role
-        try {
-          if (adminStatus) {
-            await fetchAdminOrders();
-          } else {
-            await fetchUserOrders(session.user.id);
-          }
-        } catch (fetchErr) {
-          console.error("Error fetching orders:", fetchErr);
-          setFallbackMode(true);
+        if (adminStatus) {
+          await fetchAdminOrders();
+        } else {
+          await fetchUserOrders(session.user.id);
         }
-
-        setInitializing(false);
       } catch (err) {
         console.error("Authentication error:", err);
-        handleCriticalError(err);
+        setError("Authentication failed. Please try again.");
+        setLoading(false);
       }
     };
 
-    checkAuth().catch(handleCriticalError);
+    checkAuth();
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!session) {
         navigate("/");
       } else {
         setUser(session.user);
-        // Simple admin check for auth changes
-        const isUserAdmin =
-          session.user.user_metadata?.role === "admin" ||
-          session.user.user_metadata?.isAdmin === true;
-        setIsAdmin(isUserAdmin);
+        const adminStatus = await checkIfAdmin(session.user.id);
+        setIsAdmin(adminStatus);
       }
     });
 
@@ -410,261 +355,266 @@ function ChatPage() {
         setLoading(true);
         setError(null);
 
-        // Simple try-catch for database operations
+        // First check if the messages table exists
+        const { data: tableCheck, error: tableCheckError } = await supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .limit(1);
+
+        if (tableCheckError && tableCheckError.code === "42P01") {
+          // Table doesn't exist
+          setError(
+            "Chat system is currently unavailable. The messages table doesn't exist in the database."
+          );
+          console.error("Database schema error: messages table doesn't exist");
+          setLoading(false);
+          return;
+        }
+
+        // If we get here, the table exists, so fetch messages
+        const { data, error: messagesError } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("order_id", orderId)
+          .order("created_at", { ascending: true });
+
+        if (messagesError) {
+          throw messagesError;
+        }
+
+        // Process messages to ensure they have user_name and user_avatar
+        const processedMessages = (data || []).map((message) => {
+          // If message is missing user_name or user_avatar, add default values
+          return {
+            ...message,
+            user_name:
+              message.user_name || (message.is_admin ? "Support" : "User"),
+            user_avatar: message.user_avatar || "",
+          };
+        });
+
+        // Set messages even if marking as read fails
+        setMessages(processedMessages);
+
+        // Try to mark messages as read, but don't fail if it doesn't work
         try {
-          const { data, error } = await supabase
-            .from("messages")
-            .select("*")
-            .eq("order_id", orderId)
-            .order("created_at", { ascending: true });
+          const unreadIds =
+            processedMessages
+              ?.filter((m) => !m.is_read && m.is_admin !== isAdmin)
+              .map((m) => m.id) || [];
 
-          if (error) {
-            console.error("Database error:", error);
-            throw error;
+          if (unreadIds.length > 0) {
+            try {
+              // Check if is_read column exists first
+              const { error: columnCheckError } = await supabase
+                .from("messages")
+                .select("is_read")
+                .limit(1);
+
+              // Only attempt to update if the column exists
+              if (!columnCheckError) {
+                await updateMessagesInBatches(unreadIds);
+              } else {
+                console.log("Skipping mark as read - column doesn't exist");
+              }
+            } catch (columnError) {
+              console.error("Error checking for is_read column:", columnError);
+            }
           }
-
-          // Process messages to ensure they have user_name and user_avatar
-          const processedMessages = (data || []).map((message) => {
-            return {
-              ...message,
-              user_name:
-                message.user_name || (message.is_admin ? "Support" : "User"),
-              user_avatar: message.user_avatar || "",
-            };
-          });
-
-          setMessages(processedMessages);
-
-          // Try to set up realtime, but don't fail if it doesn't work
-          try {
-            setupRealtimeMessaging(orderId);
-          } catch (realtimeErr) {
-            console.error("Error setting up realtime:", realtimeErr);
-          }
-        } catch (dbErr) {
-          console.error("Error fetching messages:", dbErr);
-          setFallbackMode(true);
-
-          // Set some dummy messages in fallback mode
-          setMessages([
-            {
-              id: "fallback-1",
-              content: "Hello! How can I help you today?",
-              user_name: "Support",
-              user_avatar: "",
-              is_admin: true,
-              created_at: new Date().toISOString(),
-              order_id: orderId,
-              user_id: "admin",
-              is_read: true,
-            },
-          ]);
+        } catch (markReadError) {
+          console.error("Error marking messages as read:", markReadError);
         }
       } catch (err) {
-        console.error("Unexpected error in fetchMessages:", err);
+        console.error("Error fetching messages:", err);
         setError("Failed to load messages. Please try again.");
       } finally {
         setLoading(false);
       }
     },
-    [isAdmin, setupRealtimeMessaging]
+    [isAdmin]
   );
 
-  // Add this function to optimize image uploads
-  const optimizeImageBeforeUpload = async (file: File): Promise<File> => {
-    return new Promise((resolve, reject) => {
-      // Skip optimization for small images
-      if (file.size < 500 * 1024) {
-        resolve(file);
-        return;
-      }
-
-      const img = new Image();
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-
-      img.onload = () => {
-        // Calculate new dimensions (max 1200px width/height)
-        let width = img.width;
-        let height = img.height;
-        const maxDimension = 1200;
-
-        if (width > height && width > maxDimension) {
-          height = (height * maxDimension) / width;
-          width = maxDimension;
-        } else if (height > maxDimension) {
-          width = (width * maxDimension) / height;
-          height = maxDimension;
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-
-        // Draw and export
-        ctx?.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) {
-              reject(new Error("Canvas to Blob conversion failed"));
-              return;
-            }
-
-            const optimizedFile = new File([blob], file.name, {
-              type: "image/jpeg",
-              lastModified: Date.now(),
-            });
-
-            resolve(optimizedFile);
-          },
-          "image/jpeg",
-          0.85 // Quality
-        );
-      };
-
-      img.onerror = () => {
-        reject(new Error("Image loading failed"));
-      };
-
-      img.src = URL.createObjectURL(file);
-    });
-  };
-
-  // Modify your handleImageSelect function
-  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Add the handleImageSelect function
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check file size (limit to 10MB)
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("Image too large. Maximum size is 10MB.");
+    // Check file size (limit to 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image too large. Maximum size is 5MB.");
       return;
     }
 
-    try {
-      // Show loading state
-      toast.loading("Processing image...");
+    setSelectedImage(file);
 
-      // Optimize image
-      const optimizedImage = await optimizeImageBeforeUpload(file);
-      setSelectedImage(optimizedImage);
-
-      // Create preview
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setImagePreview(e.target?.result as string);
-        toast.dismiss();
-      };
-      reader.readAsDataURL(optimizedImage);
-    } catch (err) {
-      console.error("Error processing image:", err);
-      toast.error("Failed to process image");
-    }
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
 
   // Add the handleSendMessage function
-  const handleSendMessage = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-      if ((!newMessage.trim() && !selectedImage) || !selectedOrderId || !user) {
-        return;
-      }
+    if ((!newMessage.trim() && !selectedImage) || !selectedOrderId || !user) {
+      return;
+    }
 
-      setSending(true);
+    setSending(true);
 
-      try {
-        // Get user profile information
-        const userName =
-          user.user_metadata?.full_name ||
-          user.user_metadata?.name ||
-          user.email?.split("@")[0] ||
-          "User";
+    try {
+      let imageUrl: string | null = null;
 
-        const userAvatar =
-          user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
-
-        // Create a temporary ID for optimistic UI
-        const tempId = `temp-${Date.now()}`;
-
-        // Add optimistic message
-        const optimisticMessage: Message = {
-          id: tempId,
-          content: newMessage.trim(),
-          order_id: selectedOrderId,
-          user_id: user.id,
-          is_admin: isAdmin,
-          created_at: new Date().toISOString(),
-          is_read: false,
-          image_url: null,
-          user_name: userName,
-          user_avatar: userAvatar || "",
-        };
-
-        // Add to messages
-        setMessages((prev) => [...prev, optimisticMessage]);
-
-        // Clear input
-        setNewMessage("");
-        setSelectedImage(null);
-        setImagePreview(null);
-
-        // In fallback mode, simulate a response
-        if (fallbackMode) {
-          setTimeout(() => {
-            const responseMsg: Message = {
-              id: `fallback-${Date.now()}`,
-              content:
-                "This is a fallback response. The database is currently unavailable.",
-              user_name: "Support",
-              user_avatar: "",
-              is_admin: true,
-              created_at: new Date().toISOString(),
-              order_id: selectedOrderId,
-              user_id: "admin",
-              is_read: true,
-            };
-            setMessages((prev) => [...prev, responseMsg]);
-          }, 1000);
-        } else {
-          // Try to send to database
-          try {
-            const { data, error } = await supabase
-              .from("messages")
-              .insert([
-                {
-                  content: newMessage.trim(),
-                  order_id: selectedOrderId,
-                  user_id: user.id,
-                  is_admin: isAdmin,
-                  image_url: null,
-                  user_name: userName,
-                  user_avatar: userAvatar,
-                },
-              ])
-              .select()
-              .single();
-
-            if (error) throw error;
-
-            // Replace optimistic message with real one
-            setMessages((prev) =>
-              prev.map((m) => (m.id === tempId ? data : m))
-            );
-          } catch (dbErr) {
-            console.error("Error sending message to database:", dbErr);
-            // Keep the optimistic message
-          }
+      // Upload image if selected
+      if (selectedImage) {
+        try {
+          imageUrl = await uploadImage(selectedImage);
+        } catch (err) {
+          console.error("Error uploading image:", err);
+          toast.error("Failed to upload image. Please try again.");
+          setSending(false);
+          return;
         }
-      } catch (err) {
-        console.error("Error in handleSendMessage:", err);
-        toast.error("Failed to send message. Please try again.");
-      } finally {
-        setSending(false);
       }
-    },
-    [newMessage, selectedImage, selectedOrderId, user, isAdmin, fallbackMode]
-  );
+
+      // Get user profile information
+      const userName =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email?.split("@")[0] ||
+        "User";
+
+      const userAvatar =
+        user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
+
+      // Create a temporary ID for optimistic UI
+      const tempId = `temp-${Date.now()}`;
+
+      // Add optimistic message with complete profile info
+      const optimisticMessage: Message = {
+        id: tempId,
+        content: newMessage.trim(),
+        order_id: selectedOrderId,
+        user_id: user.id,
+        is_admin: isAdmin,
+        created_at: new Date().toISOString(),
+        is_read: false,
+        image_url: imageUrl,
+        user_name: userName,
+        user_avatar: userAvatar || "",
+      };
+
+      // Add to messages
+      setMessages((prev) => [...prev, optimisticMessage]);
+
+      // Store pending message for retry
+      pendingMessages.current.set(tempId, {
+        content: newMessage.trim(),
+        image_url: imageUrl,
+        user_name: userName,
+        user_avatar: userAvatar,
+      });
+
+      // Clear input
+      setNewMessage("");
+      setSelectedImage(null);
+      setImagePreview(null);
+
+      // Send to database
+      try {
+        const { data, error } = await supabase
+          .from("messages")
+          .insert([
+            {
+              content: newMessage.trim(),
+              order_id: selectedOrderId,
+              user_id: user.id,
+              is_admin: isAdmin,
+              image_url: imageUrl,
+              user_name: userName,
+              user_avatar: userAvatar,
+            },
+          ])
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        // Replace optimistic message with real one
+        setMessages((prev) => prev.map((m) => (m.id === tempId ? data : m)));
+
+        // Clear pending message
+        pendingMessages.current.delete(tempId);
+      } catch (err) {
+        console.error("Error sending message:", err);
+        toast.error("Failed to send message. Message saved as draft.");
+      }
+    } catch (err) {
+      console.error("Error in handleSendMessage:", err);
+      toast.error("Something went wrong. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Add the handleRetry function
+  const handleRetry = async (messageId: string) => {
+    const pendingMessage = pendingMessages.current.get(messageId);
+    if (!pendingMessage || !selectedOrderId || !user) return;
+
+    setSending(true);
+
+    try {
+      // Get user profile information
+      const userName =
+        pendingMessage.user_name ||
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email?.split("@")[0] ||
+        "User";
+
+      const userAvatar =
+        pendingMessage.user_avatar ||
+        user.user_metadata?.avatar_url ||
+        user.user_metadata?.picture ||
+        null;
+
+      // Send to database
+      const { data, error } = await supabase
+        .from("messages")
+        .insert([
+          {
+            content: pendingMessage.content,
+            order_id: selectedOrderId,
+            user_id: user.id,
+            is_admin: isAdmin,
+            image_url: pendingMessage.image_url,
+            user_name: userName,
+            user_avatar: userAvatar,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Replace pending message with real one
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? data : m)));
+
+      // Clear pending message
+      pendingMessages.current.delete(messageId);
+
+      toast.success("Message sent successfully!");
+    } catch (err) {
+      console.error("Error retrying message:", err);
+      toast.error("Failed to send message. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
 
   // Filter orders based on search
   const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
@@ -727,6 +677,51 @@ function ChatPage() {
   useEffect(() => {
     setupDatabaseTables();
   }, []);
+
+  // Add this function definition before it's used in the useEffect
+  // 5. Add the checkIfAdmin function
+  const checkIfAdmin = async (userId: string) => {
+    try {
+      // First try to check user metadata
+      if (
+        user?.user_metadata?.role === "admin" ||
+        user?.user_metadata?.isAdmin === true
+      ) {
+        return true;
+      }
+
+      // Then try known admin IDs
+      const knownAdminIds = [
+        "febded26-f3f6-4aec-9668-b6898de96ca3",
+        // Add more admin IDs as needed
+      ];
+
+      if (knownAdminIds.includes(userId)) {
+        return true;
+      }
+
+      // Finally, try the admin_users table if it exists
+      try {
+        const { data, error } = await supabase
+          .from("admin_users")
+          .select("id")
+          .eq("user_id", userId)
+          .single();
+
+        if (!error && data) {
+          return true;
+        }
+      } catch (adminTableErr) {
+        console.log("Admin table check failed:", adminTableErr);
+        // Continue with other checks
+      }
+
+      return false;
+    } catch (err) {
+      console.error("Error checking admin status:", err);
+      return false;
+    }
+  };
 
   // Add this function to create a minimal database schema if needed
   const createMinimalSchema = async () => {
@@ -794,735 +789,589 @@ function ChatPage() {
     }
   };
 
-  // Simplify the setupRealtimeMessaging function to be more robust
-  const setupRealtimeMessaging = useCallback(
-    (orderId: string) => {
-      // Skip realtime setup in fallback mode
-      if (fallbackMode) return () => {};
+  // Add this code to set up real-time chat functionality
 
-      try {
-        // Clean up any existing subscription
-        if (realtimeSubscription.current) {
-          try {
-            supabase.removeChannel(realtimeSubscription.current);
-          } catch (cleanupErr) {
-            console.error("Error cleaning up subscription:", cleanupErr);
-          }
-        }
-
-        // Set up new subscription for this order
-        const channel = supabase
-          .channel(`order-${orderId}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "INSERT",
-              schema: "public",
-              table: "messages",
-              filter: `order_id=eq.${orderId}`,
-            },
-            (payload) => {
-              try {
-                const newMessage = payload.new as Message;
-
-                // Check if we already have this message
-                setMessages((prev) => {
-                  if (prev.some((m) => m.id === newMessage.id)) {
-                    return prev;
-                  }
-                  return [...prev, newMessage];
+  // Add this near your other useEffect hooks
+  useEffect(() => {
+    if (!selectedOrderId || !user) return;
+    
+    // Set up real-time subscription for new messages
+    const subscription = supabase
+      .channel(`order-${selectedOrderId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `order_id=eq.${selectedOrderId}`
+        },
+        (payload) => {
+          // Only add the message if it's not from the current user
+          // This prevents duplicate messages since we already add them optimistically
+          const newMessage = payload.new as Message;
+          
+          if (newMessage.user_id !== user.id) {
+            console.log('Received new message:', newMessage);
+            
+            // Add the message to the UI
+            setMessages((prev) => {
+              // Check if we already have this message (avoid duplicates)
+              const exists = prev.some(m => m.id === newMessage.id);
+              if (exists) return prev;
+              
+              // Play sound if tab is not focused
+              if (!isTabFocused && messageSound.current) {
+                messageSound.current.play().catch(err => console.log('Error playing sound:', err));
+              }
+              
+              // Add the new message
+              return [...prev, {
+                ...newMessage,
+                user_name: newMessage.user_name || (newMessage.is_admin ? "Support" : "User"),
+                user_avatar: newMessage.user_avatar || "",
+              }];
+            });
+            
+            // If the tab is not focused, add to unread messages
+            if (!isTabFocused) {
+              setUnreadMessages(prev => new Set(prev).add(newMessage.id));
+              
+              // Show a notification
+              if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification('New Message', {
+                  body: `${newMessage.user_name || 'Someone'}: ${newMessage.content}`,
+                  icon: '/favicon.ico'
                 });
-              } catch (err) {
-                console.error("Error processing realtime message:", err);
               }
             }
-          )
-          .subscribe((status) => {
-            console.log("Realtime subscription status:", status);
-          });
-
-        realtimeSubscription.current = channel;
-
-        return () => {
-          try {
-            supabase.removeChannel(channel);
-          } catch (err) {
-            console.error("Error removing channel:", err);
           }
-        };
-      } catch (err) {
-        console.error("Error setting up realtime messaging:", err);
-        return () => {};
-      }
-    },
-    [fallbackMode]
-  );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `order_id=eq.${selectedOrderId}`
+        },
+        (payload) => {
+          // Handle message updates (like read status)
+          const updatedMessage = payload.new as Message;
+          
+          setMessages((prev) => 
+            prev.map(m => m.id === updatedMessage.id ? {...m, ...updatedMessage} : m)
+          );
+        }
+      )
+      .subscribe();
+    
+    // Clean up subscription when component unmounts or selectedOrderId changes
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, [selectedOrderId, user, isTabFocused]);
 
-  // Add a notification sound function
-  const playNotificationSound = () => {
-    try {
-      const audio = new Audio("/notification.mp3");
-      audio.volume = 0.5;
-      audio.play();
-    } catch (err) {
-      console.error("Error playing notification sound:", err);
-    }
-  };
-
-  // Request notification permission
+  // Add this to track tab focus/blur
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
-    }
-  }, []);
-
-  // Add this to improve mobile UX
-  useEffect(() => {
-    // Close sidebar automatically when selecting an order on mobile
-    if (isMobile && selectedOrderId && showSidebar) {
-      setShowSidebar(false);
-    }
-  }, [selectedOrderId, isMobile]);
-
-  // Add this to handle mobile keyboard adjustments
-  useEffect(() => {
-    const handleResize = () => {
-      // On mobile, when keyboard appears, scroll to bottom
-      if (isMobile) {
-        setTimeout(() => {
-          window.scrollTo(0, document.body.scrollHeight);
-        }, 100);
+    const handleVisibilityChange = () => {
+      setIsTabFocused(document.visibilityState === 'visible');
+      
+      // If tab becomes visible, clear unread messages
+      if (document.visibilityState === 'visible') {
+        setUnreadMessages(new Set());
       }
     };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [isMobile]);
+    
+    const handleFocus = () => setIsTabFocused(true);
+    const handleBlur = () => setIsTabFocused(false);
+    
+    // Add event listeners
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    
+    // Request notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+    
+    // Clean up
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
 
   // Add this function to handle typing events
   const handleTyping = useCallback(() => {
     if (!selectedOrderId || !user) return;
-
-    try {
-      // Set local typing state
-      setIsTyping(true);
-
-      // Broadcast typing status
-      supabase
-        .channel("typing")
-        .send({
-          type: "broadcast",
-          event: "typing",
-          payload: {
-            orderId: selectedOrderId,
-            userId: user.id,
-            userName:
-              user.user_metadata?.full_name ||
-              user.email?.split("@")[0] ||
-              "User",
-            isTyping: true,
-          },
-        })
-        .catch((err) => {
-          console.error("Error sending typing status:", err);
-        });
-
-      // Clear previous timeout
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
+    
+    // Send typing event
+    supabase.channel(`typing-${selectedOrderId}`).send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: {
+        user_id: user.id,
+        user_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+        is_admin: isAdmin
       }
-
-      // Set timeout to clear typing status
-      typingTimeoutRef.current = setTimeout(() => {
-        setIsTyping(false);
-
-        // Broadcast stopped typing
-        supabase
-          .channel("typing")
-          .send({
-            type: "broadcast",
-            event: "typing",
-            payload: {
-              orderId: selectedOrderId,
-              userId: user.id,
-              userName:
-                user.user_metadata?.full_name ||
-                user.email?.split("@")[0] ||
-                "User",
-              isTyping: false,
-            },
-          })
-          .catch((err) => {
-            console.error("Error sending typing status:", err);
-          });
-      }, 2000);
-    } catch (err) {
-      console.error("Error in handleTyping:", err);
+    });
+    
+    // Clear previous timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
     }
-  }, [selectedOrderId, user]);
+    
+    // Set new timeout to stop typing after 3 seconds
+    typingTimeoutRef.current = setTimeout(() => {
+      supabase.channel(`typing-${selectedOrderId}`).send({
+        type: 'broadcast',
+        event: 'stop_typing',
+        payload: {
+          user_id: user.id
+        }
+      });
+    }, [selectedOrderId, user, isAdmin]);
 
-  // Add this to listen for typing events
+  // Add this effect to listen for typing events
   useEffect(() => {
     if (!selectedOrderId) return;
-
-    const channel = supabase
-      .channel("typing")
-      .on("broadcast", { event: "typing" }, (payload) => {
-        const { orderId, userId, userName, isTyping } = payload.payload;
-
-        // Only process events for the current order and not from the current user
-        if (orderId === selectedOrderId && userId !== user?.id) {
-          setTypingUsers((prev) => {
-            const newSet = new Set(prev);
-            if (isTyping) {
-              newSet.add(userName);
-            } else {
-              newSet.delete(userName);
-            }
-            return newSet;
-          });
-        }
+    
+    const typingChannel = supabase.channel(`typing-${selectedOrderId}`)
+      .on('broadcast', { event: 'typing' }, (payload) => {
+        // Ignore own typing events
+        if (payload.payload.user_id === user?.id) return;
+        
+        // Add user to typing users
+        setTypingUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.add(payload.payload.user_name);
+          return newSet;
+        });
+      })
+      .on('broadcast', { event: 'stop_typing' }, (payload) => {
+        // Remove user from typing users
+        setTypingUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(payload.payload.user_name);
+          return newSet;
+        });
       })
       .subscribe();
-
+    
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(typingChannel);
     };
   }, [selectedOrderId, user]);
 
-  // Add these handlers
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (!refreshAreaRef.current) return;
-    const touchY = e.touches[0].clientY;
-    pullStartY.current = touchY;
+  // Add this to your input field onChange handler
+  const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewMessage(e.target.value);
+    handleTyping();
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!refreshAreaRef.current) return;
-    const touchY = e.touches[0].clientY;
-    pullMoveY.current = touchY;
-
-    const scrollTop = e.currentTarget.scrollTop;
-    const pullDistance = pullMoveY.current - pullStartY.current;
-
-    // Only allow pull-to-refresh when at the top of the content
-    if (scrollTop === 0 && pullDistance > 0 && !refreshing) {
-      const pullPercent = Math.min(pullDistance / distanceThreshold, 1);
-
-      refreshAreaRef.current.style.height = `${pullDistance}px`;
-      refreshAreaRef.current.style.opacity = `${pullPercent}`;
-
-      e.preventDefault();
-    }
-  };
-
-  const handleTouchEnd = async (e: React.TouchEvent) => {
-    if (!refreshAreaRef.current || !selectedOrderId) return;
-
-    const pullDistance = pullMoveY.current - pullStartY.current;
-
-    if (
-      e.currentTarget.scrollTop === 0 &&
-      pullDistance > distanceThreshold &&
-      !refreshing
-    ) {
-      setRefreshing(true);
-
-      try {
-        await fetchMessages(selectedOrderId);
-      } catch (err) {
-        console.error("Error refreshing messages:", err);
-      } finally {
-        setRefreshing(false);
-
-        refreshAreaRef.current.style.height = "0";
-        refreshAreaRef.current.style.opacity = "0";
-      }
-    } else {
-      refreshAreaRef.current.style.height = "0";
-      refreshAreaRef.current.style.opacity = "0";
-    }
-  };
-
-  // Add a simplified fallback mode that doesn't rely on database
+  // Initialize the sound in useEffect
   useEffect(() => {
-    // This effect will run if fallbackMode is true
-    if (fallbackMode) {
-      setLoading(false);
-      console.log("Running in fallback mode");
+    // Create audio element for message notification sound
+    messageSound.current = new Audio('/message-sound.mp3'); // Add this sound file to your public folder
+    messageSound.current.volume = 0.5;
+  }, []);
 
-      // Create some dummy orders for testing
-      if (isAdmin) {
-        setAdminOrders([
-          { id: "fallback-1", full_name: "Test User 1" },
-          { id: "fallback-2", full_name: "Test User 2" },
-        ]);
-      } else {
-        setUserOrders([{ id: "fallback-1", full_name: "Your Order" }]);
-      }
-    }
-  }, [fallbackMode, isAdmin]);
-
-  // Add this function to handle critical errors
-  const handleCriticalError = (error: any) => {
-    console.error("Critical error in ChatPage:", error);
-
-    // Log detailed error information
-    if (error instanceof Error) {
-      console.error({
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-        timestamp: new Date().toISOString(),
-      });
-    } else {
-      console.error("Unknown error type:", error);
-    }
-
-    // Set fallback mode and finish loading
-    setFallbackMode(true);
-    setLoading(false);
-    setInitializing(false);
-
-    // Try to recover by clearing any problematic state
-    setMessages([]);
-    setSelectedOrderId(null);
-
-    // Clean up any subscriptions that might be causing issues
-    if (realtimeSubscription.current) {
-      try {
-        supabase.removeChannel(realtimeSubscription.current);
-        realtimeSubscription.current = null;
-      } catch (cleanupErr) {
-        console.error("Error cleaning up subscription:", cleanupErr);
-      }
-    }
+  // Add this function to scroll to bottom
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  try {
-    if (initializing) {
-      return (
-        <PageContainer title="CHAT" user={user}>
-          <main className="max-w-screen-xl mx-auto pb-16 flex items-center justify-center min-h-screen">
-            <div className="text-center">
-              <LoadingSpinner size="lg" light />
-              <p className="mt-4 text-white/70">Loading chat...</p>
-            </div>
-          </main>
-        </PageContainer>
-      );
+  // Call this function when messages change
+  useEffect(() => {
+    if (messages.length > 0) {
+      scrollToBottom();
     }
+  }, [messages]);
 
-    if (fallbackMode) {
-      return (
-        <PageContainer title="CHAT" user={user}>
-          <main className="max-w-screen-xl mx-auto pb-16">
-            <div className="min-h-[calc(100vh-5rem)] flex flex-col">
-              <div className="p-4 border-b border-white/10">
-                <h2 className="text-lg font-medium text-white">
-                  Chat (Fallback Mode)
-                </h2>
-                <p className="text-sm text-white/50">
-                  Using simplified chat mode
-                </p>
-              </div>
+  if (fallbackMode) {
+    return (
+      <PageContainer title="CHAT" user={user}>
+        <main className="max-w-screen-xl mx-auto pb-16">
+          <div className="min-h-[calc(100vh-5rem)] flex flex-col">
+            <div className="p-4 border-b border-white/10">
+              <h2 className="text-lg font-medium text-white">
+                Chat (Demo Mode)
+              </h2>
+              <p className="text-sm text-white/50">
+                Database connection unavailable - using local storage
+              </p>
+            </div>
 
-              {/* Simplified chat UI */}
-              <div className="flex-1 flex flex-col p-4">
-                <div className="flex-1 flex items-center justify-center">
+            <div className="flex-1 p-4 overflow-y-auto">
+              {messages.length === 0 ? (
+                <div className="h-full flex items-center justify-center">
                   <div className="text-center text-white/50">
                     <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>Start a new conversation</p>
-                    <button
-                      onClick={() => {
-                        setMessages([
-                          {
-                            id: "fallback-1",
-                            content: "Hello! How can I help you today?",
-                            user_name: "Support",
-                            user_avatar: "",
-                            is_admin: true,
-                            created_at: new Date().toISOString(),
-                            order_id: "fallback",
-                            user_id: "admin",
-                            is_read: true,
-                          },
-                        ]);
-                        setSelectedOrderId("fallback");
-                      }}
-                      className="mt-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded text-white transition-colors"
-                    >
-                      Start Chat
-                    </button>
-                  </div>
-                </div>
-
-                {selectedOrderId && (
-                  <div className="mt-4">
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        if (!newMessage.trim()) return;
-
-                        // Add message
-                        const newMsg: Message = {
-                          id: `fallback-${Date.now()}`,
-                          content: newMessage,
-                          user_name: user?.user_metadata?.full_name || "You",
-                          user_avatar: user?.user_metadata?.avatar_url || "",
-                          is_admin: false,
-                          created_at: new Date().toISOString(),
-                          order_id: "fallback",
-                          user_id: user?.id || "anonymous",
-                          is_read: true,
-                        };
-
-                        setMessages((prev) => [...prev, newMsg]);
-                        setNewMessage("");
-
-                        // Simulate response
-                        setTimeout(() => {
-                          const responseMsg: Message = {
-                            id: `fallback-${Date.now() + 1}`,
-                            content:
-                              "I'm here to help! This is a fallback mode response.",
-                            user_name: "Support",
-                            user_avatar: "",
-                            is_admin: true,
-                            created_at: new Date().toISOString(),
-                            order_id: "fallback",
-                            user_id: "admin",
-                            is_read: true,
-                          };
-                          setMessages((prev) => [...prev, responseMsg]);
-                        }, 1000);
-                      }}
-                    >
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newMessage}
-                          onChange={(e) => setNewMessage(e.target.value)}
-                          placeholder="Type your message..."
-                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newMessage.trim()}
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Send className="w-6 h-6" />
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                )}
-              </div>
-            </div>
-          </main>
-        </PageContainer>
-      );
-    }
-
-    if (error) {
-      return (
-        <PageContainer title="CHAT" user={user}>
-          <main className="max-w-screen-xl mx-auto pb-16">
-            <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
-              <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
-                <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
-                <h2 className="text-xl text-white mb-2">Connection Error</h2>
-                <p className="text-white/70 mb-6">{error}</p>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
-                >
-                  Refresh Page
-                </button>
-              </div>
-            </div>
-          </main>
-        </PageContainer>
-      );
-    }
-
-    return (
-      <PageContainer title="CHAT" showBack user={user}>
-        <main className="max-w-screen-xl mx-auto pb-16" {...swipeHandlers}>
-          <div className="flex h-[calc(100vh-5rem)]">
-            {/* Sidebar */}
-            <div
-              className={`fixed inset-y-0 left-0 z-20 w-80 bg-black/80 backdrop-blur-md transform transition-transform duration-300 ease-in-out ${
-                showSidebar ? "translate-x-0" : "-translate-x-full"
-              } md:relative md:translate-x-0`}
-            >
-              <div className="flex flex-col h-full p-4">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-bold text-white">Orders</h2>
-                  <button
-                    onClick={() => setShowSidebar(false)}
-                    className="md:hidden text-white/70 hover:text-white"
-                  >
-                    <XIcon className="w-6 h-6" />
-                  </button>
-                </div>
-
-                <div className="mb-4">
-                  <input
-                    type="text"
-                    placeholder="Search orders..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                  />
-                </div>
-
-                <div className="flex-1 overflow-y-auto">
-                  {filteredOrders.length === 0 ? (
-                    <div className="text-center text-white/50 py-8">
-                      No orders found
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {filteredOrders.map((order) => (
-                        <button
-                          key={order.id}
-                          onClick={() => {
-                            setSelectedOrderId(order.id);
-                            fetchMessages(order.id);
-                            setShowSidebar(false);
-                          }}
-                          className={`w-full text-left p-3 rounded-lg transition-colors ${
-                            selectedOrderId === order.id
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-white/5 text-white hover:bg-white/10"
-                          }`}
-                        >
-                          <div className="font-medium">
-                            Order #{order.id.slice(0, 8)}
-                          </div>
-                          {isAdmin && order.messages?.length && (
-                            <div className="text-xs text-emerald-400 mt-1">
-                              {order.messages.length} message
-                              {order.messages.length !== 1 ? "s" : ""}
-                            </div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Chat area */}
-            <div className="flex-1 flex flex-col h-full">
-              {/* Chat header */}
-              <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowSidebar(true)}
-                    className="md:hidden text-white/70 hover:text-white"
-                  >
-                    <XIcon className="w-6 h-6" />
-                  </button>
-                  <h2 className="text-lg font-medium text-white">
-                    {selectedOrderId
-                      ? `Order #${selectedOrderId.slice(0, 8)}`
-                      : "Select an order"}
-                  </h2>
-                </div>
-              </div>
-
-              {/* Messages area */}
-              {selectedOrderId ? (
-                <>
-                  <div
-                    className="flex-1 overflow-y-auto p-4"
-                    onTouchStart={handleTouchStart}
-                    onTouchMove={handleTouchMove}
-                    onTouchEnd={handleTouchEnd}
-                  >
-                    <div
-                      ref={refreshAreaRef}
-                      className="flex items-center justify-center transition-all duration-200 overflow-hidden"
-                      style={{ height: 0, opacity: 0 }}
-                    >
-                      <RefreshCw
-                        className={`w-6 h-6 text-white/70 ${
-                          refreshing ? "animate-spin" : ""
-                        }`}
-                      />
-                    </div>
-
-                    {loading ? (
-                      <div className="h-full flex items-center justify-center">
-                        <LoadingSpinner size="lg" light />
-                      </div>
-                    ) : error ? (
-                      <div className="h-full flex items-center justify-center">
-                        <div className="text-center">
-                          <p className="text-red-400 mb-2">{error}</p>
-                          <button
-                            onClick={() => fetchMessages(selectedOrderId)}
-                            className="px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
-                          >
-                            Try Again
-                          </button>
-                        </div>
-                      </div>
-                    ) : messages.length === 0 ? (
-                      <div className="h-full flex items-center justify-center">
-                        <div className="text-center text-white/50">
-                          <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                          <p>No messages yet</p>
-                          <p className="text-sm mt-2">
-                            Start the conversation by sending a message
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {messages.map((message, index) => (
-                          <MessageBubble
-                            key={message.id}
-                            message={message}
-                            isLatest={index === messages.length - 1}
-                            sending={false}
-                            isUnread={unreadMessages.has(message.id)}
-                            onRetry={() => handleRetry(message.id)}
-                            isPending={pendingMessages.current.has(message.id)}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Message input */}
-                  <div className="p-4 border-t border-white/10">
-                    <form onSubmit={handleSendMessage}>
-                      {imagePreview && (
-                        <div className="mb-4 relative inline-block">
-                          <img
-                            src={imagePreview}
-                            alt="Preview"
-                            className="max-h-40 rounded-lg"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedImage(null);
-                              setImagePreview(null);
-                            }}
-                            className="absolute -top-2 -right-2 bg-black/50 rounded-full p-1 text-white hover:bg-black/70 transition-colors"
-                          >
-                            <XIcon className="w-4 h-4" />
-                          </button>
-                        </div>
-                      )}
-
-                      <div className="flex gap-2">
-                        <input
-                          type="file"
-                          ref={fileInputRef}
-                          onChange={handleImageSelect}
-                          accept="image/*"
-                          className="hidden"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
-                          disabled={sending}
-                        >
-                          <ImageIcon className="w-6 h-6" />
-                        </button>
-
-                        {typingUsers.size > 0 && (
-                          <div className="text-xs text-white/60 italic mb-1 h-4">
-                            {Array.from(typingUsers).join(", ")}{" "}
-                            {typingUsers.size === 1 ? "is" : "are"} typing...
-                          </div>
-                        )}
-
-                        <input
-                          type="text"
-                          value={newMessage}
-                          onChange={(e) => {
-                            setNewMessage(e.target.value);
-                            handleTyping();
-                          }}
-                          placeholder="Type your message..."
-                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                          disabled={sending}
-                        />
-
-                        <button
-                          type="submit"
-                          disabled={
-                            (!newMessage.trim() && !selectedImage) || sending
-                          }
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {sending ? (
-                            <RefreshCw className="w-6 h-6 animate-spin" />
-                          ) : (
-                            <Send className="w-6 h-6" />
-                          )}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </>
-              ) : (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center text-white/50">
-                    <ChatIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                    <p className="text-lg">Select an order to start chatting</p>
-                    <p className="text-sm text-center max-w-md">
-                      Choose an order from the sidebar to start a conversation
-                      with support
+                    <p>No messages yet</p>
+                    <p className="text-sm mt-2">
+                      Start the conversation by sending a message
                     </p>
-                    <button
-                      onClick={() => setShowSidebar(true)}
-                      className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-4"
-                    >
-                      View Orders
-                    </button>
                   </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {messages.map((message, index) => (
+                    <div
+                      key={message.id}
+                      className={`p-3 rounded-lg max-w-[80%] ${
+                        message.is_admin
+                          ? "bg-blue-500/20 text-blue-100 ml-auto"
+                          : "bg-white/10 text-white mr-auto"
+                      }`}
+                    >
+                      <div className="text-sm font-medium mb-1">
+                        {message.is_admin ? "Support" : "You"}
+                      </div>
+                      <div>{message.content}</div>
+                      {message.image_url && (
+                        <img
+                          src={message.image_url}
+                          alt="Attached"
+                          className="mt-2 rounded-lg max-h-40"
+                        />
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
+            </div>
+
+            <div className="p-4 border-t border-white/10">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!newMessage.trim()) return;
+
+                  // Add local message
+                  const newMsg = {
+                    id: `local-${Date.now()}`,
+                    content: newMessage,
+                    user_name: user?.user_metadata?.full_name || "You",
+                    user_avatar: user?.user_metadata?.avatar_url || "",
+                    is_admin: false,
+                    created_at: new Date().toISOString(),
+                    order_id: "local-order",
+                    user_id: user?.id || "anonymous",
+                    image_url: imagePreview,
+                  };
+
+                  setMessages((prev) => [...prev, newMsg]);
+                  setNewMessage("");
+                  setImagePreview(null);
+
+                  // Simulate response after 1 second
+                  setTimeout(() => {
+                    const responseMsg = {
+                      id: `local-${Date.now() + 1}`,
+                      content:
+                        "This is a demo mode response. The database is currently unavailable.",
+                      user_name: "Support",
+                      user_avatar: "",
+                      is_admin: true,
+                      created_at: new Date().toISOString(),
+                      order_id: "local-order",
+                      user_id: "system",
+                      image_url: "",
+                    };
+                    setMessages((prev) => [...prev, responseMsg]);
+                  }, 1000);
+                }}
+              >
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={handleMessageChange}
+                    placeholder="Type your message..."
+                    className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!newMessage.trim()}
+                    className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Send className="w-6 h-6" />
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </main>
       </PageContainer>
     );
-  } catch (renderError) {
-    console.error("Error rendering ChatPage:", renderError);
+  }
 
-    // Super simple fallback UI that should never fail
+  if (error) {
     return (
-      <div className="min-h-screen bg-gray-900 text-white p-4 flex flex-col items-center justify-center">
-        <h1 className="text-xl mb-4">Chat Error</h1>
-        <p className="mb-4">
-          We encountered an error loading the chat interface.
-        </p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-4 py-2 bg-emerald-500 rounded"
-        >
-          Reload Page
-        </button>
-        <button
-          onClick={() => navigate("/")}
-          className="px-4 py-2 bg-blue-500 rounded mt-2"
-        >
-          Go to Home
-        </button>
-      </div>
+      <PageContainer title="CHAT" user={user}>
+        <main className="max-w-screen-xl mx-auto pb-16">
+          <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
+            <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
+              <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
+              <h2 className="text-xl text-white mb-2">Connection Error</h2>
+              <p className="text-white/70 mb-6">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+              >
+                Refresh Page
+              </button>
+            </div>
+          </div>
+        </main>
+      </PageContainer>
     );
   }
+
+  return (
+    <PageContainer title="CHAT" showBack user={user}>
+      <main className="max-w-screen-xl mx-auto pb-16">
+        <div className="flex h-[calc(100vh-5rem)]">
+          {/* Sidebar */}
+          <div
+            className={`fixed inset-y-0 left-0 z-20 w-80 bg-black/80 backdrop-blur-md transform transition-transform duration-300 ease-in-out ${
+              showSidebar ? "translate-x-0" : "-translate-x-full"
+            } md:relative md:translate-x-0`}
+          >
+            <div className="flex flex-col h-full p-4">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-white">Orders</h2>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="md:hidden text-white/70 hover:text-white"
+                >
+                  <XIcon className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <input
+                  type="text"
+                  placeholder="Search orders..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {filteredOrders.length === 0 ? (
+                  <div className="text-center text-white/50 py-8">
+                    No orders found
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredOrders.map((order) => (
+                      <button
+                        key={order.id}
+                        onClick={() => {
+                          setSelectedOrderId(order.id);
+                          fetchMessages(order.id);
+                          setShowSidebar(false);
+                        }}
+                        className={`w-full text-left p-3 rounded-lg transition-colors ${
+                          selectedOrderId === order.id
+                            ? "bg-emerald-500/20 text-emerald-400"
+                            : "bg-white/5 text-white hover:bg-white/10"
+                        }`}
+                      >
+                        <div className="font-medium">
+                          Order #{order.id.slice(0, 8)}
+                        </div>
+                        {isAdmin && order.messages?.length && (
+                          <div className="text-xs text-emerald-400 mt-1">
+                            {order.messages.length} message
+                            {order.messages.length !== 1 ? "s" : ""}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Chat area */}
+          <div className="flex-1 flex flex-col h-full">
+            {/* Chat header */}
+            <div className="p-4 border-b border-white/10 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowSidebar(true)}
+                  className="md:hidden text-white/70 hover:text-white"
+                >
+                  <MenuIcon className="w-6 h-6" />
+                </button>
+                <h2 className="text-lg font-medium text-white">
+                  {selectedOrderId
+                    ? `Order #${selectedOrderId.slice(0, 8)}`
+                    : "Select an order"}
+                </h2>
+              </div>
+            </div>
+
+            {/* Messages area */}
+            {selectedOrderId ? (
+              <>
+                <div className="flex-1 overflow-y-auto p-4">
+                  {loading ? (
+                    <div className="h-full flex items-center justify-center">
+                      <LoadingSpinner size="lg" light />
+                    </div>
+                  ) : error ? (
+                    <div className="h-full flex items-center justify-center">
+                      <div className="text-center">
+                        <p className="text-red-400 mb-2">{error}</p>
+                        <button
+                          onClick={() => fetchMessages(selectedOrderId)}
+                          className="px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                        >
+                          Try Again
+                        </button>
+                      </div>
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="h-full flex items-center justify-center">
+                      <div className="text-center text-white/50">
+                        <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>No messages yet</p>
+                        <p className="text-sm mt-2">
+                          Start the conversation by sending a message
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {messages.map((message, index) => (
+                        <MessageBubble
+                          key={message.id}
+                          message={message}
+                          isLatest={index === messages.length - 1}
+                          sending={false}
+                          isUnread={unreadMessages.has(message.id)}
+                          onRetry={() => handleRetry(message.id)}
+                          isPending={pendingMessages.current.has(message.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Message input */}
+                <div className="p-4 border-t border-white/10">
+                  <form onSubmit={handleSendMessage}>
+                    {imagePreview && (
+                      <div className="mb-4 relative inline-block">
+                        <img
+                          src={imagePreview}
+                          alt="Preview"
+                          className="max-h-40 rounded-lg"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedImage(null);
+                            setImagePreview(null);
+                          }}
+                          className="absolute -top-2 -right-2 bg-black/50 rounded-full p-1 text-white hover:bg-black/70 transition-colors"
+                        >
+                          <XIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleImageSelect}
+                        accept="image/*"
+                        className="hidden"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
+                        disabled={sending}
+                      >
+                        <ImageIcon className="w-6 h-6" />
+                      </button>
+
+                      <input
+                        type="text"
+                        value={newMessage}
+                        onChange={handleMessageChange}
+                        placeholder="Type your message..."
+                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        disabled={sending}
+                      />
+
+                      <button
+                        type="submit"
+                        disabled={
+                          (!newMessage.trim() && !selectedImage) || sending
+                        }
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {sending ? (
+                          <RefreshCw className="w-6 h-6 animate-spin" />
+                        ) : (
+                          <Send className="w-6 h-6" />
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* Typing indicator */}
+                {typingUsers.size > 0 && (
+                  <div className="px-4 py-2 text-sm text-white/60 italic">
+                    {Array.from(typingUsers).join(', ')} {typingUsers.size === 1 ? 'is' : 'are'} typing...
+                    <span className="inline-block ml-1">
+                      <span className="animate-bounce">.</span>
+                      <span className="animate-bounce delay-100">.</span>
+                      <span className="animate-bounce delay-200">.</span>
+                    </span>
+                  </div>
+                )}
+
+                {/* Messages end ref */}
+                <div ref={messagesEndRef} />
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center text-white/50">
+                  <ChatIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                  <p className="text-lg">Select an order to start chatting</p>
+                  <p className="text-sm text-center max-w-md">
+                    Choose an order from the sidebar to start a conversation
+                    with support
+                  </p>
+                  <button
+                    onClick={() => setShowSidebar(true)}
+                    className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-4"
+                  >
+                    View Orders
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+    </PageContainer>
+  );
 }
 
 export default React.memo(ChatPage);
