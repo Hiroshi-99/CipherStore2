@@ -1773,39 +1773,9 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   };
 
-  if (loading) {
-    return (
-      <PageContainer title="ADMIN">
-        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
-          <LoadingSpinner size="lg" light />
-        </div>
-      </PageContainer>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <PageContainer title="ADMIN">
-        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
-          <div className="text-center">
-            <h2 className="text-xl text-white mb-4">Access Denied</h2>
-            <p className="text-white/70 mb-6">
-              You don't have permission to access this page.
-            </p>
-            <button
-              onClick={() => navigate("/")}
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
-            >
-              Go Home
-            </button>
-          </div>
-        </div>
-      </PageContainer>
-    );
-  }
-
+  // Update the main render function to use the tabs correctly
   return (
-    <PageContainer title="ADMIN" showBack>
+    <PageContainer title="ADMIN" user={currentUser} showBack>
       <main className="max-w-screen-xl mx-auto pb-16 px-4">
         <div className="bg-gray-900 rounded-xl p-6 mt-8">
           <h1 className="text-2xl font-bold text-white mb-6">
@@ -1814,12 +1784,12 @@ Please keep these details secure. You can copy them by selecting the text.
 
           {/* Tabs */}
           <div className="border-b border-white/10 mb-6">
-            <div className="flex space-x-4">
+            <div className="flex space-x-6">
               <button
                 onClick={() => setSelectedTab("users")}
-                className={`py-2 px-4 ${
+                className={`pb-3 px-1 ${
                   selectedTab === "users"
-                    ? "border-b-2 border-emerald-500 text-emerald-500"
+                    ? "text-emerald-400 border-b-2 border-emerald-400"
                     : "text-white/70 hover:text-white"
                 }`}
               >
@@ -1827,19 +1797,19 @@ Please keep these details secure. You can copy them by selecting the text.
               </button>
               <button
                 onClick={() => setSelectedTab("orders")}
-                className={`py-2 px-4 ${
+                className={`pb-3 px-1 ${
                   selectedTab === "orders"
-                    ? "border-b-2 border-emerald-500 text-emerald-500"
+                    ? "text-emerald-400 border-b-2 border-emerald-400"
                     : "text-white/70 hover:text-white"
                 }`}
               >
-                Orders
+                Order Management
               </button>
               <button
                 onClick={() => setSelectedTab("settings")}
-                className={`py-2 px-4 ${
+                className={`pb-3 px-1 ${
                   selectedTab === "settings"
-                    ? "border-b-2 border-emerald-500 text-emerald-500"
+                    ? "text-emerald-400 border-b-2 border-emerald-400"
                     : "text-white/70 hover:text-white"
                 }`}
               >
@@ -1848,173 +1818,39 @@ Please keep these details secure. You can copy them by selecting the text.
             </div>
           </div>
 
-          {/* User Management Tab */}
-          {selectedTab === "users" && (
-            <div>
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl text-white">User Management</h2>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Search users..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40 w-64"
-                  />
-                  <div className="absolute right-3 top-2.5 text-white/50">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* Users Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-white">
-                  <thead className="bg-white/5 text-left">
-                    <tr>
-                      <th className="px-4 py-3 rounded-tl-lg">Name</th>
-                      <th className="px-4 py-3">Email</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3">Created</th>
-                      <th className="px-4 py-3 rounded-tr-lg">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/10">
-                    {filteredUsers.length > 0 ? (
-                      filteredUsers.map((user) => (
-                        <tr key={user.id} className="hover:bg-white/5">
-                          <td className="px-4 py-3">
-                            {user.fullName || "N/A"}
-                          </td>
-                          <td className="px-4 py-3">{user.email}</td>
-                          <td className="px-4 py-3">
-                            {user.isAdmin ? (
-                              <span className="bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full text-xs">
-                                Admin
-                              </span>
-                            ) : (
-                              <span className="bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full text-xs">
-                                User
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            {new Date(user.createdAt).toLocaleDateString()}
-                          </td>
-                          <td className="px-4 py-3">
-                            {user.isAdmin ? (
-                              <button
-                                onClick={() => handleRevokeAdmin(user.id)}
-                                disabled={
-                                  actionInProgress === user.id ||
-                                  user.id === currentUser.id
-                                }
-                                className={`px-3 py-1 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors ${
-                                  actionInProgress === user.id ||
-                                  user.id === currentUser.id
-                                    ? "opacity-50 cursor-not-allowed"
-                                    : ""
-                                }`}
-                              >
-                                {actionInProgress === user.id ? (
-                                  <span className="flex items-center">
-                                    <LoadingSpinner size="sm" light />
-                                    <span className="ml-2">Revoking...</span>
-                                  </span>
-                                ) : (
-                                  "Revoke Admin"
-                                )}
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleGrantAdmin(user.id)}
-                                disabled={actionInProgress === user.id}
-                                className={`px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors ${
-                                  actionInProgress === user.id
-                                    ? "opacity-50 cursor-not-allowed"
-                                    : ""
-                                }`}
-                              >
-                                {actionInProgress === user.id ? (
-                                  <span className="flex items-center">
-                                    <LoadingSpinner size="sm" light />
-                                    <span className="ml-2">Granting...</span>
-                                  </span>
-                                ) : (
-                                  "Make Admin"
-                                )}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={5}
-                          className="px-4 py-8 text-center text-white/50"
-                        >
-                          {searchTerm ? (
-                            <>
-                              <p>No users matching "{searchTerm}"</p>
-                              <button
-                                onClick={() => setSearchTerm("")}
-                                className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
-                              >
-                                Clear search
-                              </button>
-                            </>
-                          ) : (
-                            <p>No users found</p>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-6 p-4 bg-white/5 rounded-lg">
-                <h3 className="text-lg font-medium mb-4">Add Admin User</h3>
-                <div className="flex gap-2">
-                  <input
-                    type="email"
-                    value={newAdminEmail}
-                    onChange={(e) => setNewAdminEmail(e.target.value)}
-                    placeholder="User email address"
-                    className="flex-1 px-3 py-2 bg-gray-800 rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <button
-                    onClick={addAdminByEmail}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white transition-colors"
-                  >
-                    Add Admin
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Orders Tab */}
+          {/* Tab Content */}
+          {selectedTab === "users" && renderUsersTab()}
           {selectedTab === "orders" && renderOrdersTab()}
-
-          {/* Settings Tab */}
           {selectedTab === "settings" && renderSettingsTab()}
         </div>
       </main>
+
+      {/* Image Modal */}
+      {showImageModal && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          onClick={() => setShowImageModal(false)}
+        >
+          <div
+            className="max-w-4xl w-full max-h-[90vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={currentImageUrl}
+              alt="Payment proof"
+              className="w-full h-auto rounded-lg"
+            />
+            <button
+              onClick={() => setShowImageModal(false)}
+              className="absolute top-4 right-4 text-white/70 hover:text-white"
+            >
+              <XCircle className="w-8 h-8" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Order Detail Modal */}
       {selectedOrderDetail && <OrderDetailModal />}
     </PageContainer>
   );
