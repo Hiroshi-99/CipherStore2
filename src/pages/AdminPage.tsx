@@ -362,7 +362,7 @@ function AdminPage() {
     setShowImageModal(true);
   };
 
-  // Add this function to handle file uploads
+  // Update the handleFileUpload function
   const handleFileUpload = async (url: string) => {
     try {
       setActionInProgress("uploading");
@@ -376,6 +376,9 @@ function AdminPage() {
         return;
       }
 
+      // Show progress
+      const toastId = toast.loading("Updating order with file...");
+
       // Update the order with the file URL
       const { error } = await supabase
         .from("orders")
@@ -383,20 +386,34 @@ function AdminPage() {
         .eq("id", selectedOrder.id);
 
       if (error) {
+        console.error("Error updating order:", error);
+        toast.error("Failed to update order with file URL", { id: toastId });
         throw error;
       }
 
+      // Get current user info for the message
+      const { data: userData } = await supabase.auth.getUser();
+      const userName = userData?.user?.user_metadata?.full_name || "Admin";
+      const userAvatar =
+        userData?.user?.user_metadata?.avatar_url ||
+        "/images/support-avatar.png";
+
       // Create a message to notify the user
-      await supabase.from("messages").insert({
+      const { error: messageError } = await supabase.from("messages").insert({
         order_id: selectedOrder.id,
-        user_id: user.id,
+        user_id: userData?.user?.id,
         content: "Your account file has been uploaded and is now available.",
         is_admin: true,
         created_at: new Date().toISOString(),
-        user_name: "Admin",
-        user_avatar: "/images/support-avatar.png",
+        user_name: userName,
+        user_avatar: userAvatar,
         image_url: url,
       });
+
+      if (messageError) {
+        console.error("Error creating message:", messageError);
+        // Continue anyway since the file was uploaded
+      }
 
       // Update local state
       setOrders((prev) =>
@@ -408,7 +425,9 @@ function AdminPage() {
       );
 
       // Show success message
-      toast.success("File uploaded and attached to order successfully!");
+      toast.success("File uploaded and attached to order successfully!", {
+        id: toastId,
+      });
 
       // Close any open modals
       setShowImageModal(false);
@@ -420,7 +439,7 @@ function AdminPage() {
     }
   };
 
-  // Improve the direct upload function
+  // Enhance the direct upload function to be more reliable
   const uploadDirectToSupabase = async (file: File): Promise<string | null> => {
     try {
       // Generate a unique file name
@@ -430,7 +449,14 @@ function AdminPage() {
       )}`;
 
       // Show progress in the toast
-      const toastId = toast.loading("Preparing upload...");
+      const toastId = toast.loading("Uploading file...");
+
+      // Get the current user session
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        toast.error("You must be logged in to upload files", { id: toastId });
+        return null;
+      }
 
       // Try multiple buckets in case one fails
       const buckets = ["images", "account_files", "uploads"];
@@ -438,7 +464,8 @@ function AdminPage() {
 
       for (const bucket of buckets) {
         try {
-          toast.loading(`Trying upload to ${bucket}...`, { id: toastId });
+          toast.loading(`Uploading to ${bucket}...`, { id: toastId });
+          console.log(`Trying upload to ${bucket} bucket`);
 
           // Upload directly to Supabase storage
           const { data, error } = await supabase.storage
@@ -455,7 +482,8 @@ function AdminPage() {
               .getPublicUrl(`uploads/${fileName}`);
 
             uploadedUrl = urlData.publicUrl;
-            toast.success(`Upload successful to ${bucket}!`, { id: toastId });
+            console.log(`Upload successful to ${bucket}:`, uploadedUrl);
+            toast.success(`Upload successful!`, { id: toastId });
             break;
           } else {
             console.error(`Error uploading to ${bucket}:`, error);
@@ -466,42 +494,9 @@ function AdminPage() {
       }
 
       if (!uploadedUrl) {
-        // Try one more approach - base64 in the database
-        toast.loading("Trying alternative upload method...", { id: toastId });
-
-        try {
-          // Convert to base64
-          const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          });
-
-          // Store in a temporary table
-          const { data, error } = await supabase
-            .from("file_uploads")
-            .insert({
-              file_name: fileName,
-              file_data: base64,
-              file_type: file.type,
-              user_id: user.id,
-              created_at: new Date().toISOString(),
-            })
-            .select("id")
-            .single();
-
-          if (!error && data) {
-            uploadedUrl = `${window.location.origin}/api/files/${data.id}`;
-            toast.success("Upload successful via alternative method!", {
-              id: toastId,
-            });
-          } else {
-            toast.error("All upload methods failed", { id: toastId });
-          }
-        } catch (finalError) {
-          console.error("Final upload attempt failed:", finalError);
-          toast.error("All upload methods failed", { id: toastId });
-        }
+        toast.error("Failed to upload file. Please try again.", {
+          id: toastId,
+        });
       }
 
       return uploadedUrl;
@@ -732,38 +727,16 @@ function AdminPage() {
           </div>
 
           {/* Order Details Section */}
-          <div className="mt-4 border-t pt-4">
-            <h3 className="text-lg font-medium mb-2">Upload Account File</h3>
-            <FileUpload
-              onUploadSuccess={handleFileUpload}
-              onUploadError={(err) =>
-                toast.error(`Upload error: ${err.message}`)
-              }
-              acceptedFileTypes="image/*,application/pdf"
-              maxSizeMB={10}
-              buttonText="Upload Account File"
-              className="mb-4"
-            />
-            {selectedOrderId && (
-              <div className="mt-2">
-                <p className="text-sm text-gray-500">Current file:</p>
-                <a
-                  href={
-                    orders.find((order) => order.id === selectedOrderId)
-                      ?.account_file_url
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-500 hover:underline flex items-center"
-                >
-                  <Download size={16} className="mr-1" />
-                  View uploaded file
-                </a>
-              </div>
-            )}
+          <div className="mt-4 space-y-4">
+            <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <h3 className="text-lg font-medium mb-2 text-blue-400">
+                Upload Account File
+              </h3>
+              <p className="text-sm text-white/70 mb-4">
+                Upload an account file to share with the customer. Supported
+                formats: images and PDF.
+              </p>
 
-            {/* Update the direct upload button to be more prominent */}
-            <div className="mt-4 flex flex-col md:flex-row gap-4">
               <button
                 onClick={async () => {
                   if (!selectedOrderId) {
@@ -785,20 +758,17 @@ function AdminPage() {
                       return;
                     }
 
-                    toast.loading("Uploading file directly...");
                     setActionInProgress("uploading");
 
                     try {
                       const url = await uploadDirectToSupabase(file);
                       if (url) {
-                        toast.dismiss();
-                        toast.success("File uploaded successfully!");
                         handleFileUpload(url);
                       } else {
                         throw new Error("Upload failed");
                       }
                     } catch (err) {
-                      toast.dismiss();
+                      console.error("Upload error:", err);
                       toast.error("Failed to upload file. Please try again.");
                       setActionInProgress(null);
                     }
@@ -806,89 +776,146 @@ function AdminPage() {
 
                   input.click();
                 }}
-                className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors flex-1"
+                className="w-full px-4 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center"
                 disabled={actionInProgress === "uploading" || !selectedOrderId}
               >
                 {actionInProgress === "uploading" ? (
                   <span className="flex items-center justify-center">
-                    <RefreshCw className="animate-spin mr-2 h-4 w-4" />
+                    <RefreshCw className="animate-spin mr-2 h-5 w-5" />
                     Uploading...
                   </span>
                 ) : (
                   <span className="flex items-center justify-center">
-                    <Upload className="mr-2 h-4 w-4" />
-                    Direct Upload (Recommended)
+                    <Upload className="mr-2 h-5 w-5" />
+                    Upload Account File
                   </span>
                 )}
               </button>
 
-              <button
-                onClick={() => {
-                  if (!selectedOrderId) {
-                    toast.error("Please select an order first");
-                    return;
-                  }
-                  // Show a message explaining the issue with the regular upload
-                  toast.info(
-                    "If you're having issues with the file upload component, try the Direct Upload button instead.",
-                    { duration: 5000 }
-                  );
-                }}
-                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex-1"
-              >
-                <span className="flex items-center justify-center">
-                  <MessageCircle className="mr-2 h-4 w-4" />
-                  Help with Uploads
-                </span>
-              </button>
+              {orders.find((order) => order.id === selectedOrderId) && (
+                <div className="mt-4 p-3 bg-white/5 rounded-lg">
+                  <p className="text-sm text-white/70 mb-2">Current file:</p>
+                  <a
+                    href={
+                      orders.find((order) => order.id === selectedOrderId)
+                        ?.account_file_url
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300 flex items-center"
+                  >
+                    <Download size={16} className="mr-2" />
+                    View uploaded file
+                  </a>
+                </div>
+              )}
             </div>
 
-            {/* Add a local upload button for testing */}
-            <button
-              onClick={async () => {
-                if (!selectedOrderId) {
-                  toast.error("Please select an order first");
-                  return;
-                }
-
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = "image/*,application/pdf";
-
-                input.onchange = async (e) => {
-                  const file = (e.target as HTMLInputElement).files?.[0];
-                  if (!file) return;
-
-                  toast.loading("Creating local file preview...");
-                  setActionInProgress("uploading");
-
-                  try {
-                    // This doesn't actually upload the file, it just creates a data URL
-                    const dataUrl = await uploadLocally(file);
-                    if (dataUrl) {
-                      toast.dismiss();
-                      toast.success("Local preview created!");
-
-                      // Use the data URL directly
-                      handleFileUpload(dataUrl);
+            {/* Alternative upload methods (for testing) */}
+            <div className="p-4 bg-gray-800 rounded-lg border border-gray-700">
+              <h4 className="text-sm font-medium mb-2 text-gray-400">
+                Alternative Upload Methods
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <button
+                  onClick={async () => {
+                    if (!selectedOrderId) {
+                      toast.error("Please select an order first");
+                      return;
                     }
-                  } catch (err) {
-                    toast.dismiss();
-                    toast.error("Failed to create preview");
-                    setActionInProgress(null);
-                  }
-                };
 
-                input.click();
-              }}
-              className="mt-2 px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition-colors w-full"
-              disabled={actionInProgress === "uploading" || !selectedOrderId}
-            >
-              <span className="flex items-center justify-center">
-                <Upload className="mr-2 h-4 w-4" />
-                Local Preview (Testing Only)
-              </span>
-            </button>
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = "image/*,application/pdf";
+
+                    input.onchange = async (e) => {
+                      const file = (e.target as HTMLInputElement).files?.[0];
+                      if (!file) return;
+
+                      toast.loading("Creating local file preview...");
+                      setActionInProgress("uploading");
+
+                      try {
+                        // Convert to base64
+                        const base64 = await new Promise<string>((resolve) => {
+                          const reader = new FileReader();
+                          reader.onload = () =>
+                            resolve(reader.result as string);
+                          reader.readAsDataURL(file);
+                        });
+
+                        // Get current user ID or use a fallback
+                        let userId = "unknown";
+                        try {
+                          const { data: userData } =
+                            await supabase.auth.getUser();
+                          userId = userData?.user?.id || "unknown";
+                        } catch (userError) {
+                          console.error("Error getting user ID:", userError);
+                        }
+
+                        // Store in a temporary table
+                        const { data, error } = await supabase
+                          .from("file_uploads")
+                          .insert({
+                            file_name: fileName,
+                            file_data: base64,
+                            file_type: file.type,
+                            user_id: userId,
+                            created_at: new Date().toISOString(),
+                          })
+                          .select("id")
+                          .single();
+
+                        if (error) {
+                          console.error("Error storing file:", error);
+                          throw error;
+                        }
+
+                        // Use the data URL directly
+                        handleFileUpload(data.file_data);
+                      } catch (err) {
+                        toast.dismiss();
+                        toast.error("Failed to create preview");
+                        setActionInProgress(null);
+                      }
+                    };
+
+                    input.click();
+                  }}
+                  className="px-3 py-2 bg-purple-500/30 text-purple-300 rounded-md hover:bg-purple-500/40 transition-colors text-sm"
+                  disabled={
+                    actionInProgress === "uploading" || !selectedOrderId
+                  }
+                >
+                  <span className="flex items-center justify-center">
+                    <Upload className="mr-1 h-4 w-4" />
+                    Local Preview
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (!selectedOrderId) {
+                      toast.error("Please select an order first");
+                      return;
+                    }
+
+                    // Show help message
+                    toast.info(
+                      "If you're having issues uploading files, try using a smaller file or a different file format.",
+                      { duration: 5000 }
+                    );
+                  }}
+                  className="px-3 py-2 bg-blue-500/30 text-blue-300 rounded-md hover:bg-blue-500/40 transition-colors text-sm"
+                >
+                  <span className="flex items-center justify-center">
+                    <MessageCircle className="mr-1 h-4 w-4" />
+                    Upload Help
+                  </span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </main>
