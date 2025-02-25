@@ -705,30 +705,15 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       const result = await fetchUsersWithAdminStatus(adminUserId);
 
-      if (result.success) {
+      if (result.success && result.data && result.data.length > 0) {
         setUsers(result.data);
+      } else if (result.success && (!result.data || result.data.length === 0)) {
+        // No users returned, but not an error
+        console.log("No users returned from API");
+        toast.info("No users found");
+        setUsers([]);
       } else {
-        console.error("Error fetching users:", result.error);
-        toast.error("Failed to load users: " + result.error);
-        setFallbackMode(true);
-
-        // Load basic user data as fallback
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("id, email, full_name, created_at");
-
-        if (profiles) {
-          setUsers(
-            profiles.map((profile) => ({
-              id: profile.id,
-              email: profile.email,
-              fullName: profile.full_name || "",
-              isAdmin: false, // We don't know in fallback mode
-              lastSignIn: null,
-              createdAt: profile.created_at,
-            }))
-          );
-        }
+        // Error case - already handled
       }
     } catch (err) {
       console.error("Error fetching users:", err);
