@@ -83,19 +83,21 @@ function ChatPage() {
         // Check if user is admin
         const checkIfAdmin = async (userId: string) => {
           try {
-            // Option 1: Check user metadata for admin role
+            // Since both users and admins tables don't exist, rely on user metadata
+            // or hardcoded admin IDs for testing
+
+            // Option 1: Check user metadata
             if (session.user.user_metadata?.role === "admin") {
               return true;
             }
 
-            // Option 2: Check a different table that might exist
-            const { data } = await supabase
-              .from("users") // or another table that contains admin info
-              .select("is_admin")
-              .eq("id", userId)
-              .single();
+            // Option 2: Check against known admin IDs (for testing)
+            const knownAdminIds = [
+              "febded26-f3f6-4aec-9668-b6898de96ca3", // Add your test admin IDs here
+              // Add more admin IDs as needed
+            ];
 
-            return data?.is_admin || false;
+            return knownAdminIds.includes(userId);
           } catch (err) {
             console.error("Error checking admin status:", err);
             return false;
@@ -141,6 +143,15 @@ function ChatPage() {
         .select("id, full_name")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
+
+      if (ordersError && ordersError.code === "42P01") {
+        // Table doesn't exist error
+        setError(
+          "Order system is currently unavailable. The orders table doesn't exist in the database."
+        );
+        console.error("Database schema error: orders table doesn't exist");
+        return;
+      }
 
       if (ordersError) throw ordersError;
 
@@ -191,6 +202,15 @@ function ChatPage() {
         .select("id, full_name, messages:chat_messages(id)")
         .order("created_at", { ascending: false });
 
+      if (ordersError && ordersError.code === "42P01") {
+        // Table doesn't exist error
+        setError(
+          "Chat system is currently unavailable. The messages table doesn't exist in the database."
+        );
+        console.error("Database schema error: messages table doesn't exist");
+        return;
+      }
+
       if (ordersError) throw ordersError;
 
       setAdminOrders(data || []);
@@ -219,10 +239,19 @@ function ChatPage() {
         setError(null);
 
         const { data, error: messagesError } = await supabase
-          .from("chat_messages")
+          .from("messages")
           .select("*")
           .eq("order_id", orderId)
           .order("created_at", { ascending: true });
+
+        if (messagesError && messagesError.code === "42P01") {
+          // Table doesn't exist error
+          setError(
+            "Chat system is currently unavailable. The messages table doesn't exist in the database."
+          );
+          console.error("Database schema error: messages table doesn't exist");
+          return;
+        }
 
         if (messagesError) throw messagesError;
 
@@ -236,7 +265,7 @@ function ChatPage() {
 
         if (unreadIds.length > 0) {
           await supabase
-            .from("chat_messages")
+            .from("messages")
             .update({ is_read: true })
             .in("id", unreadIds);
         }
@@ -260,19 +289,23 @@ function ChatPage() {
       }
 
       setSending(true);
+      setNewMessage("");
+      setSelectedImage(null);
+      setImagePreview(null);
 
       try {
-        const tempId = crypto.randomUUID();
+        // Create a temporary ID for optimistic UI
+        const tempId = `temp-${Date.now()}`;
 
         // Add optimistic message
-        const optimisticMessage: Message = {
+        const optimisticMessage = {
           id: tempId,
           content: newMessage.trim(),
           order_id: selectedOrderId,
           user_id: user.id,
           is_admin: isAdmin,
-          is_read: false,
           created_at: new Date().toISOString(),
+          is_read: false,
           image_url: imageUrl || null,
           user_name: user.user_metadata?.full_name || user.email || "User",
           user_avatar: user.user_metadata?.avatar_url || null,
@@ -288,7 +321,7 @@ function ChatPage() {
 
         // Send to database
         const { data, error: sendError } = await supabase
-          .from("chat_messages")
+          .from("messages")
           .insert([
             {
               content: newMessage.trim(),
@@ -308,13 +341,9 @@ function ChatPage() {
 
         // Clear pending message
         pendingMessages.current.delete(tempId);
-
-        setNewMessage("");
-        setSelectedImage(null);
-        setImagePreview(null);
       } catch (err) {
         console.error("Error sending message:", err);
-        toast.error("Failed to send message. Click to retry.");
+        toast.error("Failed to send message. Please try again.");
       } finally {
         setSending(false);
       }
