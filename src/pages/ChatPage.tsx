@@ -81,16 +81,31 @@ function ChatPage() {
         setUser(session.user);
 
         // Check if user is admin
-        const { data: adminData } = await supabase
-          .from("admins")
-          .select("id")
-          .eq("user_id", session.user.id)
-          .single();
+        const checkIfAdmin = async (userId: string) => {
+          try {
+            // Option 1: Check user metadata for admin role
+            if (session.user.user_metadata?.role === "admin") {
+              return true;
+            }
 
-        setIsAdmin(!!adminData);
+            // Option 2: Check a different table that might exist
+            const { data } = await supabase
+              .from("users") // or another table that contains admin info
+              .select("is_admin")
+              .eq("id", userId)
+              .single();
+
+            return data?.is_admin || false;
+          } catch (err) {
+            console.error("Error checking admin status:", err);
+            return false;
+          }
+        };
+
+        setIsAdmin(await checkIfAdmin(session.user.id));
 
         // Fetch orders based on user role
-        if (adminData) {
+        if (isAdmin) {
           fetchAdminOrders();
         } else {
           fetchUserOrders(session.user.id);
@@ -123,13 +138,36 @@ function ChatPage() {
     try {
       const { data, error: ordersError } = await supabase
         .from("orders")
-        .select("id, full_name, messages:chat_messages(id)")
+        .select("id, full_name")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (ordersError) throw ordersError;
 
-      setUserOrders(data || []);
+      // Fetch message counts separately if needed
+      const ordersWithMessageCounts = await Promise.all(
+        (data || []).map(async (order) => {
+          try {
+            const { count } = await supabase
+              .from("messages")
+              .select("id", { count: "exact", head: true })
+              .eq("order_id", order.id);
+
+            return {
+              ...order,
+              messages: count ? Array(count).fill({ id: "placeholder" }) : [],
+            };
+          } catch (err) {
+            console.error(
+              `Error fetching message count for order ${order.id}:`,
+              err
+            );
+            return order;
+          }
+        })
+      );
+
+      setUserOrders(ordersWithMessageCounts || []);
 
       // Select first order if available and none selected
       if (data?.length && !selectedOrderId) {
@@ -343,6 +381,28 @@ function ChatPage() {
   const { searchTerm, setSearchTerm, filteredOrders } = useOrderFilters(
     isAdmin ? adminOrders : userOrders
   );
+
+  if (error) {
+    return (
+      <PageContainer title="CHAT" user={user}>
+        <main className="max-w-screen-xl mx-auto pb-16">
+          <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
+            <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
+              <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
+              <h2 className="text-xl text-white mb-2">Connection Error</h2>
+              <p className="text-white/70 mb-6">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+              >
+                Refresh Page
+              </button>
+            </div>
+          </div>
+        </main>
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer title="CHAT" showBack user={user}>
