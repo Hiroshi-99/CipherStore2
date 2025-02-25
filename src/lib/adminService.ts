@@ -24,24 +24,43 @@ export async function checkIfAdmin(userId: string) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
     if (user && user.id === userId && user.user_metadata?.role === "admin") {
       return true;
     }
 
-    // Only check admin_users table if we haven't already determined admin status
+    // Check admin_users table by user_id
     try {
       const { data: adminData, error: adminError } = await supabase
         .from("admin_users")
         .select("id")
-        .eq("user_id", userId)
-        .single();
+        .eq("user_id", userId);
 
-      if (!adminError && adminData) {
+      if (!adminError && adminData && adminData.length > 0) {
         return true;
       }
     } catch (tableError) {
-      console.error("Error checking admin_users table:", tableError);
-      // Continue with other checks
+      console.error("Error checking admin_users table by user_id:", tableError);
+    }
+
+    // Also check by email as a fallback
+    try {
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser();
+
+      if (currentUser && currentUser.email) {
+        const { data: adminByEmail, error: emailError } = await supabase
+          .from("admin_users")
+          .select("id")
+          .eq("user_email", currentUser.email);
+
+        if (!emailError && adminByEmail && adminByEmail.length > 0) {
+          return true;
+        }
+      }
+    } catch (emailError) {
+      console.error("Error checking admin_users table by email:", emailError);
     }
 
     return false;

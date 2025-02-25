@@ -750,40 +750,91 @@ Please keep these details secure. You can copy them by selecting the text.
     setLoading(true);
 
     try {
-      // Try the client-side approach
-      const result = await getAllUsersClientSide();
+      // Get the current user first
+      const {
+        data: { user: currentAuthUser },
+      } = await supabase.auth.getUser();
 
-      if (result.success && result.data) {
-        setUsers(result.data);
-      } else {
-        console.error("Error fetching users:", result.error);
-        toast.error(result.error || "Failed to load users");
+      if (!currentAuthUser) {
+        toast.error("You must be logged in to view users");
+        setLoading(false);
+        return;
+      }
 
-        // Fallback to just showing the current user
+      // Get admin users from the admin_users table
+      const { data: adminUsers, error: adminError } = await supabase
+        .from("admin_users")
+        .select("user_id, user_email");
+
+      if (adminError) {
+        console.error("Error fetching admin users:", adminError);
+      }
+
+      // Create sets for quick lookups
+      const adminUserIds = new Set(
+        (adminUsers || [])
+          .filter((admin) => admin.user_id)
+          .map((admin) => admin.user_id)
+      );
+
+      const adminEmails = new Set(
+        (adminUsers || [])
+          .filter((admin) => admin.user_email)
+          .map((admin) => admin.user_email)
+      );
+
+      // Create a user object for the current user
+      const currentUserData = {
+        id: currentAuthUser.id,
+        email: currentAuthUser.email || "",
+        fullName: currentAuthUser.user_metadata?.full_name || "",
+        isAdmin: true, // Current user is admin since they're viewing this page
+        lastSignIn: null,
+        createdAt: currentAuthUser.created_at,
+      };
+
+      // Add any admin users we know about by email
+      const knownAdminUsers = Array.from(adminEmails)
+        .filter((email) => email !== currentAuthUser.email) // Exclude current user
+        .map((email) => ({
+          id: "unknown-" + Math.random().toString(36).substring(2, 15),
+          email: email,
+          fullName: "Admin User",
+          isAdmin: true,
+          lastSignIn: null,
+          createdAt: new Date().toISOString(),
+        }));
+
+      setUsers([currentUserData, ...knownAdminUsers]);
+      setCurrentUser(currentUserData);
+
+      toast.success("Admin users loaded");
+    } catch (err) {
+      console.error("Error in fetchUsers:", err);
+      toast.error("Failed to load user data");
+
+      // Fallback to just the current user
+      try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
 
         if (user) {
-          setUsers([
-            {
-              id: user.id,
-              email: user.email || "",
-              fullName: user.user_metadata?.full_name || "",
-              isAdmin: true,
-              lastSignIn: null,
-              createdAt: user.created_at,
-            },
-          ]);
-          toast.info("Limited user data available");
-        } else {
-          setUsers([]);
+          const currentUserData = {
+            id: user.id,
+            email: user.email || "",
+            fullName: user.user_metadata?.full_name || "",
+            isAdmin: true,
+            lastSignIn: null,
+            createdAt: user.created_at,
+          };
+
+          setUsers([currentUserData]);
+          setCurrentUser(currentUserData);
         }
+      } catch (fallbackErr) {
+        console.error("Error in fallback:", fallbackErr);
       }
-    } catch (err) {
-      console.error("Error in fetchUsers:", err);
-      toast.error("Failed to load user data");
-      setUsers([]);
     } finally {
       setLoading(false);
     }
@@ -816,27 +867,55 @@ Please keep these details secure. You can copy them by selecting the text.
 
   const handleRevokeAdmin = async (userId: string) => {
     // Prevent revoking your own admin privileges
-    if (userId === currentUser.id) {
+    if (userId === currentUser?.id) {
       toast.error("You cannot revoke your own admin privileges");
       return;
     }
 
-    setActionInProgress(userId);
+    if (!confirm("Are you sure you want to revoke admin privileges?")) {
+      return;
+    }
 
     try {
-      const result = await revokeAdminPrivileges(currentUser.id, userId);
+      setActionInProgress(userId);
 
-      if (result.success) {
-        toast.success("Admin privileges revoked successfully");
-        // Update the local state
-        setUsers(
-          users.map((user) =>
-            user.id === userId ? { ...user, isAdmin: false } : user
-          )
-        );
-      } else {
-        toast.error(result.error);
+      // Find the user's email
+      const userToRevoke = users.find((u) => u.id === userId);
+
+      if (!userToRevoke) {
+        toast.error("User not found");
+        setActionInProgress(null);
+        return;
       }
+
+      // Delete from admin_users table by user_id or email
+      let deleteResult;
+
+      if (userId.startsWith("unknown-") && userToRevoke.email) {
+        // Delete by email
+        deleteResult = await supabase
+          .from("admin_users")
+          .delete()
+          .eq("user_email", userToRevoke.email);
+      } else {
+        // Delete by user_id
+        deleteResult = await supabase
+          .from("admin_users")
+          .delete()
+          .eq("user_id", userId);
+      }
+
+      if (deleteResult.error) {
+        toast.error(
+          `Error revoking admin privileges: ${deleteResult.error.message}`
+        );
+        return;
+      }
+
+      toast.success("Admin privileges revoked successfully");
+
+      // Refresh the users list
+      fetchUsers(currentUser?.id || "");
     } catch (err) {
       console.error("Error revoking admin privileges:", err);
       toast.error("Failed to revoke admin privileges");
@@ -864,15 +943,23 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       setActionInProgress("adding-admin");
 
-      // Since we can't query the users table, we'll need to add the admin directly
-      toast.info("Adding admin by email directly...");
+      // First check if the user exists in auth
+      const {
+        data: { user: currentAuthUser },
+      } = await supabase.auth.getUser();
 
-      // Create a new admin entry with the email
+      if (!currentAuthUser) {
+        toast.error("You must be logged in to add an admin");
+        setActionInProgress(null);
+        return;
+      }
+
+      // Add the admin directly by email
       const { data: adminData, error: adminError } = await supabase
         .from("admin_users")
         .insert({
           user_email: newAdminEmail.trim(),
-          granted_by: currentUser?.id || "",
+          granted_by: currentAuthUser.id,
           granted_at: new Date().toISOString(),
         })
         .select();
@@ -886,7 +973,9 @@ Please keep these details secure. You can copy them by selecting the text.
 
       toast.success(`Admin privileges granted to ${newAdminEmail}`);
       setNewAdminEmail("");
-      fetchUsers(currentUser?.id || "");
+
+      // Refresh the users list
+      fetchUsers(currentAuthUser.id);
     } catch (err) {
       console.error("Error adding admin by email:", err);
       toast.error("Failed to add admin");
