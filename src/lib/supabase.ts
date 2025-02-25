@@ -10,3 +10,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export { supabase };
+
+export async function insertMessage(message) {
+  const { data, error } = await supabase.from("messages").insert({
+    id: crypto.randomUUID(),
+    temp_id: message.id,
+  });
+}

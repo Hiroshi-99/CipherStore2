@@ -596,8 +596,8 @@ function ChatPage() {
       return;
     }
 
-    // Generate a temporary ID for the message
-    const tempId = `temp-${Date.now()}`;
+    // Use a proper UUID
+    const tempId = crypto.randomUUID();
 
     try {
       setSending(true);
@@ -1425,7 +1425,7 @@ function ChatPage() {
 
           // Create the welcome message with proper UUID
           const welcomeMessage = {
-            id: generateUUID(),
+            id: crypto.randomUUID(),
             content:
               "Thank you for your order! Our support team will be with you shortly. Feel free to ask any questions about your order here.",
             user_id: adminId,
@@ -1495,7 +1495,7 @@ function ChatPage() {
           ...prev,
           {
             ...minimalMessage,
-            id: generateUUID(),
+            id: crypto.randomUUID(),
             user_name: "Support Team",
             user_avatar: "/images/support-avatar.png",
             is_read: false,
@@ -1706,7 +1706,7 @@ function ChatPage() {
 
                   // Add local message
                   const newMsg = {
-                    id: `local-${Date.now()}`,
+                    id: crypto.randomUUID(),
                     content: newMessage,
                     user_name: user?.user_metadata?.full_name || "You",
                     user_avatar: user?.user_metadata?.avatar_url || "",
@@ -1724,7 +1724,7 @@ function ChatPage() {
                   // Simulate response after 1 second
                   setTimeout(() => {
                     const responseMsg = {
-                      id: `local-${Date.now() + 1}`,
+                      id: crypto.randomUUID(),
                       content:
                         "This is a demo mode response. The database is currently unavailable.",
                       user_name: "Support",
