@@ -1,19 +1,11 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  ExternalLink,
-  Bell,
-  FileText,
-  RefreshCw,
-  X,
-  Search,
-} from "lucide-react";
+import { ExternalLink, Bell, FileText, RefreshCw } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Header from "../components/Header";
 import { setPageTitle } from "../utils/title";
 import { toast } from "sonner";
-import { formatDistanceToNow } from "date-fns";
 
 interface InboxMessage {
   id: string;
@@ -32,11 +24,6 @@ function InboxPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [conversations, setConversations] = useState<any[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<
-    string | null
-  >(null);
-  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     setPageTitle("Inbox");
@@ -77,66 +64,17 @@ function InboxPage() {
   const fetchMessages = async (userId: string) => {
     try {
       setError(null);
-      setRefreshing(true);
-
-      // First get the orders with their most recent messages
-      const { data: ordersData, error: ordersError } = await supabase
-        .from("orders")
-        .select(
-          `
-          id,
-          full_name,
-          email,
-          status,
-          created_at,
-          chat_deleted,
-          messages:messages(
-            id,
-            content,
-            created_at,
-            is_admin,
-            is_read,
-            user_name,
-            user_avatar,
-            image_url
-          )
-        `
-        )
+      const { data, error } = await supabase
+        .from("inbox_messages")
+        .select("*")
         .eq("user_id", userId)
-        .or(`user_id.eq.${userId},is_admin.eq.true`) // Get both user's orders and admin-created ones
         .order("created_at", { ascending: false });
 
-      if (ordersError) throw ordersError;
-
-      // Process orders into conversation format
-      const conversationsData = ordersData
-        .filter((order) => !order.chat_deleted) // Don't show deleted chats
-        .map((order) => {
-          // Sort messages by date
-          const sortedMessages = order.messages
-            ? [...order.messages].sort(
-                (a, b) =>
-                  new Date(a.created_at).getTime() -
-                  new Date(b.created_at).getTime()
-              )
-            : [];
-
-          return {
-            id: order.id,
-            full_name: order.full_name || "Unknown",
-            email: order.email,
-            status: order.status,
-            created_at: order.created_at,
-            messages: sortedMessages,
-            unreadCount: sortedMessages.filter((m) => !m.is_read && m.is_admin)
-              .length,
-          };
-        });
-
-      setConversations(conversationsData);
+      if (error) throw error;
+      setMessages(data || []);
     } catch (error) {
       console.error("Error fetching messages:", error);
-      setError("Failed to load conversations. Please try again.");
+      setError("Failed to load messages. Please try again.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -212,85 +150,6 @@ function InboxPage() {
     }
   };
 
-  const handleConversationSelect = async (conversationId: string) => {
-    setSelectedConversationId(conversationId);
-
-    // Find the conversation
-    const conversation = conversations.find((c) => c.id === conversationId);
-    if (!conversation) return;
-
-    // If there are unread messages, mark them as read
-    const unreadMessages = conversation.messages?.filter(
-      (m) => !m.is_read && m.is_admin
-    );
-    if (unreadMessages && unreadMessages.length > 0) {
-      try {
-        // Update in database
-        const { error } = await supabase
-          .from("messages")
-          .update({ is_read: true })
-          .in(
-            "id",
-            unreadMessages.map((m) => m.id)
-          );
-
-        if (error) throw error;
-
-        // Update local state
-        setConversations((prev) =>
-          prev.map((conv) => {
-            if (conv.id === conversationId) {
-              return {
-                ...conv,
-                messages: conv.messages?.map((msg) =>
-                  unreadMessages.some((u) => u.id === msg.id)
-                    ? { ...msg, is_read: true }
-                    : msg
-                ),
-                unreadCount: 0,
-              };
-            }
-            return conv;
-          })
-        );
-      } catch (err) {
-        console.error("Error marking messages as read:", err);
-      }
-    }
-
-    // Navigate to chat
-    navigate(`/chat?order=${conversationId}`);
-  };
-
-  const filteredConversations = useMemo(() => {
-    return conversations.filter((conv) => {
-      if (!conv) return false;
-
-      const nameMatch =
-        typeof conv.full_name === "string" &&
-        conv.full_name.toLowerCase().includes(searchTerm.toLowerCase());
-
-      const emailMatch =
-        typeof conv.email === "string" &&
-        conv.email.toLowerCase().includes(searchTerm.toLowerCase());
-
-      // Also search in message content
-      const messageMatch =
-        conv.messages &&
-        conv.messages.some(
-          (msg) =>
-            msg.content &&
-            msg.content.toLowerCase().includes(searchTerm.toLowerCase())
-        );
-
-      return nameMatch || emailMatch || messageMatch;
-    });
-  }, [conversations, searchTerm]);
-
-  const clearSearch = () => {
-    setSearchTerm("");
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -347,191 +206,66 @@ function InboxPage() {
               </div>
             )}
 
-            <SearchBar value={searchTerm} onChange={setSearchTerm} />
-
-            <ConversationList
-              conversations={filteredConversations}
-              selectedId={selectedConversationId}
-              onSelect={handleConversationSelect}
-            />
+            {messages.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-white/70 text-lg">No messages yet</p>
+                <p className="text-white/50 text-sm mt-2">
+                  New messages will appear here
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`bg-white/5 hover:bg-white/10 p-6 rounded-lg border-l-4 transition-all cursor-pointer ${getMessageStatusColor(
+                      message.type,
+                      message.is_read
+                    )}`}
+                    onClick={() => !message.is_read && markAsRead(message.id)}
+                  >
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          {getMessageIcon(message.type)}
+                          <h3 className="text-lg font-medium text-white">
+                            {message.title}
+                          </h3>
+                        </div>
+                        <p className="text-white/80 mb-3">{message.content}</p>
+                        {message.file_url && (
+                          <div className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition-colors">
+                            <ExternalLink size={16} />
+                            <a
+                              href={message.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              View Attached File
+                            </a>
+                          </div>
+                        )}
+                        <p className="text-sm text-white/40 mt-3">
+                          {new Date(message.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                      {!message.is_read && (
+                        <span className="bg-emerald-400/20 text-emerald-400 text-xs px-2 py-1 rounded-full">
+                          New
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </main>
       </div>
     </div>
   );
 }
-
-const ConversationList = React.memo(function ConversationList({
-  conversations,
-  selectedId,
-  onSelect,
-}: {
-  conversations: any[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  // Group conversations by status
-  const grouped = conversations.reduce((acc, conv) => {
-    const status = conv.status || "other";
-    if (!acc[status]) acc[status] = [];
-    acc[status].push(conv);
-    return acc;
-  }, {} as Record<string, any[]>);
-
-  // Define the order of status groups
-  const statusOrder = ["pending", "approved", "rejected", "other"];
-
-  // Calculate total unread messages
-  const totalUnread = conversations.reduce(
-    (sum, conv) => sum + (conv.unreadCount || 0),
-    0
-  );
-
-  return (
-    <div className="h-full overflow-y-auto">
-      {totalUnread > 0 && (
-        <div className="px-4 py-2 bg-blue-500/20 text-blue-300 mb-2">
-          <span className="font-medium">{totalUnread}</span> unread{" "}
-          {totalUnread === 1 ? "message" : "messages"}
-        </div>
-      )}
-
-      {statusOrder.map((status) => {
-        if (!grouped[status] || grouped[status].length === 0) return null;
-
-        // Count unread messages in this group
-        const groupUnread = grouped[status].reduce(
-          (sum, conv) => sum + (conv.unreadCount || 0),
-          0
-        );
-
-        return (
-          <div key={status} className="mb-4">
-            <h3 className="px-4 py-2 text-sm font-medium text-white/70 uppercase flex justify-between items-center">
-              <span>
-                {status}
-                <span className="ml-2 text-white/50">
-                  ({grouped[status].length})
-                </span>
-              </span>
-
-              {groupUnread > 0 && (
-                <span className="bg-blue-500 text-white text-xs rounded-full px-2 py-0.5">
-                  {groupUnread} unread
-                </span>
-              )}
-            </h3>
-
-            {grouped[status].map((conversation) => {
-              // Get most recent message
-              const lastMessage =
-                conversation.messages && conversation.messages.length > 0
-                  ? conversation.messages[conversation.messages.length - 1]
-                  : null;
-
-              const hasUnread = conversation.unreadCount > 0;
-
-              return (
-                <button
-                  key={conversation.id}
-                  onClick={() => onSelect(conversation.id)}
-                  className={`w-full text-left p-4 border-b border-gray-700 hover:bg-white/5 transition-colors ${
-                    selectedId === conversation.id ? "bg-white/10" : ""
-                  } ${hasUnread ? "border-l-4 border-blue-500" : ""}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-medium text-white truncate flex items-center">
-                      {conversation.full_name}
-                      {hasUnread && (
-                        <span className="ml-2 bg-blue-500 text-white text-xs rounded-full px-2 py-0.5">
-                          {conversation.unreadCount}
-                        </span>
-                      )}
-                    </h4>
-                    <span className="text-xs text-white/50">
-                      {lastMessage
-                        ? formatDistanceToNow(
-                            new Date(lastMessage.created_at),
-                            { addSuffix: true }
-                          )
-                        : formatDistanceToNow(
-                            new Date(conversation.created_at),
-                            { addSuffix: true }
-                          )}
-                    </span>
-                  </div>
-
-                  {lastMessage && (
-                    <div className="flex items-center mt-1">
-                      <p className="text-sm text-white/70 truncate flex-1">
-                        {lastMessage.is_admin ? "Support: " : "You: "}
-                        {lastMessage.content}
-                      </p>
-
-                      {lastMessage.image_url && (
-                        <span className="text-blue-400 ml-1 flex-shrink-0">
-                          <FileText size={14} />
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        );
-      })}
-
-      {conversations.length === 0 && !loading && (
-        <div className="text-center p-8 text-white/50">
-          No conversations found
-          {searchTerm && (
-            <>
-              <div className="mt-2">No results for "{searchTerm}"</div>
-              <button
-                className="mt-2 text-blue-400 hover:underline"
-                onClick={clearSearch}
-              >
-                Clear search
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-});
-
-const SearchBar = React.memo(function SearchBar({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="px-4 py-3 border-b border-gray-700 sticky top-0 bg-gray-900 z-10">
-      <div className="relative">
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="Search conversations..."
-          className="w-full p-2 pl-8 bg-white/10 border border-white/20 rounded text-white"
-        />
-        <Search className="absolute left-2 top-2.5 text-white/50" size={16} />
-        {value && (
-          <button
-            onClick={() => onChange("")}
-            className="absolute right-2 top-2.5 text-white/50 hover:text-white"
-            aria-label="Clear search"
-          >
-            <X size={16} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-});
 
 export default InboxPage;
