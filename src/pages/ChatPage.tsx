@@ -27,6 +27,9 @@ import { useMessageScroll } from "../hooks/useMessageScroll";
 import { useOrderFilters } from "../hooks/useOrderFilters";
 import { motion } from "framer-motion";
 import { useInView } from "react-intersection-observer";
+import { RealtimeChannel } from "@supabase/supabase-js";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useSwipeable } from "react-swipeable";
 
 // Constants
 const MESSAGES_PER_PAGE = 50;
@@ -60,7 +63,28 @@ function ChatPage() {
   const [page, setPage] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [fallbackMode, setFallbackMode] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const realtimeSubscription = useRef<RealtimeChannel | null>(null);
+  const isMobile = useMediaQuery("(max-width: 768px)");
+  const swipeHandlers = useSwipeable({
+    onSwipedRight: () => {
+      if (isMobile && !showSidebar) {
+        setShowSidebar(true);
+      }
+    },
+    onSwipedLeft: () => {
+      if (isMobile && showSidebar) {
+        setShowSidebar(false);
+      }
+    },
+    trackMouse: false,
+  });
+  const [refreshing, setRefreshing] = useState(false);
+  const pullStartY = useRef(0);
+  const pullMoveY = useRef(0);
+  const distanceThreshold = 100;
+  const refreshAreaRef = useRef<HTMLDivElement>(null);
 
   // Authentication check
   useEffect(() => {
@@ -420,6 +444,9 @@ function ChatPage() {
         } catch (markReadError) {
           console.error("Error marking messages as read:", markReadError);
         }
+
+        // After successfully fetching messages, set up realtime
+        setupRealtimeMessaging(orderId);
       } catch (err) {
         console.error("Error fetching messages:", err);
         setError("Failed to load messages. Please try again.");
@@ -427,28 +454,99 @@ function ChatPage() {
         setLoading(false);
       }
     },
-    [isAdmin]
+    [isAdmin, setupRealtimeMessaging]
   );
 
-  // Add the handleImageSelect function
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Add this function to optimize image uploads
+  const optimizeImageBeforeUpload = async (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      // Skip optimization for small images
+      if (file.size < 500 * 1024) {
+        resolve(file);
+        return;
+      }
+
+      const img = new Image();
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      img.onload = () => {
+        // Calculate new dimensions (max 1200px width/height)
+        let width = img.width;
+        let height = img.height;
+        const maxDimension = 1200;
+
+        if (width > height && width > maxDimension) {
+          height = (height * maxDimension) / width;
+          width = maxDimension;
+        } else if (height > maxDimension) {
+          width = (width * maxDimension) / height;
+          height = maxDimension;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        // Draw and export
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error("Canvas to Blob conversion failed"));
+              return;
+            }
+
+            const optimizedFile = new File([blob], file.name, {
+              type: "image/jpeg",
+              lastModified: Date.now(),
+            });
+
+            resolve(optimizedFile);
+          },
+          "image/jpeg",
+          0.85 // Quality
+        );
+      };
+
+      img.onerror = () => {
+        reject(new Error("Image loading failed"));
+      };
+
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  // Modify your handleImageSelect function
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check file size (limit to 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image too large. Maximum size is 5MB.");
+    // Check file size (limit to 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("Image too large. Maximum size is 10MB.");
       return;
     }
 
-    setSelectedImage(file);
+    try {
+      // Show loading state
+      toast.loading("Processing image...");
 
-    // Create preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreview(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+      // Optimize image
+      const optimizedImage = await optimizeImageBeforeUpload(file);
+      setSelectedImage(optimizedImage);
+
+      // Create preview
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setImagePreview(e.target?.result as string);
+        toast.dismiss();
+      };
+      reader.readAsDataURL(optimizedImage);
+    } catch (err) {
+      console.error("Error processing image:", err);
+      toast.error("Failed to process image");
+    }
   };
 
   // Add the handleSendMessage function
@@ -785,6 +883,240 @@ function ChatPage() {
     }
   };
 
+  // Add this function to set up realtime messaging
+  const setupRealtimeMessaging = useCallback(
+    (orderId: string) => {
+      // Clean up any existing subscription
+      if (realtimeSubscription.current) {
+        supabase.removeChannel(realtimeSubscription.current);
+      }
+
+      // Set up new subscription for this order
+      const channel = supabase
+        .channel(`order-${orderId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "messages",
+            filter: `order_id=eq.${orderId}`,
+          },
+          (payload) => {
+            // Only add the message if it's not from the current user
+            // or if it's from the current user but not in our messages list yet
+            const newMessage = payload.new as Message;
+
+            // Check if we already have this message
+            const messageExists = messages.some((m) => m.id === newMessage.id);
+
+            if (!messageExists) {
+              // Add the new message
+              setMessages((prev) => [...prev, newMessage]);
+
+              // Play notification sound if message is from someone else
+              if (newMessage.user_id !== user?.id) {
+                playNotificationSound();
+
+                // Show browser notification if tab is not focused
+                if (
+                  !document.hasFocus() &&
+                  Notification.permission === "granted"
+                ) {
+                  new Notification("New Message", {
+                    body: `${
+                      newMessage.user_name
+                    }: ${newMessage.content.substring(0, 50)}${
+                      newMessage.content.length > 50 ? "..." : ""
+                    }`,
+                    icon: "/favicon.ico",
+                  });
+                }
+              }
+            }
+          }
+        )
+        .subscribe();
+
+      realtimeSubscription.current = channel;
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    },
+    [messages, user]
+  );
+
+  // Add a notification sound function
+  const playNotificationSound = () => {
+    try {
+      const audio = new Audio("/notification.mp3");
+      audio.volume = 0.5;
+      audio.play();
+    } catch (err) {
+      console.error("Error playing notification sound:", err);
+    }
+  };
+
+  // Request notification permission
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Add this to improve mobile UX
+  useEffect(() => {
+    // Close sidebar automatically when selecting an order on mobile
+    if (isMobile && selectedOrderId && showSidebar) {
+      setShowSidebar(false);
+    }
+  }, [selectedOrderId, isMobile]);
+
+  // Add this to handle mobile keyboard adjustments
+  useEffect(() => {
+    const handleResize = () => {
+      // On mobile, when keyboard appears, scroll to bottom
+      if (isMobile) {
+        setTimeout(() => {
+          window.scrollTo(0, document.body.scrollHeight);
+        }, 100);
+      }
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isMobile]);
+
+  // Add this function to handle typing events
+  const handleTyping = useCallback(() => {
+    if (!selectedOrderId || !user) return;
+
+    // Set local typing state
+    setIsTyping(true);
+
+    // Broadcast typing status
+    supabase.channel("typing").send({
+      type: "broadcast",
+      event: "typing",
+      payload: {
+        orderId: selectedOrderId,
+        userId: user.id,
+        userName:
+          user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+        isTyping: true,
+      },
+    });
+
+    // Clear previous timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Set timeout to clear typing status
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+
+      // Broadcast stopped typing
+      supabase.channel("typing").send({
+        type: "broadcast",
+        event: "typing",
+        payload: {
+          orderId: selectedOrderId,
+          userId: user.id,
+          userName:
+            user.user_metadata?.full_name ||
+            user.email?.split("@")[0] ||
+            "User",
+          isTyping: false,
+        },
+      });
+    }, 2000);
+  }, [selectedOrderId, user]);
+
+  // Add this to listen for typing events
+  useEffect(() => {
+    if (!selectedOrderId) return;
+
+    const channel = supabase
+      .channel("typing")
+      .on("broadcast", { event: "typing" }, (payload) => {
+        const { orderId, userId, userName, isTyping } = payload.payload;
+
+        // Only process events for the current order and not from the current user
+        if (orderId === selectedOrderId && userId !== user?.id) {
+          setTypingUsers((prev) => {
+            const newSet = new Set(prev);
+            if (isTyping) {
+              newSet.add(userName);
+            } else {
+              newSet.delete(userName);
+            }
+            return newSet;
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedOrderId, user]);
+
+  // Add these handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touchY = e.touches[0].clientY;
+    pullStartY.current = touchY;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const touchY = e.touches[0].clientY;
+    pullMoveY.current = touchY;
+
+    const scrollTop = e.currentTarget.scrollTop;
+    const pullDistance = pullMoveY.current - pullStartY.current;
+
+    // Only allow pull-to-refresh when at the top of the content
+    if (scrollTop === 0 && pullDistance > 0 && !refreshing) {
+      const pullPercent = Math.min(pullDistance / distanceThreshold, 1);
+
+      if (refreshAreaRef.current) {
+        refreshAreaRef.current.style.height = `${pullDistance}px`;
+        refreshAreaRef.current.style.opacity = `${pullPercent}`;
+      }
+
+      e.preventDefault();
+    }
+  };
+
+  const handleTouchEnd = async (e: React.TouchEvent) => {
+    const pullDistance = pullMoveY.current - pullStartY.current;
+
+    if (
+      e.currentTarget.scrollTop === 0 &&
+      pullDistance > distanceThreshold &&
+      !refreshing
+    ) {
+      setRefreshing(true);
+
+      try {
+        if (selectedOrderId) {
+          await fetchMessages(selectedOrderId);
+        }
+      } finally {
+        setRefreshing(false);
+
+        if (refreshAreaRef.current) {
+          refreshAreaRef.current.style.height = "0";
+          refreshAreaRef.current.style.opacity = "0";
+        }
+      }
+    } else if (refreshAreaRef.current) {
+      refreshAreaRef.current.style.height = "0";
+      refreshAreaRef.current.style.opacity = "0";
+    }
+  };
+
   if (fallbackMode) {
     return (
       <PageContainer title="CHAT" user={user}>
@@ -883,7 +1215,10 @@ function ChatPage() {
                   <input
                     type="text"
                     value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
+                    onChange={(e) => {
+                      setNewMessage(e.target.value);
+                      handleTyping();
+                    }}
                     placeholder="Type your message..."
                     className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                   />
@@ -927,7 +1262,7 @@ function ChatPage() {
 
   return (
     <PageContainer title="CHAT" showBack user={user}>
-      <main className="max-w-screen-xl mx-auto pb-16">
+      <main className="max-w-screen-xl mx-auto pb-16" {...swipeHandlers}>
         <div className="flex h-[calc(100vh-5rem)]">
           {/* Sidebar */}
           <div
@@ -1016,7 +1351,24 @@ function ChatPage() {
             {/* Messages area */}
             {selectedOrderId ? (
               <>
-                <div className="flex-1 overflow-y-auto p-4">
+                <div
+                  className="flex-1 overflow-y-auto p-4"
+                  onTouchStart={handleTouchStart}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={handleTouchEnd}
+                >
+                  <div
+                    ref={refreshAreaRef}
+                    className="flex items-center justify-center transition-all duration-200 overflow-hidden"
+                    style={{ height: 0, opacity: 0 }}
+                  >
+                    <RefreshCw
+                      className={`w-6 h-6 text-white/70 ${
+                        refreshing ? "animate-spin" : ""
+                      }`}
+                    />
+                  </div>
+
                   {loading ? (
                     <div className="h-full flex items-center justify-center">
                       <LoadingSpinner size="lg" light />
@@ -1101,10 +1453,20 @@ function ChatPage() {
                         <ImageIcon className="w-6 h-6" />
                       </button>
 
+                      {typingUsers.size > 0 && (
+                        <div className="text-xs text-white/60 italic mb-1 h-4">
+                          {Array.from(typingUsers).join(", ")}{" "}
+                          {typingUsers.size === 1 ? "is" : "are"} typing...
+                        </div>
+                      )}
+
                       <input
                         type="text"
                         value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
+                        onChange={(e) => {
+                          setNewMessage(e.target.value);
+                          handleTyping();
+                        }}
                         placeholder="Type your message..."
                         className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                         disabled={sending}
