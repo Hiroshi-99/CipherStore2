@@ -420,7 +420,7 @@ function AdminPage() {
     }
   };
 
-  // Add this fallback upload function
+  // Improve the direct upload function
   const uploadDirectToSupabase = async (file: File): Promise<string | null> => {
     try {
       // Generate a unique file name
@@ -429,29 +429,99 @@ function AdminPage() {
         "_"
       )}`;
 
-      // Upload directly to Supabase storage
-      const { data, error } = await supabase.storage
-        .from("images")
-        .upload(`uploads/${fileName}`, file, {
-          cacheControl: "3600",
-          upsert: true,
-        });
+      // Show progress in the toast
+      const toastId = toast.loading("Preparing upload...");
 
-      if (error) {
-        console.error("Error uploading to Supabase storage:", error);
-        return null;
+      // Try multiple buckets in case one fails
+      const buckets = ["images", "account_files", "uploads"];
+      let uploadedUrl = null;
+
+      for (const bucket of buckets) {
+        try {
+          toast.loading(`Trying upload to ${bucket}...`, { id: toastId });
+
+          // Upload directly to Supabase storage
+          const { data, error } = await supabase.storage
+            .from(bucket)
+            .upload(`uploads/${fileName}`, file, {
+              cacheControl: "3600",
+              upsert: true,
+            });
+
+          if (!error) {
+            // Get the public URL
+            const { data: urlData } = supabase.storage
+              .from(bucket)
+              .getPublicUrl(`uploads/${fileName}`);
+
+            uploadedUrl = urlData.publicUrl;
+            toast.success(`Upload successful to ${bucket}!`, { id: toastId });
+            break;
+          } else {
+            console.error(`Error uploading to ${bucket}:`, error);
+          }
+        } catch (bucketError) {
+          console.error(`Error with bucket ${bucket}:`, bucketError);
+        }
       }
 
-      // Get the public URL
-      const { data: urlData } = supabase.storage
-        .from("images")
-        .getPublicUrl(`uploads/${fileName}`);
+      if (!uploadedUrl) {
+        // Try one more approach - base64 in the database
+        toast.loading("Trying alternative upload method...", { id: toastId });
 
-      return urlData.publicUrl;
+        try {
+          // Convert to base64
+          const base64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsDataURL(file);
+          });
+
+          // Store in a temporary table
+          const { data, error } = await supabase
+            .from("file_uploads")
+            .insert({
+              file_name: fileName,
+              file_data: base64,
+              file_type: file.type,
+              user_id: user.id,
+              created_at: new Date().toISOString(),
+            })
+            .select("id")
+            .single();
+
+          if (!error && data) {
+            uploadedUrl = `${window.location.origin}/api/files/${data.id}`;
+            toast.success("Upload successful via alternative method!", {
+              id: toastId,
+            });
+          } else {
+            toast.error("All upload methods failed", { id: toastId });
+          }
+        } catch (finalError) {
+          console.error("Final upload attempt failed:", finalError);
+          toast.error("All upload methods failed", { id: toastId });
+        }
+      }
+
+      return uploadedUrl;
     } catch (err) {
       console.error("Error in direct Supabase upload:", err);
+      toast.error("Upload failed. Please try again.");
       return null;
     }
+  };
+
+  // Add this local upload function for testing
+  const uploadLocally = async (file: File): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // This is a data URL that can be used directly in img src
+        resolve(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   if (loading) {
@@ -692,9 +762,95 @@ function AdminPage() {
               </div>
             )}
 
-            {/* Add a direct upload button */}
+            {/* Update the direct upload button to be more prominent */}
+            <div className="mt-4 flex flex-col md:flex-row gap-4">
+              <button
+                onClick={async () => {
+                  if (!selectedOrderId) {
+                    toast.error("Please select an order first");
+                    return;
+                  }
+
+                  const input = document.createElement("input");
+                  input.type = "file";
+                  input.accept = "image/*,application/pdf";
+
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (!file) return;
+
+                    // Check file size
+                    if (file.size > 10 * 1024 * 1024) {
+                      toast.error("File too large. Maximum size is 10MB.");
+                      return;
+                    }
+
+                    toast.loading("Uploading file directly...");
+                    setActionInProgress("uploading");
+
+                    try {
+                      const url = await uploadDirectToSupabase(file);
+                      if (url) {
+                        toast.dismiss();
+                        toast.success("File uploaded successfully!");
+                        handleFileUpload(url);
+                      } else {
+                        throw new Error("Upload failed");
+                      }
+                    } catch (err) {
+                      toast.dismiss();
+                      toast.error("Failed to upload file. Please try again.");
+                      setActionInProgress(null);
+                    }
+                  };
+
+                  input.click();
+                }}
+                className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors flex-1"
+                disabled={actionInProgress === "uploading" || !selectedOrderId}
+              >
+                {actionInProgress === "uploading" ? (
+                  <span className="flex items-center justify-center">
+                    <RefreshCw className="animate-spin mr-2 h-4 w-4" />
+                    Uploading...
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center">
+                    <Upload className="mr-2 h-4 w-4" />
+                    Direct Upload (Recommended)
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  if (!selectedOrderId) {
+                    toast.error("Please select an order first");
+                    return;
+                  }
+                  // Show a message explaining the issue with the regular upload
+                  toast.info(
+                    "If you're having issues with the file upload component, try the Direct Upload button instead.",
+                    { duration: 5000 }
+                  );
+                }}
+                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex-1"
+              >
+                <span className="flex items-center justify-center">
+                  <MessageCircle className="mr-2 h-4 w-4" />
+                  Help with Uploads
+                </span>
+              </button>
+            </div>
+
+            {/* Add a local upload button for testing */}
             <button
               onClick={async () => {
+                if (!selectedOrderId) {
+                  toast.error("Please select an order first");
+                  return;
+                }
+
                 const input = document.createElement("input");
                 input.type = "file";
                 input.accept = "image/*,application/pdf";
@@ -703,45 +859,35 @@ function AdminPage() {
                   const file = (e.target as HTMLInputElement).files?.[0];
                   if (!file) return;
 
-                  // Check file size
-                  if (file.size > 10 * 1024 * 1024) {
-                    toast.error("File too large. Maximum size is 10MB.");
-                    return;
-                  }
-
-                  toast.loading("Uploading file directly...");
+                  toast.loading("Creating local file preview...");
+                  setActionInProgress("uploading");
 
                   try {
-                    const url = await uploadDirectToSupabase(file);
-                    if (url) {
+                    // This doesn't actually upload the file, it just creates a data URL
+                    const dataUrl = await uploadLocally(file);
+                    if (dataUrl) {
                       toast.dismiss();
-                      toast.success("File uploaded successfully!");
-                      handleFileUpload(url);
-                    } else {
-                      throw new Error("Upload failed");
+                      toast.success("Local preview created!");
+
+                      // Use the data URL directly
+                      handleFileUpload(dataUrl);
                     }
                   } catch (err) {
                     toast.dismiss();
-                    toast.error("Failed to upload file. Please try again.");
+                    toast.error("Failed to create preview");
+                    setActionInProgress(null);
                   }
                 };
 
                 input.click();
               }}
-              className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
-              disabled={actionInProgress === "uploading"}
+              className="mt-2 px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition-colors w-full"
+              disabled={actionInProgress === "uploading" || !selectedOrderId}
             >
-              {actionInProgress === "uploading" ? (
-                <span className="flex items-center">
-                  <RefreshCw className="animate-spin mr-2 h-4 w-4" />
-                  Uploading...
-                </span>
-              ) : (
-                <span className="flex items-center">
-                  <Upload className="mr-2 h-4 w-4" />
-                  Quick Upload
-                </span>
-              )}
+              <span className="flex items-center justify-center">
+                <Upload className="mr-2 h-4 w-4" />
+                Local Preview (Testing Only)
+              </span>
             </button>
           </div>
         </div>
