@@ -172,6 +172,18 @@ function AdminPage() {
     clearFilters: clearFilteredFilters,
   } = useOrderFilters(orders);
 
+  // Add this effect to update selectedOrderDetail when selectedOrderId changes
+  useEffect(() => {
+    if (selectedOrderId) {
+      const order = orders.find((o) => o.id === selectedOrderId);
+      if (order) {
+        setSelectedOrderDetail(order);
+      }
+    } else {
+      setSelectedOrderDetail(null);
+    }
+  }, [selectedOrderId, orders]);
+
   // Define handleApprove early in the component
   const handleApprove = async (orderId: string) => {
     try {
@@ -1768,8 +1780,8 @@ Please keep these details secure. You can copy them by selecting the text.
 
                   <div className="flex gap-2">
                     <button
-                      onClick={() => setSelectedOrderDetail(order)}
-                      className="p-2 bg-white/10 text-white rounded hover:bg-white/20 transition-colors"
+                      onClick={() => handleViewOrderDetails(order.id)}
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
                       title="View order details"
                     >
                       <Eye className="w-5 h-5" />
@@ -2012,6 +2024,50 @@ Please keep these details secure. You can copy them by selecting the text.
         </div>
       </div>
     );
+  };
+
+  // Add this function to handle file uploads
+  const onFileUpload = async (orderId: string, fileUrl: string) => {
+    try {
+      // Update the order with the file URL
+      const { error } = await supabase
+        .from("orders")
+        .update({ account_file_url: fileUrl })
+        .eq("id", orderId);
+
+      if (error) {
+        console.error("Error updating order with file URL:", error);
+        toast.error("Failed to save file URL to order");
+        return;
+      }
+
+      // Update local state
+      setOrders(
+        orders.map((order) =>
+          order.id === orderId ? { ...order, account_file_url: fileUrl } : order
+        )
+      );
+
+      toast.success("File uploaded and linked to order successfully");
+
+      // Set the uploaded file URL for reference
+      setUploadedFileUrl(fileUrl);
+
+      // Refresh orders to get the latest data
+      fetchOrders();
+    } catch (err) {
+      console.error("Error in onFileUpload:", err);
+      toast.error("Failed to process file upload");
+    }
+  };
+
+  // Add this function to handle viewing order details
+  const handleViewOrderDetails = (orderId: string) => {
+    setSelectedOrderId(orderId);
+    const order = orders.find((o) => o.id === orderId);
+    if (order) {
+      setSelectedOrderDetail(order);
+    }
   };
 
   if (loading) {
