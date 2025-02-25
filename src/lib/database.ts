@@ -40,10 +40,11 @@ export const checkColumnExists = async (
 };
 
 /**
- * Safely updates a record, handling missing columns gracefully
+ * Safely updates a record, handling errors gracefully
  * @param table The table name
  * @param data The data to update
- * @param id The ID of the record to update
+ * @param idField The ID field name (usually 'id')
+ * @param idValue The ID value to match
  * @returns The result of the update operation
  */
 export const safeUpdate = async (
@@ -53,6 +54,18 @@ export const safeUpdate = async (
   idValue: string
 ) => {
   try {
+    // Check if the table exists first
+    const { error: tableCheckError } = await supabase
+      .from(table)
+      .select(idField)
+      .eq(idField, "test-id-that-doesnt-exist")
+      .limit(1);
+
+    if (tableCheckError && tableCheckError.message.includes("does not exist")) {
+      console.error(`Table ${table} does not exist`);
+      return { data: null, error: tableCheckError };
+    }
+
     // Filter out any columns that don't exist
     const safeData: Record<string, any> = {};
 
@@ -69,7 +82,7 @@ export const safeUpdate = async (
       return { data: null, error: null };
     }
 
-    // Update with only the columns that exist
+    // Perform the update with only the columns that exist
     return await supabase
       .from(table)
       .update(safeData)

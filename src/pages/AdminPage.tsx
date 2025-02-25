@@ -171,57 +171,40 @@ function AdminPage() {
   } = useOrderFilters(orders);
 
   // Define handleApprove early in the component
-  const handleApprove = useCallback(
-    async (orderId: string) => {
-      try {
-        if (actionInProgress) return;
+  const handleApprove = async (orderId: string) => {
+    try {
+      setActionInProgress(orderId);
 
-        setActionInProgress(orderId);
+      // Update the order status to active
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "active" })
+        .eq("id", orderId);
 
-        // Update order status directly without prompting for file upload
-        const { error } = await safeUpdate(
-          "orders",
-          { status: "approved" },
-          "id",
-          orderId
-        );
-
-        if (error) throw error;
-
-        // Update local state
-        setOrders((prev) =>
-          prev.map((order) =>
-            order.id === orderId ? { ...order, status: "approved" } : order
-          )
-        );
-
-        // Show success message with account details prompt
-        setSelectedOrderId(orderId);
-
-        // Scroll to the account details section
-        const accountDetailsSection = document.getElementById(
-          "account-details-section"
-        );
-        if (accountDetailsSection) {
-          accountDetailsSection.scrollIntoView({ behavior: "smooth" });
-
-          // Focus on the first input field after a short delay
-          setTimeout(() => {
-            const accountIdInput = document.getElementById("account-id-input");
-            if (accountIdInput) {
-              (accountIdInput as HTMLInputElement).focus();
-            }
-          }, 500);
-        }
-      } catch (error) {
+      if (error) {
         console.error("Error approving order:", error);
-        toast.error("Failed to approve order. Please try again.");
-      } finally {
-        setActionInProgress(null);
+        toast.error("Failed to approve order");
+        return;
       }
-    },
-    [actionInProgress]
-  );
+
+      // Update local state
+      setOrders(
+        orders.map((order) =>
+          order.id === orderId ? { ...order, status: "active" } : order
+        )
+      );
+
+      toast.success("Order approved successfully");
+
+      // Refresh orders to get the latest data
+      fetchOrders();
+    } catch (err) {
+      console.error("Error in handleApprove:", err);
+      toast.error("Failed to approve order");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
 
   useEffect(() => {
     setPageTitle("ADMIN");
@@ -1556,15 +1539,6 @@ Please keep these details secure. You can copy them by selecting the text.
                     <Download className="w-4 h-4" />
                   )}
                   Export
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("delete")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
                 </button>
               </div>
             </div>
