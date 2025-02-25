@@ -1,9 +1,6 @@
 import { Handler } from "@netlify/functions";
 import { createClient } from "@supabase/supabase-js";
-import * as formidable from "formidable";
 import { Buffer } from "buffer";
-import { IncomingForm } from "formidable";
-import fs from "fs";
 
 // Initialize Supabase client with admin privileges
 const supabaseAdmin = createClient(
@@ -19,86 +16,6 @@ const logError = (error: any, context: string) => {
     details: error.details,
     hint: error.hint,
   });
-};
-
-// Validate request input
-const validateInput = (body: any) => {
-  if (!body.orderId) {
-    throw new Error("Missing required field: orderId");
-  }
-
-  if (!body.fileUrl) {
-    throw new Error("Missing required field: fileUrl");
-  }
-
-  try {
-    new URL(body.fileUrl);
-  } catch (urlError) {
-    throw new Error("Invalid fileUrl format");
-  }
-};
-
-// Process the file upload and update related records
-const processFileUpload = async (orderId: string, fileUrl: string) => {
-  // Get the order to verify it exists and get user_id
-  const { data: order, error: orderError } = await supabaseAdmin
-    .from("orders")
-    .select("id, user_id")
-    .eq("id", orderId)
-    .single();
-
-  if (orderError) {
-    throw new Error(`Order not found: ${orderError.message}`);
-  }
-
-  if (!order) {
-    throw new Error(`Order ${orderId} not found`);
-  }
-
-  // Start a transaction-like operation (Supabase doesn't support true transactions via the JS API)
-  try {
-    // 1. Update order with file URL
-    const { error: updateError } = await supabaseAdmin
-      .from("orders")
-      .update({ account_file_url: fileUrl })
-      .eq("id", orderId);
-
-    if (updateError) {
-      throw new Error(`Failed to update order: ${updateError.message}`);
-    }
-
-    // 2. Create inbox message
-    const { error: inboxError } = await supabaseAdmin
-      .from("inbox_messages")
-      .insert([
-        {
-          user_id: order.user_id,
-          title: "Account File Available",
-          content:
-            "Your account file has been uploaded and is now available. You can access it from this message.",
-          type: "account_file",
-          file_url: fileUrl,
-        },
-      ]);
-
-    if (inboxError) {
-      throw new Error(`Failed to create inbox message: ${inboxError.message}`);
-    }
-
-    // 3. Log the activity
-    await supabaseAdmin.from("admin_logs").insert([
-      {
-        action: "file_upload",
-        order_id: orderId,
-        details: { fileUrl },
-      },
-    ]);
-
-    return order;
-  } catch (error) {
-    // If anything fails, we can't do a true rollback, but we should log the error
-    throw error;
-  }
 };
 
 export const handler: Handler = async (event) => {
@@ -172,71 +89,60 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Use formidable to parse the form data
-    const form = new IncomingForm();
+    // For simplicity, assume the body is a base64 encoded file
+    // This requires the client to send the file as base64
+    try {
+      const { fileName, fileData, contentType } = JSON.parse(event.body);
 
-    return new Promise((resolve, reject) => {
-      form.parse(event.body, async (err, fields, files) => {
-        if (err) {
-          logError(err, "form parsing");
-          resolve({
-            statusCode: 500,
-            body: JSON.stringify({ error: "Failed to parse form data" }),
-          });
-          return;
-        }
+      if (!fileName || !fileData) {
+        return {
+          statusCode: 400,
+          body: JSON.stringify({ error: "Missing fileName or fileData" }),
+        };
+      }
 
-        const file = files.file[0];
-        const fileName = fields.fileName
-          ? fields.fileName[0]
-          : file.originalFilename;
+      // Decode base64 data
+      const buffer = Buffer.from(fileData, "base64");
 
-        try {
-          // Read the file
-          const fileData = await fs.promises.readFile(file.filepath);
+      // Upload to Supabase Storage
+      const uploadPath = `uploads/${fileName}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from("images")
+        .upload(uploadPath, buffer, {
+          contentType: contentType || "application/octet-stream",
+          upsert: true,
+        });
 
-          // Upload to Supabase Storage
-          const uploadPath = `uploads/${fileName}`;
-          const { error: uploadError } = await supabaseAdmin.storage
-            .from("images")
-            .upload(uploadPath, fileData, {
-              contentType: file.mimetype,
-              upsert: true,
-            });
+      if (uploadError) {
+        logError(uploadError, "storage upload");
+        return {
+          statusCode: 500,
+          body: JSON.stringify({
+            error: `Failed to upload file: ${uploadError.message}`,
+          }),
+        };
+      }
 
-          if (uploadError) {
-            logError(uploadError, "storage upload");
-            resolve({
-              statusCode: 500,
-              body: JSON.stringify({
-                error: `Failed to upload file: ${uploadError.message}`,
-              }),
-            });
-            return;
-          }
+      // Get the public URL
+      const { data: urlData } = supabaseAdmin.storage
+        .from("images")
+        .getPublicUrl(uploadPath);
 
-          // Get the public URL
-          const { data: urlData } = supabaseAdmin.storage
-            .from("images")
-            .getPublicUrl(uploadPath);
-
-          resolve({
-            statusCode: 200,
-            body: JSON.stringify({
-              success: true,
-              path: `images/${uploadPath}`,
-              url: urlData.publicUrl,
-            }),
-          });
-        } catch (error) {
-          logError(error, "file processing");
-          resolve({
-            statusCode: 500,
-            body: JSON.stringify({ error: "Failed to process file upload" }),
-          });
-        }
-      });
-    });
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          success: true,
+          path: `images/${uploadPath}`,
+          url: urlData.publicUrl,
+        }),
+      };
+    } catch (error) {
+      logError(error, "file processing");
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "Failed to process file upload" }),
+      };
+    }
   } catch (error) {
     logError(error, "handler");
     return {
