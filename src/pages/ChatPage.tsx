@@ -955,7 +955,7 @@ function ChatPage() {
   useEffect(() => {
     // Create audio element for message notification sound
     try {
-      messageSound.current = new Audio("/gg.mp3");
+      messageSound.current = new Audio("/sounds/gg.mp3");
       messageSound.current.volume = 0.5;
     } catch (err) {
       console.error("Error initializing message sound:", err);
