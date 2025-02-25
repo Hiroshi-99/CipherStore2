@@ -1,10 +1,4 @@
-import React, {
-  useState,
-  useEffect,
-  useRef,
-  useCallback,
-  useMemo,
-} from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import {
   Send,
@@ -23,7 +17,6 @@ import { toast } from "sonner";
 import { uploadImage } from "../lib/storage";
 import { MessageBubble } from "../components/MessageBubble";
 import type { Message } from "../types/chat";
-import { useMessageScroll } from "../hooks/useMessageScroll";
 import { useOrderFilters } from "../hooks/useOrderFilters";
 import { motion } from "framer-motion";
 import { useInView } from "react-intersection-observer";
@@ -1434,7 +1427,7 @@ function ChatPage() {
             created_at: new Date().toISOString(),
             is_read: false,
             user_name: "Support Team",
-            user_avatar: "/images/support-avatar.png",
+            user_avatar: "https://i.imgur.com/eyaDC8l.png",
           };
 
           console.log("Sending welcome message:", welcomeMessage);
@@ -1507,142 +1500,154 @@ function ChatPage() {
     }
   };
 
-  // Add this function to check for new orders
-  const checkForNewOrders = useCallback(async () => {
-    if (!user || !isAdmin) return;
+  // Add this function to handle search input changes
+  const handleOrderSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setOrderSearchTerm(e.target.value);
+  };
 
-    try {
-      // Get the timestamp of the last check
-      const lastCheckTimestamp =
-        localStorage.getItem("lastNewOrderCheck") || "0";
-
-      // Fetch orders created after the last check
-      const { data: newOrders, error } = await supabase
-        .from("orders")
-        .select("id")
-        .gt("created_at", new Date(parseInt(lastCheckTimestamp)).toISOString());
-
-      if (error) {
-        console.error("Error checking for new orders:", error);
-        return;
-      }
-
-      // Send welcome messages for each new order
-      if (newOrders && newOrders.length > 0) {
-        for (const order of newOrders) {
-          await sendWelcomeMessage(order.id);
-        }
-      }
-
-      // Update the last check timestamp
-      localStorage.setItem("lastNewOrderCheck", Date.now().toString());
-    } catch (err) {
-      console.error("Error in checkForNewOrders:", err);
-    }
-  }, [user, isAdmin]);
-
-  // Call this function periodically
+  // Add this effect for debouncing
   useEffect(() => {
-    // Check for new orders when the component mounts
-    checkForNewOrders();
-
-    // Set up an interval to check for new orders
-    const intervalId = setInterval(checkForNewOrders, 5 * 60 * 1000); // Check every 5 minutes
+    const timerId = setTimeout(() => {
+      setDebouncedSearchTerm(orderSearchTerm);
+    }, 300); // 300ms delay
 
     return () => {
-      clearInterval(intervalId);
+      clearTimeout(timerId);
     };
-  }, [checkForNewOrders]);
+  }, [orderSearchTerm]);
 
-  // Update the handleOrderSelect function
-  const handleOrderSelect = async (orderId: string) => {
-    setSelectedOrderId(orderId);
-    setShowSidebar(false);
-    await fetchMessages(orderId);
+  // Add this function to check the message schema
+  const checkMessageSchema = async () => {
+    try {
+      // Get information about the messages table
+      const { data, error } = await supabase.rpc("get_table_info", {
+        table_name: "messages",
+      });
 
-    // Check if this is the first time the user is opening this chat
-    const openedChats = JSON.parse(localStorage.getItem("openedChats") || "[]");
-    if (!openedChats.includes(orderId)) {
-      // Add this chat to the opened chats list
-      openedChats.push(orderId);
-      localStorage.setItem("openedChats", JSON.stringify(openedChats));
-
-      // Send a welcome message if there are no messages yet
-      if (messages.length === 0) {
-        await sendWelcomeMessage(orderId);
+      if (error) {
+        console.error("Error getting message schema:", error);
+        return null;
       }
+
+      console.log("Message schema:", data);
+      return data;
+    } catch (err) {
+      console.error("Error checking message schema:", err);
+      return null;
     }
   };
 
-  // Add this helper function for generating UUIDs
-  const generateUUID = () => {
-    // Use crypto.randomUUID if available
-    if (
-      typeof crypto !== "undefined" &&
-      typeof crypto.randomUUID === "function"
-    ) {
-      return crypto.randomUUID();
-    }
+  // Add this function to handle message scrolling
+  const useMessageScroll = (messagesRef, messages, loadingMore) => {
+    const [autoScroll, setAutoScroll] = useState(true);
+    const prevMessagesLengthRef = useRef(messages.length);
 
-    // Fallback implementation
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-      /[xy]/g,
-      function (c) {
-        const r = (Math.random() * 16) | 0;
-        const v = c === "x" ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
+    useEffect(() => {
+      const messagesContainer = messagesRef.current;
+      if (!messagesContainer) return;
+
+      const handleScroll = () => {
+        const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
+        const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+        setAutoScroll(isNearBottom);
+      };
+
+      messagesContainer.addEventListener("scroll", handleScroll);
+      return () =>
+        messagesContainer.removeEventListener("scroll", handleScroll);
+    }, [messagesRef]);
+
+    useEffect(() => {
+      const messagesContainer = messagesRef.current;
+      if (!messagesContainer) return;
+
+      // Only auto-scroll if new messages were added (not when loading more)
+      if (
+        autoScroll &&
+        messages.length > prevMessagesLengthRef.current &&
+        !loadingMore
+      ) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
       }
+
+      prevMessagesLengthRef.current = messages.length;
+    }, [messages, autoScroll, messagesRef, loadingMore]);
+
+    return { autoScroll, setAutoScroll };
+  };
+
+  // Add this function to handle typing indicators
+  const useTypingIndicator = (supabase, orderId, userId) => {
+    const [typingUsers, setTypingUsers] = useState(new Set());
+    const typingTimeoutRef = useRef(null);
+
+    const updateTypingStatus = useCallback(
+      (isTyping) => {
+        if (!orderId || !userId) return;
+
+        // Clear any existing timeout
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+
+        // Send typing status to server
+        supabase
+          .from("typing_indicators")
+          .upsert(
+            {
+              order_id: orderId,
+              user_id: userId,
+              is_typing: isTyping,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "order_id, user_id" }
+          )
+          .then(({ error }) => {
+            if (error) {
+              console.error("Error updating typing status:", error);
+            }
+          });
+
+        // If user is typing, set a timeout to clear the typing status
+        if (isTyping) {
+          typingTimeoutRef.current = setTimeout(() => {
+            updateTypingStatus(false);
+          }, 3000);
+        }
+      },
+      [orderId, userId]
     );
-  };
 
-  // Add these handlers for drag and drop
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
+    // Subscribe to typing indicators
+    useEffect(() => {
+      if (!orderId) return;
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
+      const subscription = supabase
+        .from(`typing_indicators:order_id=eq.${orderId}`)
+        .on("*", (payload) => {
+          const { user_id, is_typing } = payload.new;
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
+          // Don't show typing indicator for current user
+          if (user_id === userId) return;
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
+          setTypingUsers((prev) => {
+            const newSet = new Set(prev);
+            if (is_typing) {
+              newSet.add(user_id);
+            } else {
+              newSet.delete(user_id);
+            }
+            return newSet;
+          });
+        })
+        .subscribe();
 
-    const files = e.dataTransfer.files;
-    if (!files || files.length === 0) return;
+      return () => {
+        supabase.removeSubscription(subscription);
+      };
+    }, [orderId, userId]);
 
-    const file = files[0];
-
-    // Validate file type
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please drop an image file");
-      return;
-    }
-
-    // Validate file size (5MB max)
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image size must be less than 5MB");
-      return;
-    }
-
-    setSelectedImage(file);
-
-    // Create preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreview(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+    return { typingUsers, updateTypingStatus };
   };
 
   if (fallbackMode) {

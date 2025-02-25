@@ -172,8 +172,8 @@ function AdminPage() {
 
   // Define handleApprove early in the component
   const handleApprove = async (orderId: string) => {
-    try {
-      setActionInProgress(orderId);
+      try {
+        setActionInProgress(orderId);
 
       // Update the order status to active
       const { error } = await supabase
@@ -187,7 +187,7 @@ function AdminPage() {
         return;
       }
 
-      // Update local state
+        // Update local state
       setOrders(
         orders.map((order) =>
           order.id === orderId ? { ...order, status: "active" } : order
@@ -241,9 +241,9 @@ function AdminPage() {
     } catch (err) {
       console.error("Error in handleReject:", err);
       toast.error("Failed to reject order");
-    } finally {
-      setActionInProgress(null);
-    }
+      } finally {
+        setActionInProgress(null);
+      }
   };
 
   useEffect(() => {
@@ -522,12 +522,12 @@ function AdminPage() {
                     (accountIdInput as HTMLInputElement).focus();
                   }
                 }, 500);
-              } else {
-                toast.success(
-                  `${orderIds.length} orders approved! Please enter account details for each order individually.`,
-                  { id: toastId, duration: 5000 }
-                );
-              }
+            } else {
+              toast.success(
+                `${orderIds.length} orders approved! Please enter account details for each order individually.`,
+                { id: toastId, duration: 5000 }
+              );
+            }
           } catch (error) {
             console.error("Error approving orders:", error);
             toast.error("Failed to approve orders. Please try again.", {
@@ -1247,7 +1247,7 @@ Please keep these details secure. You can copy them by selecting the text.
       }
     };
 
-    return (
+  return (
       <div className="bg-gray-800 rounded-lg p-6 mt-4">
         <h3 className="text-lg font-medium text-white mb-4">
           Deliver Account Details
@@ -1297,18 +1297,18 @@ Please keep these details secure. You can copy them by selecting the text.
                 Account password is required
               </p>
             )}
-          </div>
+                </div>
 
           <div className="flex justify-end gap-3 mt-6">
-            <button
+                  <button
               type="button"
               onClick={onCancel}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
               disabled={isSubmitting}
             >
               Cancel
-            </button>
-            <button
+                  </button>
+                  <button
               type="submit"
               className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center gap-2"
               disabled={isSubmitting}
@@ -1324,8 +1324,8 @@ Please keep these details secure. You can copy them by selecting the text.
                   Deliver Account
                 </>
               )}
-            </button>
-          </div>
+                  </button>
+                </div>
         </form>
       </div>
     );
@@ -1469,8 +1469,8 @@ Please keep these details secure. You can copy them by selecting the text.
                   size={18}
                 />
               </div>
-            </div>
-            
+              </div>
+
             <div>
               <label className="block text-white/70 mb-2 text-sm">Status</label>
               <select
@@ -1510,25 +1510,25 @@ Please keep these details secure. You can copy them by selecting the text.
                 </p>
                 
                 <div className="flex gap-2">
-                  <button
+              <button
                     onClick={() => handleOrderBatchAction("approve")}
                     disabled={isOrderActionInProgress}
                     className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
                   >
                     <CheckSquare className="w-4 h-4" />
                     Approve
-                  </button>
-                  
-                  <button
+              </button>
+
+              <button
                     onClick={() => handleOrderBatchAction("reject")}
                     disabled={isOrderActionInProgress}
                     className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
                   >
                     <XSquare className="w-4 h-4" />
                     Reject
-                  </button>
+              </button>
                   
-                  <button
+              <button
                     onClick={() => handleOrderBatchAction("export")}
                     disabled={isOrderActionInProgress || isExporting}
                     className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
@@ -1542,9 +1542,9 @@ Please keep these details secure. You can copy them by selecting the text.
                     className="flex items-center gap-1 px-3 py-1.5 bg-gray-500/20 text-gray-400 rounded hover:bg-gray-500/30 transition-colors"
                   >
                     Clear
-                  </button>
-                </div>
-              </div>
+              </button>
+            </div>
+          </div>
             </div>
           ) : null}
           
@@ -1561,7 +1561,7 @@ Please keep these details secure. You can copy them by selecting the text.
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-3">
-                    <input
+                  <input
                       type="checkbox"
                       checked={selectedOrderIds.has(order.id)}
                       onChange={(e) => {
@@ -1594,9 +1594,9 @@ Please keep these details secure. You can copy them by selecting the text.
                         <span className="text-white/50 text-xs">
                           {new Date(order.created_at).toLocaleString()}
                         </span>
-                      </div>
-                    </div>
-                  </div>
+                </div>
+              </div>
+            </div>
                   
                   <div className="flex gap-2">
                     <button
@@ -1646,12 +1646,12 @@ Please keep these details secure. You can copy them by selecting the text.
                         <Upload className="w-5 h-5" />
                       </button>
                     )}
-                  </div>
-                </div>
               </div>
-            ))
-          )}
-        </div>
+              </div>
+              </div>
+              ))
+            )}
+          </div>
       </div>
     );
   };
@@ -1676,8 +1676,8 @@ Please keep these details secure. You can copy them by selecting the text.
                   onChange={() => {}}
                   className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                 />
-              </div>
-              
+                </div>
+
               <div>
                 <label className="block text-white/70 mb-2">Support Email</label>
                 <input
@@ -1688,7 +1688,7 @@ Please keep these details secure. You can copy them by selecting the text.
                 />
               </div>
               
-              <div className="flex items-center">
+                      <div className="flex items-center">
                 <input
                   type="checkbox"
                   id="maintenance-mode"
@@ -1699,8 +1699,8 @@ Please keep these details secure. You can copy them by selecting the text.
                 <label htmlFor="maintenance-mode" className="ml-2 text-white">
                   Enable Maintenance Mode
                 </label>
-              </div>
-            </div>
+                      </div>
+                    </div>
             
             <div className="mt-6">
               <button
@@ -1710,48 +1710,48 @@ Please keep these details secure. You can copy them by selecting the text.
                 Save Settings
               </button>
             </div>
-          </div>
-          
+                    </div>
+
           {/* Maintenance */}
           <div className="bg-white/5 rounded-lg p-6">
             <h3 className="text-lg text-white mb-4">Maintenance</h3>
             
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <div>
+                          <div>
                   <h4 className="text-white">Database Backup</h4>
                   <p className="text-white/70 text-sm">Create a backup of the database</p>
-                </div>
+                            </div>
                 <button
                   onClick={() => toast.info("Database backup initiated (demo)")}
                   className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
                 >
                   Create Backup
                 </button>
-              </div>
+                          </div>
               
               <div className="flex items-center justify-between">
-                <div>
+                          <div>
                   <h4 className="text-white">Clear Cache</h4>
                   <p className="text-white/70 text-sm">Clear the system cache</p>
-                </div>
+                            </div>
                 <button
                   onClick={() => toast.success("Cache cleared (demo)")}
                   className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
                 >
                   Clear Cache
                 </button>
-              </div>
-            </div>
-          </div>
+                          </div>
+                        </div>
+                      </div>
           
           {/* Danger Zone */}
           <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
             <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
-            
-            <div className="space-y-4">
+
+                <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <div>
+                  <div>
                   <h4 className="text-white">Reset All Settings</h4>
                   <p className="text-white/70 text-sm">Reset all settings to default values</p>
                 </div>
@@ -1773,9 +1773,39 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   };
 
-  // Update the main render function to use the tabs correctly
+  if (loading) {
+    return (
+      <PageContainer title="ADMIN">
+        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
+          <LoadingSpinner size="lg" light />
+        </div>
+      </PageContainer>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <PageContainer title="ADMIN">
+        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
+          <div className="text-center">
+            <h2 className="text-xl text-white mb-4">Access Denied</h2>
+            <p className="text-white/70 mb-6">
+              You don't have permission to access this page.
+            </p>
+            <button
+              onClick={() => navigate("/")}
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+            >
+              Go Home
+            </button>
+                  </div>
+        </div>
+      </PageContainer>
+    );
+  }
+
   return (
-    <PageContainer title="ADMIN" user={currentUser} showBack>
+    <PageContainer title="ADMIN" showBack>
       <main className="max-w-screen-xl mx-auto pb-16 px-4">
         <div className="bg-gray-900 rounded-xl p-6 mt-8">
           <h1 className="text-2xl font-bold text-white mb-6">
@@ -1784,12 +1814,12 @@ Please keep these details secure. You can copy them by selecting the text.
 
           {/* Tabs */}
           <div className="border-b border-white/10 mb-6">
-            <div className="flex space-x-6">
+            <div className="flex space-x-4">
               <button
                 onClick={() => setSelectedTab("users")}
-                className={`pb-3 px-1 ${
+                className={`py-2 px-4 ${
                   selectedTab === "users"
-                    ? "text-emerald-400 border-b-2 border-emerald-400"
+                    ? "border-b-2 border-emerald-500 text-emerald-500"
                     : "text-white/70 hover:text-white"
                 }`}
               >
@@ -1797,19 +1827,19 @@ Please keep these details secure. You can copy them by selecting the text.
               </button>
               <button
                 onClick={() => setSelectedTab("orders")}
-                className={`pb-3 px-1 ${
+                className={`py-2 px-4 ${
                   selectedTab === "orders"
-                    ? "text-emerald-400 border-b-2 border-emerald-400"
+                    ? "border-b-2 border-emerald-500 text-emerald-500"
                     : "text-white/70 hover:text-white"
                 }`}
               >
-                Order Management
+                Orders
               </button>
               <button
                 onClick={() => setSelectedTab("settings")}
-                className={`pb-3 px-1 ${
+                className={`py-2 px-4 ${
                   selectedTab === "settings"
-                    ? "text-emerald-400 border-b-2 border-emerald-400"
+                    ? "border-b-2 border-emerald-500 text-emerald-500"
                     : "text-white/70 hover:text-white"
                 }`}
               >
@@ -1818,39 +1848,173 @@ Please keep these details secure. You can copy them by selecting the text.
             </div>
           </div>
 
-          {/* Tab Content */}
-          {selectedTab === "users" && renderUsersTab()}
+          {/* User Management Tab */}
+          {selectedTab === "users" && (
+                  <div>
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl text-white">User Management</h2>
+                <div className="relative">
+                    <input
+                      type="text"
+                    placeholder="Search users..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40 w-64"
+                  />
+                  <div className="absolute right-3 top-2.5 text-white/50">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-5 w-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                      />
+                    </svg>
+                  </div>
+                </div>
+                  </div>
+
+              {/* Users Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-white">
+                  <thead className="bg-white/5 text-left">
+                    <tr>
+                      <th className="px-4 py-3 rounded-tl-lg">Name</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3 rounded-tr-lg">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {filteredUsers.length > 0 ? (
+                      filteredUsers.map((user) => (
+                        <tr key={user.id} className="hover:bg-white/5">
+                          <td className="px-4 py-3">
+                            {user.fullName || "N/A"}
+                          </td>
+                          <td className="px-4 py-3">{user.email}</td>
+                          <td className="px-4 py-3">
+                            {user.isAdmin ? (
+                              <span className="bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full text-xs">
+                                Admin
+                              </span>
+                            ) : (
+                              <span className="bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full text-xs">
+                                User
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {new Date(user.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3">
+                            {user.isAdmin ? (
+                  <button
+                                onClick={() => handleRevokeAdmin(user.id)}
+                    disabled={
+                                  actionInProgress === user.id ||
+                                  user.id === currentUser.id
+                                }
+                                className={`px-3 py-1 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors ${
+                                  actionInProgress === user.id ||
+                                  user.id === currentUser.id
+                                    ? "opacity-50 cursor-not-allowed"
+                                    : ""
+                                }`}
+                              >
+                                {actionInProgress === user.id ? (
+                                  <span className="flex items-center">
+                                    <LoadingSpinner size="sm" light />
+                                    <span className="ml-2">Revoking...</span>
+                      </span>
+                    ) : (
+                                  "Revoke Admin"
+                                )}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleGrantAdmin(user.id)}
+                                disabled={actionInProgress === user.id}
+                                className={`px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors ${
+                                  actionInProgress === user.id
+                                    ? "opacity-50 cursor-not-allowed"
+                                    : ""
+                                }`}
+                              >
+                                {actionInProgress === user.id ? (
+                                  <span className="flex items-center">
+                                    <LoadingSpinner size="sm" light />
+                                    <span className="ml-2">Granting...</span>
+                      </span>
+                                ) : (
+                                  "Make Admin"
+                    )}
+                  </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={5}
+                          className="px-4 py-8 text-center text-white/50"
+                        >
+                          {searchTerm ? (
+                            <>
+                              <p>No users matching "{searchTerm}"</p>
+                              <button
+                                onClick={() => setSearchTerm("")}
+                                className="mt-2 px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                              >
+                                Clear search
+                              </button>
+                            </>
+                          ) : (
+                            <p>No users found</p>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                </div>
+
+              <div className="mt-6 p-4 bg-white/5 rounded-lg">
+                <h3 className="text-lg font-medium mb-4">Add Admin User</h3>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={newAdminEmail}
+                    onChange={(e) => setNewAdminEmail(e.target.value)}
+                    placeholder="User email address"
+                    className="flex-1 px-3 py-2 bg-gray-800 rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={addAdminByEmail}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white transition-colors"
+                  >
+                    Add Admin
+                  </button>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Orders Tab */}
           {selectedTab === "orders" && renderOrdersTab()}
+
+          {/* Settings Tab */}
           {selectedTab === "settings" && renderSettingsTab()}
         </div>
       </main>
-
-      {/* Image Modal */}
-      {showImageModal && (
-        <div
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowImageModal(false)}
-        >
-          <div
-            className="max-w-4xl w-full max-h-[90vh] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img
-              src={currentImageUrl}
-              alt="Payment proof"
-              className="w-full h-auto rounded-lg"
-            />
-            <button
-              onClick={() => setShowImageModal(false)}
-              className="absolute top-4 right-4 text-white/70 hover:text-white"
-            >
-              <XCircle className="w-8 h-8" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Order Detail Modal */}
       {selectedOrderDetail && <OrderDetailModal />}
     </PageContainer>
   );
