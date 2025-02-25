@@ -419,7 +419,28 @@ function ChatPage() {
     [isAdmin]
   );
 
-  // Handle sending messages
+  // Add the handleImageSelect function
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check file size (limit to 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image too large. Maximum size is 5MB.");
+      return;
+    }
+
+    setSelectedImage(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setImagePreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Add the handleSendMessage function
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -510,7 +531,7 @@ function ChatPage() {
     }
   };
 
-  // Handle message retry
+  // Add the handleRetry function
   const handleRetry = async (messageId: string) => {
     const pendingMessage = pendingMessages.current.get(messageId);
     if (!pendingMessage || !selectedOrderId || !user) return;
@@ -548,43 +569,6 @@ function ChatPage() {
     } finally {
       setSending(false);
     }
-  };
-
-  // Handle image upload
-  const handleImageUpload = async () => {
-    if (!selectedImage) return;
-
-    try {
-      setSending(true);
-      const imageUrl = await uploadImage(selectedImage);
-      await handleSendMessage(new Event("submit") as React.FormEvent, imageUrl);
-    } catch (err) {
-      console.error("Error uploading image:", err);
-      toast.error("Failed to upload image");
-    } finally {
-      setSending(false);
-    }
-  };
-
-  // Handle image selection
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Check file size (limit to 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Image too large. Maximum size is 5MB.");
-      return;
-    }
-
-    setSelectedImage(file);
-
-    // Create preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setImagePreview(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
   };
 
   // Filter orders based on search
@@ -648,6 +632,51 @@ function ChatPage() {
   useEffect(() => {
     setupDatabaseTables();
   }, []);
+
+  // Add this function definition before it's used in the useEffect
+  // 5. Add the checkIfAdmin function
+  const checkIfAdmin = async (userId: string) => {
+    try {
+      // First try to check user metadata
+      if (
+        user?.user_metadata?.role === "admin" ||
+        user?.user_metadata?.isAdmin === true
+      ) {
+        return true;
+      }
+
+      // Then try known admin IDs
+      const knownAdminIds = [
+        "febded26-f3f6-4aec-9668-b6898de96ca3",
+        // Add more admin IDs as needed
+      ];
+
+      if (knownAdminIds.includes(userId)) {
+        return true;
+      }
+
+      // Finally, try the admin_users table if it exists
+      try {
+        const { data, error } = await supabase
+          .from("admin_users")
+          .select("id")
+          .eq("user_id", userId)
+          .single();
+
+        if (!error && data) {
+          return true;
+        }
+      } catch (adminTableErr) {
+        console.log("Admin table check failed:", adminTableErr);
+        // Continue with other checks
+      }
+
+      return false;
+    } catch (err) {
+      console.error("Error checking admin status:", err);
+      return false;
+    }
+  };
 
   if (fallbackMode) {
     return (
