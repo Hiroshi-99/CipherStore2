@@ -265,7 +265,12 @@ function AdminPage() {
           (order) => order.status === "rejected"
         ).length;
 
-        setStats({ total, pending, active, rejected });
+        setStats({
+          total,
+          pending,
+          active,
+          rejected,
+        });
       }
     } catch (err) {
       console.error("Error in fetchOrders:", err);
@@ -1008,6 +1013,7 @@ Please keep these details secure. You can copy them by selecting the text.
           }
 
           toast.success(`${orderIds.length} orders approved`);
+          fetchOrders(); // Refresh the orders list
           break;
 
         case "reject":
@@ -1018,6 +1024,7 @@ Please keep these details secure. You can copy them by selecting the text.
           }
 
           toast.success(`${orderIds.length} orders rejected`);
+          fetchOrders(); // Refresh the orders list
           break;
 
         case "export":
@@ -1110,317 +1117,42 @@ Please keep these details secure. You can copy them by selecting the text.
 
   // Add this function to filter orders
   const getFilteredOrders = () => {
-    let filtered = [...orders];
+    return orders.filter((order) => {
+      // Filter by status
+      if (orderStatusFilter !== "all" && order.status !== orderStatusFilter) {
+        return false;
+      }
 
-    // Filter by status
-    if (orderStatusFilter !== "all") {
-      filtered = filtered.filter((order) => order.status === orderStatusFilter);
-    }
+      // Filter by search query
+      if (
+        orderSearchQuery &&
+        !order.full_name
+          .toLowerCase()
+          .includes(orderSearchQuery.toLowerCase()) &&
+        !order.email.toLowerCase().includes(orderSearchQuery.toLowerCase())
+      ) {
+        return false;
+      }
 
-    // Filter by date range
-    if (orderDateRange.start) {
-      filtered = filtered.filter(
-        (order) => new Date(order.created_at) >= (orderDateRange.start as Date)
-      );
-    }
+      // Filter by date range
+      if (
+        orderDateRange.start &&
+        new Date(order.created_at) < orderDateRange.start
+      ) {
+        return false;
+      }
 
-    if (orderDateRange.end) {
-      const endDate = new Date(orderDateRange.end as Date);
-      endDate.setHours(23, 59, 59, 999); // End of day
-      filtered = filtered.filter(
-        (order) => new Date(order.created_at) <= endDate
-      );
-    }
+      if (orderDateRange.end) {
+        const endDate = new Date(orderDateRange.end);
+        endDate.setHours(23, 59, 59, 999); // End of the day
+        if (new Date(order.created_at) > endDate) {
+          return false;
+        }
+      }
 
-    // Filter by search query
-    if (orderSearchQuery) {
-      const query = orderSearchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (order) =>
-          order.full_name?.toLowerCase().includes(query) ||
-          order.email?.toLowerCase().includes(query) ||
-          order.id?.toLowerCase().includes(query)
-      );
-    }
-
-    return filtered;
+      return true;
+    });
   };
-
-  // Add this to your JSX where the Orders tab content should be
-  const renderOrdersTab = () => (
-    <div className="mt-6">
-      {/* Order management tools */}
-      <div className="bg-white/5 rounded-lg p-4 mb-6">
-        <div className="flex flex-wrap gap-4 items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-white">Order Management</h2>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => fetchOrders()}
-              className="flex items-center gap-2 px-3 py-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-              disabled={refreshing}
-            >
-              {refreshing ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4" />
-              )}
-              Refresh
-            </button>
-
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center gap-2 px-3 py-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
-            >
-              <Filter className="w-4 h-4" />
-              Filters
-            </button>
-          </div>
-        </div>
-
-        {/* Filters panel */}
-        {showFilters && (
-          <div className="bg-white/5 rounded-lg p-4 mb-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-white/70 mb-2">Status</label>
-                <select
-                  value={orderStatusFilter}
-                  onChange={(e) => setOrderStatusFilter(e.target.value)}
-                  className="w-full bg-white/10 border border-white/20 rounded px-3 py-2 text-white"
-                >
-                  <option value="all">All Statuses</option>
-                  <option value="pending">Pending</option>
-                  <option value="active">Active</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-white/70 mb-2">Date Range</label>
-                <div className="flex gap-2">
-                  <input
-                    type="date"
-                    value={
-                      orderDateRange.start
-                        ? orderDateRange.start.toISOString().split("T")[0]
-                        : ""
-                    }
-                    onChange={(e) =>
-                      setOrderDateRange({
-                        ...orderDateRange,
-                        start: e.target.value ? new Date(e.target.value) : null,
-                      })
-                    }
-                    className="flex-1 bg-white/10 border border-white/20 rounded px-3 py-2 text-white"
-                  />
-                  <span className="text-white/50 self-center">to</span>
-                  <input
-                    type="date"
-                    value={
-                      orderDateRange.end
-                        ? orderDateRange.end.toISOString().split("T")[0]
-                        : ""
-                    }
-                    onChange={(e) =>
-                      setOrderDateRange({
-                        ...orderDateRange,
-                        end: e.target.value ? new Date(e.target.value) : null,
-                      })
-                    }
-                    className="flex-1 bg-white/10 border border-white/20 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-white/70 mb-2">Search</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={orderSearchQuery}
-                    onChange={(e) => setOrderSearchQuery(e.target.value)}
-                    placeholder="Search by name, email..."
-                    className="w-full bg-white/10 border border-white/20 rounded pl-10 pr-3 py-2 text-white"
-                  />
-                  <Search className="absolute left-3 top-2.5 text-white/50 w-4 h-4" />
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end mt-4">
-              <button
-                onClick={() => {
-                  setOrderStatusFilter("all");
-                  setOrderDateRange({ start: null, end: null });
-                  setOrderSearchQuery("");
-                }}
-                className="px-3 py-1 text-sm text-white/70 hover:text-white transition-colors"
-              >
-                Clear Filters
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Batch actions */}
-        {selectedOrderIds.size > 0 && (
-          <div className="bg-white/5 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between">
-              <span className="text-white">
-                {selectedOrderIds.size} order
-                {selectedOrderIds.size !== 1 ? "s" : ""} selected
-              </span>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleOrderBatchAction("approve")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
-                >
-                  <CheckSquare className="w-4 h-4" />
-                  Approve
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("reject")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                >
-                  <XSquare className="w-4 h-4" />
-                  Reject
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("export")}
-                  disabled={isOrderActionInProgress || isExporting}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-                >
-                  {isExporting ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  Export
-                </button>
-
-                <button
-                  onClick={() => handleOrderBatchAction("delete")}
-                  disabled={isOrderActionInProgress}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Orders list */}
-      <div className="space-y-4">
-        {getFilteredOrders().length === 0 ? (
-          <div className="bg-white/5 rounded-lg p-8 text-center">
-            <p className="text-white/70">No orders found</p>
-          </div>
-        ) : (
-          getFilteredOrders().map((order) => (
-            <div
-              key={order.id}
-              className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedOrderIds.has(order.id)}
-                    onChange={(e) => {
-                      const newSelected = new Set(selectedOrderIds);
-                      if (e.target.checked) {
-                        newSelected.add(order.id);
-                      } else {
-                        newSelected.delete(order.id);
-                      }
-                      setSelectedOrderIds(newSelected);
-                    }}
-                    className="mt-1 w-4 h-4 accent-emerald-500"
-                  />
-
-                  <div>
-                    <h3 className="text-lg font-medium text-white">
-                      {order.full_name}
-                    </h3>
-                    <p className="text-white/70">{order.email}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          order.status === "active"
-                            ? "bg-green-500/20 text-green-400"
-                            : order.status === "rejected"
-                            ? "bg-red-500/20 text-red-400"
-                            : "bg-yellow-500/20 text-yellow-400"
-                        }`}
-                      >
-                        {order.status.toUpperCase()}
-                      </span>
-                      <span className="text-white/50 text-xs">
-                        {new Date(order.created_at).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  {order.status === "pending" && (
-                    <>
-                      <button
-                        onClick={() => handleApprove(order.id)}
-                        disabled={!!actionInProgress}
-                        className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
-                        title="Approve order"
-                      >
-                        <CheckCircle className="w-5 h-5" />
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          handlePaymentAction(order.id, "rejected")
-                        }
-                        disabled={!!actionInProgress}
-                        className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
-                        title="Reject order"
-                      >
-                        <XCircle className="w-5 h-5" />
-                      </button>
-                    </>
-                  )}
-
-                  <Link
-                    to={`/chat?order=${order.id}`}
-                    className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                    title="Chat with customer"
-                  >
-                    <MessageSquare className="w-5 h-5" />
-                  </Link>
-
-                  {order.status === "active" && !order.account_file_url && (
-                    <button
-                      onClick={() => setSelectedOrderId(order.id)}
-                      className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
-                      title="Upload account file"
-                    >
-                      <Upload className="w-5 h-5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
 
   // Add this function to calculate order statistics
   const calculateOrderStats = () => {
@@ -1592,6 +1324,135 @@ Please keep these details secure. You can copy them by selecting the text.
                   className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
                 >
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Add this function to render the settings tab
+  const renderSettingsTab = () => {
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
+
+        <div className="space-y-6">
+          {/* System Settings */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">System Settings</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-white/70 mb-2">Site Name</label>
+                <input
+                  type="text"
+                  value="Cipher Admin"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <div>
+                <label className="block text-white/70 mb-2">
+                  Support Email
+                </label>
+                <input
+                  type="email"
+                  value="support@example.com"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="maintenance-mode"
+                  checked={false}
+                  onChange={() => {}}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <label htmlFor="maintenance-mode" className="ml-2 text-white">
+                  Enable Maintenance Mode
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <button
+                onClick={() => toast.info("Settings saved (demo)")}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors"
+              >
+                Save Settings
+              </button>
+            </div>
+          </div>
+
+          {/* Database Management */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">Database Management</h3>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Backup Database</h4>
+                  <p className="text-white/70 text-sm">
+                    Create a backup of the current database
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.info("Database backup initiated (demo)")}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                >
+                  Create Backup
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Clear Cache</h4>
+                  <p className="text-white/70 text-sm">
+                    Clear the system cache
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.success("Cache cleared (demo)")}
+                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
+                >
+                  Clear Cache
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Danger Zone */}
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
+            <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Reset All Settings</h4>
+                  <p className="text-white/70 text-sm">
+                    Reset all settings to default values
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Are you sure you want to reset all settings? This cannot be undone."
+                      )
+                    ) {
+                      toast.success("Settings reset to defaults (demo)");
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
+                >
+                  Reset Settings
                 </button>
               </div>
             </div>
@@ -1837,18 +1698,237 @@ Please keep these details secure. You can copy them by selecting the text.
           )}
 
           {/* Orders Tab */}
-          {selectedTab === "orders" && renderOrdersTab()}
-
-          {/* Settings Tab */}
-          {selectedTab === "settings" && (
+          {selectedTab === "orders" && (
             <div>
-              <h2 className="text-xl text-white mb-6">Admin Settings</h2>
-              {/* Settings UI would go here */}
-              <p className="text-white/70">
-                Admin settings functionality coming soon.
-              </p>
+              <h2 className="text-xl text-white mb-6">Order Management</h2>
+
+              {/* Order Statistics */}
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+                {Object.entries(calculateOrderStats()).map(([key, value]) => (
+                  <div key={key} className="bg-white/5 rounded-lg p-4">
+                    <h3 className="text-white/70 text-sm uppercase">
+                      {key.replace(/([A-Z])/g, " $1").trim()}
+                    </h3>
+                    <p className="text-2xl font-bold text-white mt-1">
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Order Filters */}
+              <div className="bg-white/5 rounded-lg p-4 mb-6">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex-1">
+                    <div className="relative">
+                      <Search
+                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
+                        size={18}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Search orders..."
+                        value={orderSearchQuery}
+                        onChange={(e) => setOrderSearchQuery(e.target.value)}
+                        className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={orderStatusFilter}
+                      onChange={(e) => setOrderStatusFilter(e.target.value)}
+                      className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-white/40"
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="pending">Pending</option>
+                      <option value="active">Active</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+
+                    {/* Date picker would go here - simplified for now */}
+                    <button
+                      onClick={() => {
+                        // Reset date filter
+                        setOrderDateRange({ start: null, end: null });
+                      }}
+                      className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white hover:bg-white/20 transition-colors"
+                    >
+                      <Calendar size={18} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Batch Actions */}
+              {selectedOrderIds.size > 0 && (
+                <div className="bg-white/5 rounded-lg p-4 mb-6">
+                  <div className="flex items-center justify-between">
+                    <p className="text-white">
+                      {selectedOrderIds.size}{" "}
+                      {selectedOrderIds.size === 1 ? "order" : "orders"}{" "}
+                      selected
+                    </p>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleOrderBatchAction("approve")}
+                        disabled={isOrderActionInProgress}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
+                      >
+                        <CheckSquare className="w-4 h-4" />
+                        Approve
+                      </button>
+
+                      <button
+                        onClick={() => handleOrderBatchAction("reject")}
+                        disabled={isOrderActionInProgress}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                      >
+                        <XSquare className="w-4 h-4" />
+                        Reject
+                      </button>
+
+                      <button
+                        onClick={() => handleOrderBatchAction("export")}
+                        disabled={isOrderActionInProgress || isExporting}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+                      >
+                        {isExporting ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Download className="w-4 h-4" />
+                        )}
+                        Export
+                      </button>
+
+                      <button
+                        onClick={() => handleOrderBatchAction("delete")}
+                        disabled={isOrderActionInProgress}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Orders list */}
+              <div className="space-y-4">
+                {getFilteredOrders().length === 0 ? (
+                  <div className="bg-white/5 rounded-lg p-8 text-center">
+                    <p className="text-white/70">No orders found</p>
+                  </div>
+                ) : (
+                  getFilteredOrders().map((order) => (
+                    <div
+                      key={order.id}
+                      className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedOrderIds.has(order.id)}
+                            onChange={(e) => {
+                              const newSelected = new Set(selectedOrderIds);
+                              if (e.target.checked) {
+                                newSelected.add(order.id);
+                              } else {
+                                newSelected.delete(order.id);
+                              }
+                              setSelectedOrderIds(newSelected);
+                            }}
+                            className="mt-1 w-4 h-4 accent-emerald-500"
+                          />
+
+                          <div>
+                            <h3 className="text-lg font-medium text-white">
+                              {order.full_name}
+                            </h3>
+                            <p className="text-white/70">{order.email}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span
+                                className={`px-2 py-0.5 rounded text-xs ${
+                                  order.status === "active"
+                                    ? "bg-green-500/20 text-green-400"
+                                    : order.status === "rejected"
+                                    ? "bg-red-500/20 text-red-400"
+                                    : "bg-yellow-500/20 text-yellow-400"
+                                }`}
+                              >
+                                {order.status.toUpperCase()}
+                              </span>
+                              <span className="text-white/50 text-xs">
+                                {new Date(order.created_at).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setSelectedOrderDetail(order)}
+                            className="p-2 bg-white/10 text-white rounded hover:bg-white/20 transition-colors"
+                            title="View order details"
+                          >
+                            <Eye className="w-5 h-5" />
+                          </button>
+
+                          {order.status === "pending" && (
+                            <>
+                              <button
+                                onClick={() => handleApprove(order.id)}
+                                disabled={!!actionInProgress}
+                                className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+                                title="Approve order"
+                              >
+                                <CheckCircle className="w-5 h-5" />
+                              </button>
+
+                              <button
+                                onClick={() => handleReject(order.id)}
+                                disabled={!!actionInProgress}
+                                className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+                                title="Reject order"
+                              >
+                                <XCircle className="w-5 h-5" />
+                              </button>
+                            </>
+                          )}
+
+                          <Link
+                            to={`/chat?order=${order.id}`}
+                            className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                            title="Chat with customer"
+                          >
+                            <MessageSquare className="w-5 h-5" />
+                          </Link>
+
+                          {order.status === "active" &&
+                            !order.account_file_url && (
+                              <button
+                                onClick={() => setSelectedOrderId(order.id)}
+                                className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+                                title="Upload account file"
+                              >
+                                <Upload className="w-5 h-5" />
+                              </button>
+                            )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           )}
+
+          {/* Settings Tab */}
+          {selectedTab === "settings" && renderSettingsTab()}
         </div>
       </main>
       {selectedOrderDetail && <OrderDetailModal />}
