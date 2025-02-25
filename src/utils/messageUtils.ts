@@ -19,3 +19,21 @@ export const createMessage = (
     is_read: false,
   };
 };
+
+// Add a function to generate a proper message object for insertion
+export const createMessageForInsert = (message: any) => {
+  // Only include fields that exist in the database schema
+  return {
+    id: message.id,
+    content: message.content,
+    user_id: message.user_id,
+    order_id: message.order_id,
+    is_admin: message.is_admin,
+    created_at: message.created_at,
+    user_name: message.user_name,
+    user_avatar: message.user_avatar,
+    image_url: message.image_url || null,
+    // Add is_account_details if it exists
+    ...(message.is_account_details ? { is_account_details: true } : {}),
+  };
+};
