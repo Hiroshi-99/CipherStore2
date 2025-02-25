@@ -522,13 +522,12 @@ function AdminPage() {
                     (accountIdInput as HTMLInputElement).focus();
                   }
                 }, 500);
+              } else {
+                toast.success(
+                  `${orderIds.length} orders approved! Please enter account details for each order individually.`,
+                  { id: toastId, duration: 5000 }
+                );
               }
-            } else {
-              toast.success(
-                `${orderIds.length} orders approved! Please enter account details for each order individually.`,
-                { id: toastId, duration: 5000 }
-              );
-            }
           } catch (error) {
             console.error("Error approving orders:", error);
             toast.error("Failed to approve orders. Please try again.", {
@@ -1158,26 +1157,21 @@ Please keep these details secure. You can copy them by selecting the text.
       if (orderStatusFilter !== "all" && order.status !== orderStatusFilter) {
         return false;
       }
-
+      
       // Filter by search query
       if (
         orderSearchQuery &&
-        !order.full_name
-          .toLowerCase()
-          .includes(orderSearchQuery.toLowerCase()) &&
+        !order.full_name.toLowerCase().includes(orderSearchQuery.toLowerCase()) &&
         !order.email.toLowerCase().includes(orderSearchQuery.toLowerCase())
       ) {
         return false;
       }
-
+      
       // Filter by date range
-      if (
-        orderDateRange.start &&
-        new Date(order.created_at) < orderDateRange.start
-      ) {
+      if (orderDateRange.start && new Date(order.created_at) < orderDateRange.start) {
         return false;
       }
-
+      
       if (orderDateRange.end) {
         const endDate = new Date(orderDateRange.end);
         endDate.setHours(23, 59, 59, 999); // Set to end of day
@@ -1185,7 +1179,7 @@ Please keep these details secure. You can copy them by selecting the text.
           return false;
         }
       }
-
+      
       return true;
     });
   };
@@ -1195,14 +1189,14 @@ Please keep these details secure. You can copy them by selecting the text.
     const total = orders.length;
     const pending = orders.filter((order) => order.status === "pending").length;
     const active = orders.filter((order) => order.status === "active").length;
-    const rejected = orders.filter(
-      (order) => order.status === "rejected"
-    ).length;
-    const withAccountFiles = orders.filter(
-      (order) => order.account_file_url
-    ).length;
-
-    return { total, pending, active, rejected, withAccountFiles };
+    const rejected = orders.filter((order) => order.status === "rejected").length;
+    
+    return { 
+      total, 
+      pending, 
+      approved: active, 
+      rejected 
+    };
   };
 
   // Add this function to view order details
@@ -1426,6 +1420,357 @@ Please keep these details secure. You can copy them by selecting the text.
     } finally {
       setActionInProgress(null);
     }
+  };
+
+  // Add this function to render the orders tab
+  const renderOrdersTab = () => {
+    const stats = calculateOrderStats();
+    const filteredOrders = getFilteredOrders();
+    
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Order Management</h2>
+        
+        {/* Order Statistics */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Total</h3>
+            <p className="text-2xl font-bold text-white mt-1">{stats.total}</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Pending</h3>
+            <p className="text-2xl font-bold text-white mt-1">{stats.pending}</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Active</h3>
+            <p className="text-2xl font-bold text-white mt-1">{stats.approved}</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Rejected</h3>
+            <p className="text-2xl font-bold text-white mt-1">{stats.rejected}</p>
+          </div>
+        </div>
+        
+        {/* Filters and Search */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="flex flex-wrap gap-4">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-white/70 mb-2 text-sm">Search</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={orderSearchQuery}
+                  onChange={(e) => setOrderSearchQuery(e.target.value)}
+                  placeholder="Search by name or email"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+                <Search
+                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
+                  size={18}
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-white/70 mb-2 text-sm">Status</label>
+              <select
+                value={orderStatusFilter}
+                onChange={(e) => setOrderStatusFilter(e.target.value)}
+                className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-white/40"
+              >
+                <option value="all">All Statuses</option>
+                <option value="pending">Pending</option>
+                <option value="active">Active</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-white/70 mb-2 text-sm">Actions</label>
+              <button
+                onClick={() => fetchOrders()}
+                className="bg-blue-500/20 text-blue-400 rounded-lg px-4 py-2 hover:bg-blue-500/30 transition-colors flex items-center gap-2"
+              >
+                <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+                Refresh
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        {/* Orders List */}
+        <div className="bg-white/5 rounded-lg p-4">
+          {/* Batch Actions */}
+          {selectedOrderIds.size > 0 ? (
+            <div className="mb-4 p-3 bg-white/10 rounded-lg">
+              <div className="flex items-center justify-between">
+                <p className="text-white">
+                  {selectedOrderIds.size}{" "}
+                  {selectedOrderIds.size === 1 ? "order" : "orders"} selected
+                </p>
+                
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleOrderBatchAction("approve")}
+                    disabled={isOrderActionInProgress}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
+                  >
+                    <CheckSquare className="w-4 h-4" />
+                    Approve
+                  </button>
+                  
+                  <button
+                    onClick={() => handleOrderBatchAction("reject")}
+                    disabled={isOrderActionInProgress}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                  >
+                    <XSquare className="w-4 h-4" />
+                    Reject
+                  </button>
+                  
+                  <button
+                    onClick={() => handleOrderBatchAction("export")}
+                    disabled={isOrderActionInProgress || isExporting}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Export
+                  </button>
+                  
+                  <button
+                    onClick={() => setSelectedOrderIds(new Set())}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-gray-500/20 text-gray-400 rounded hover:bg-gray-500/30 transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          
+          {/* Orders */}
+          {filteredOrders.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-white/70">No orders found</p>
+            </div>
+          ) : (
+            filteredOrders.map((order) => (
+              <div
+                key={order.id}
+                className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors mb-3"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedOrderIds.has(order.id)}
+                      onChange={(e) => {
+                        const newSelected = new Set(selectedOrderIds);
+                        if (e.target.checked) {
+                          newSelected.add(order.id);
+                        } else {
+                          newSelected.delete(order.id);
+                        }
+                        setSelectedOrderIds(newSelected);
+                      }}
+                      className="mt-1 w-4 h-4 accent-blue-500"
+                    />
+                    
+                    <div>
+                      <h3 className="text-white font-medium">{order.full_name}</h3>
+                      <p className="text-white/70">{order.email}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs ${
+                            order.status === "active"
+                              ? "bg-green-500/20 text-green-400"
+                              : order.status === "rejected"
+                              ? "bg-red-500/20 text-red-400"
+                              : "bg-yellow-500/20 text-yellow-400"
+                          }`}
+                        >
+                          {order.status.toUpperCase()}
+                        </span>
+                        <span className="text-white/50 text-xs">
+                          {new Date(order.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setSelectedOrderDetail(order)}
+                      className="p-2 bg-white/10 text-white rounded hover:bg-white/20 transition-colors"
+                      title="View order details"
+                    >
+                      <Eye className="w-5 h-5" />
+                    </button>
+                    
+                    {order.status === "pending" && (
+                      <>
+                        <button
+                          onClick={() => handleApprove(order.id)}
+                          disabled={!!actionInProgress}
+                          className="p-2 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+                          title="Approve order"
+                        >
+                          <CheckCircle className="w-5 h-5" />
+                        </button>
+                        
+                        <button
+                          onClick={() => handleReject(order.id)}
+                          disabled={!!actionInProgress}
+                          className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+                          title="Reject order"
+                        >
+                          <XCircle className="w-5 h-5" />
+                        </button>
+                      </>
+                    )}
+                    
+                    <Link
+                      to={`/chat?order=${order.id}`}
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                      title="Chat with customer"
+                    >
+                      <MessageSquare className="w-5 h-5" />
+                    </Link>
+                    
+                    {order.status === "active" && !order.account_file_url && (
+                      <button
+                        onClick={() => setSelectedOrderDetail(order)}
+                        className="p-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+                        title="Upload account file"
+                      >
+                        <Upload className="w-5 h-5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Add this function to render the settings tab
+  const renderSettingsTab = () => {
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
+        
+        <div className="space-y-6">
+          {/* System Settings */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">System Settings</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-white/70 mb-2">Site Name</label>
+                <input
+                  type="text"
+                  value="Cipher Admin"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-white/70 mb-2">Support Email</label>
+                <input
+                  type="email"
+                  value="support@example.com"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+              
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="maintenance-mode"
+                  checked={false}
+                  onChange={() => {}}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <label htmlFor="maintenance-mode" className="ml-2 text-white">
+                  Enable Maintenance Mode
+                </label>
+              </div>
+            </div>
+            
+            <div className="mt-6">
+              <button
+                onClick={() => toast.info("Settings saved (demo)")}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors"
+              >
+                Save Settings
+              </button>
+            </div>
+          </div>
+          
+          {/* Maintenance */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">Maintenance</h3>
+            
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Database Backup</h4>
+                  <p className="text-white/70 text-sm">Create a backup of the database</p>
+                </div>
+                <button
+                  onClick={() => toast.info("Database backup initiated (demo)")}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                >
+                  Create Backup
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Clear Cache</h4>
+                  <p className="text-white/70 text-sm">Clear the system cache</p>
+                </div>
+                <button
+                  onClick={() => toast.success("Cache cleared (demo)")}
+                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
+                >
+                  Clear Cache
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          {/* Danger Zone */}
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
+            <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
+            
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Reset All Settings</h4>
+                  <p className="text-white/70 text-sm">Reset all settings to default values</p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (confirm("Are you sure you want to reset all settings? This cannot be undone.")) {
+                      toast.success("Settings reset to defaults (demo)");
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
+                >
+                  Reset Settings
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (loading) {
