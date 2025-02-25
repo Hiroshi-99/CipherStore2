@@ -6,11 +6,14 @@ import { toast } from "react-hot-toast";
 import { Copy } from "lucide-react";
 
 interface MessageBubbleProps {
-  message: Message;
+  message: Message & {
+    sending?: boolean;
+    failed?: boolean;
+  };
   isLatest: boolean;
   sending: boolean;
   isUnread: boolean;
-  onRetry: () => void;
+  onRetry: (messageId: string) => void;
   isPending: boolean;
 }
 
@@ -200,11 +203,11 @@ export const MessageBubble = React.memo(function MessageBubble({
         )}
 
         {/* Status indicators */}
-        {isPending && (
+        {message.failed && (
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onRetry();
+              onRetry(message.id);
             }}
             className="absolute -bottom-6 left-0 text-xs text-red-400 hover:text-red-300 transition-colors bg-black/50 px-2 py-1 rounded"
             aria-label="Retry sending message"

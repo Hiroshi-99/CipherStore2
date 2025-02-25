@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ExternalLink, Bell, FileText, RefreshCw, X } from "lucide-react";
+import {
+  ExternalLink,
+  Bell,
+  FileText,
+  RefreshCw,
+  X,
+  Search,
+} from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Header from "../components/Header";
