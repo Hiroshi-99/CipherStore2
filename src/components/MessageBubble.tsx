@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import LoadingSpinner from "./LoadingSpinner";
 import type { Message } from "../types/chat";
 import { formatDistanceToNow } from "date-fns";
+import { toast } from "react-hot-toast";
+import { Copy } from "lucide-react";
 
 interface MessageBubbleProps {
   message: Message;
@@ -33,6 +35,9 @@ export const MessageBubble = React.memo(function MessageBubble({
   const relativeTime = formatDistanceToNow(new Date(message.created_at), {
     addSuffix: true,
   });
+
+  // First, check if the message is an account details message
+  const isAccountDetails = message.is_account_details;
 
   return (
     <div
@@ -72,10 +77,118 @@ export const MessageBubble = React.memo(function MessageBubble({
             {relativeTime}
           </span>
         </div>
-        {message.content && (
-          <p className="text-white/90 whitespace-pre-wrap break-words">
+        {isAccountDetails ? (
+          <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <div className="font-medium text-blue-800 mb-2">
+              Account Details
+            </div>
+            <div className="space-y-3">
+              {message.content.split("\n").map((line, i) => {
+                if (line.startsWith("**Account ID:**")) {
+                  const value = line.replace("**Account ID:**", "").trim();
+                  return (
+                    <div key={i} className="flex justify-between items-center">
+                      <div>
+                        <span className="text-gray-600 font-medium">
+                          Account ID:
+                        </span>
+                        <span className="ml-2 font-mono">{value}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(value);
+                          toast.success("Account ID copied to clipboard");
+                        }}
+                        className="p-1 text-blue-500 hover:bg-blue-100 rounded"
+                      >
+                        <Copy size={16} />
+                      </button>
+                    </div>
+                  );
+                } else if (line.startsWith("**Password:**")) {
+                  const value = line.replace("**Password:**", "").trim();
+                  return (
+                    <div key={i} className="flex justify-between items-center">
+                      <div>
+                        <span className="text-gray-600 font-medium">
+                          Password:
+                        </span>
+                        <span className="ml-2">{value}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(value);
+                          toast.success("Password copied to clipboard");
+                        }}
+                        className="p-1 text-blue-500 hover:bg-blue-100 rounded"
+                      >
+                        <Copy size={16} />
+                      </button>
+                    </div>
+                  );
+                } else if (line.startsWith("**Login Method:**")) {
+                  const value = line.replace("**Login Method:**", "").trim();
+                  return (
+                    <div key={i} className="flex justify-between items-center">
+                      <div>
+                        <span className="text-gray-600 font-medium">
+                          Login Method:
+                        </span>
+                        <span className="ml-2">{value}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(value);
+                          toast.success("Login Method copied to clipboard");
+                        }}
+                        className="p-1 text-blue-500 hover:bg-blue-100 rounded"
+                      >
+                        <Copy size={16} />
+                      </button>
+                    </div>
+                  );
+                } else if (line.startsWith("**Character ID:**")) {
+                  const value = line.replace("**Character ID:**", "").trim();
+                  return (
+                    <div key={i} className="flex justify-between items-center">
+                      <div>
+                        <span className="text-gray-600 font-medium">
+                          Character ID:
+                        </span>
+                        <span className="ml-2 font-mono">{value}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(value);
+                          toast.success("Character ID copied to clipboard");
+                        }}
+                        className="p-1 text-blue-500 hover:bg-blue-100 rounded"
+                      >
+                        <Copy size={16} />
+                      </button>
+                    </div>
+                  );
+                } else if (
+                  line.trim() &&
+                  !line.includes("Please keep these details")
+                ) {
+                  return (
+                    <p key={i} className="text-gray-700">
+                      {line}
+                    </p>
+                  );
+                }
+                return null;
+              })}
+              <p className="text-xs text-gray-500 mt-2">
+                Please keep these details secure.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="whitespace-pre-wrap break-words">
             {message.content}
-          </p>
+          </div>
         )}
         {message.image_url && (
           <div
