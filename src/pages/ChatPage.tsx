@@ -794,9 +794,12 @@ function ChatPage() {
     }
   };
 
-  // Add this function to set up realtime messaging
+  // Simplify the setupRealtimeMessaging function to be more robust
   const setupRealtimeMessaging = useCallback(
     (orderId: string) => {
+      // Skip realtime setup in fallback mode
+      if (fallbackMode) return () => {};
+
       try {
         // Clean up any existing subscription
         if (realtimeSubscription.current) {
@@ -808,56 +811,51 @@ function ChatPage() {
         }
 
         // Set up new subscription for this order
-        try {
-          const channel = supabase
-            .channel(`order-${orderId}`)
-            .on(
-              "postgres_changes",
-              {
-                event: "INSERT",
-                schema: "public",
-                table: "messages",
-                filter: `order_id=eq.${orderId}`,
-              },
-              (payload) => {
-                try {
-                  const newMessage = payload.new as Message;
+        const channel = supabase
+          .channel(`order-${orderId}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "messages",
+              filter: `order_id=eq.${orderId}`,
+            },
+            (payload) => {
+              try {
+                const newMessage = payload.new as Message;
 
-                  // Check if we already have this message
-                  const messageExists = messages.some(
-                    (m) => m.id === newMessage.id
-                  );
-
-                  if (!messageExists) {
-                    setMessages((prev) => [...prev, newMessage]);
+                // Check if we already have this message
+                setMessages((prev) => {
+                  if (prev.some((m) => m.id === newMessage.id)) {
+                    return prev;
                   }
-                } catch (messageErr) {
-                  console.error("Error processing message:", messageErr);
-                }
+                  return [...prev, newMessage];
+                });
+              } catch (err) {
+                console.error("Error processing realtime message:", err);
               }
-            )
-            .subscribe();
+            }
+          )
+          .subscribe((status) => {
+            console.log("Realtime subscription status:", status);
+          });
 
-          realtimeSubscription.current = channel;
-        } catch (subscribeErr) {
-          console.error("Error subscribing to channel:", subscribeErr);
-        }
+        realtimeSubscription.current = channel;
 
         return () => {
-          if (realtimeSubscription.current) {
-            try {
-              supabase.removeChannel(realtimeSubscription.current);
-            } catch (removeErr) {
-              console.error("Error removing channel:", removeErr);
-            }
+          try {
+            supabase.removeChannel(channel);
+          } catch (err) {
+            console.error("Error removing channel:", err);
           }
         };
       } catch (err) {
-        console.error("Error in setupRealtimeMessaging:", err);
+        console.error("Error setting up realtime messaging:", err);
         return () => {};
       }
     },
-    [messages]
+    [fallbackMode]
   );
 
   // Add a notification sound function
@@ -1068,464 +1066,463 @@ function ChatPage() {
   // Add this function to handle critical errors
   const handleCriticalError = (error: any) => {
     console.error("Critical error in ChatPage:", error);
+
+    // Log detailed error information
+    if (error instanceof Error) {
+      console.error({
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      console.error("Unknown error type:", error);
+    }
+
+    // Set fallback mode and finish loading
     setFallbackMode(true);
     setLoading(false);
     setInitializing(false);
 
-    // Log detailed error information
-    if (error instanceof Error) {
-      console.error("Error name:", error.name);
-      console.error("Error message:", error.message);
-      console.error("Error stack:", error.stack);
+    // Try to recover by clearing any problematic state
+    setMessages([]);
+    setSelectedOrderId(null);
+
+    // Clean up any subscriptions that might be causing issues
+    if (realtimeSubscription.current) {
+      try {
+        supabase.removeChannel(realtimeSubscription.current);
+        realtimeSubscription.current = null;
+      } catch (cleanupErr) {
+        console.error("Error cleaning up subscription:", cleanupErr);
+      }
     }
   };
 
-  if (initializing) {
-    return (
-      <PageContainer title="CHAT" user={user}>
-        <main className="max-w-screen-xl mx-auto pb-16 flex items-center justify-center min-h-screen">
-          <div className="text-center">
-            <LoadingSpinner size="lg" light />
-            <p className="mt-4 text-white/70">Loading chat...</p>
-          </div>
-        </main>
-      </PageContainer>
-    );
-  }
-
-  if (fallbackMode) {
-    return (
-      <PageContainer title="CHAT" user={user}>
-        <main className="max-w-screen-xl mx-auto pb-16">
-          <div className="min-h-[calc(100vh-5rem)] flex flex-col">
-            <div className="p-4 border-b border-white/10">
-              <h2 className="text-lg font-medium text-white">
-                Chat (Fallback Mode)
-              </h2>
-              <p className="text-sm text-white/50">
-                Database connection unavailable - using local storage
-              </p>
+  try {
+    if (initializing) {
+      return (
+        <PageContainer title="CHAT" user={user}>
+          <main className="max-w-screen-xl mx-auto pb-16 flex items-center justify-center min-h-screen">
+            <div className="text-center">
+              <LoadingSpinner size="lg" light />
+              <p className="mt-4 text-white/70">Loading chat...</p>
             </div>
+          </main>
+        </PageContainer>
+      );
+    }
 
-            <div className="flex flex-1">
-              {/* Simplified sidebar */}
-              <div className="w-64 border-r border-white/10 p-4 hidden md:block">
-                <h3 className="text-white font-medium mb-4">Orders</h3>
-                <div className="space-y-2">
-                  <button
-                    className="w-full text-left p-2 rounded bg-white/10 hover:bg-white/20 transition-colors"
-                    onClick={() => {
-                      // Set up a local chat
-                      setMessages([
-                        {
-                          id: "local-1",
-                          content: "Hello! How can I help you today?",
-                          user_name: "Support",
-                          user_avatar: "",
-                          is_admin: true,
-                          created_at: new Date().toISOString(),
-                          order_id: "local-order",
-                          user_id: "admin",
-                          is_read: true,
-                        },
-                      ]);
-                    }}
-                  >
-                    Fallback Order
-                  </button>
-                </div>
+    if (fallbackMode) {
+      return (
+        <PageContainer title="CHAT" user={user}>
+          <main className="max-w-screen-xl mx-auto pb-16">
+            <div className="min-h-[calc(100vh-5rem)] flex flex-col">
+              <div className="p-4 border-b border-white/10">
+                <h2 className="text-lg font-medium text-white">
+                  Chat (Fallback Mode)
+                </h2>
+                <p className="text-sm text-white/50">
+                  Using simplified chat mode
+                </p>
               </div>
 
-              {/* Simplified chat area */}
-              <div className="flex-1 flex flex-col">
-                <div className="flex-1 p-4 overflow-y-auto">
-                  {messages.length === 0 ? (
-                    <div className="h-full flex items-center justify-center">
-                      <div className="text-center text-white/50">
-                        <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                        <p>No messages yet</p>
-                        <p className="text-sm mt-2">
-                          Start the conversation by sending a message
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {messages.map((message) => (
-                        <div
-                          key={message.id}
-                          className={`p-3 rounded-lg max-w-[80%] ${
-                            message.is_admin
-                              ? "bg-blue-500/20 text-blue-100 mr-auto"
-                              : "bg-emerald-500/20 text-emerald-100 ml-auto"
-                          }`}
-                        >
-                          <div className="text-sm font-medium mb-1">
-                            {message.user_name}
-                          </div>
-                          <div>{message.content}</div>
-                          {message.image_url && (
-                            <img
-                              src={message.image_url}
-                              alt="Attached"
-                              className="mt-2 rounded-lg max-h-40"
-                            />
-                          )}
-                          <div className="text-xs opacity-70 mt-1 text-right">
-                            {new Date(message.created_at).toLocaleTimeString(
-                              [],
-                              {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              }
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+              {/* Simplified chat UI */}
+              <div className="flex-1 flex flex-col p-4">
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center text-white/50">
+                    <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>Start a new conversation</p>
+                    <button
+                      onClick={() => {
+                        setMessages([
+                          {
+                            id: "fallback-1",
+                            content: "Hello! How can I help you today?",
+                            user_name: "Support",
+                            user_avatar: "",
+                            is_admin: true,
+                            created_at: new Date().toISOString(),
+                            order_id: "fallback",
+                            user_id: "admin",
+                            is_read: true,
+                          },
+                        ]);
+                        setSelectedOrderId("fallback");
+                      }}
+                      className="mt-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded text-white transition-colors"
+                    >
+                      Start Chat
+                    </button>
+                  </div>
                 </div>
 
-                <div className="p-4 border-t border-white/10">
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (!newMessage.trim()) return;
+                {selectedOrderId && (
+                  <div className="mt-4">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!newMessage.trim()) return;
 
-                      // Add local message
-                      const newMsg: Message = {
-                        id: `local-${Date.now()}`,
-                        content: newMessage,
-                        user_name: user?.user_metadata?.full_name || "You",
-                        user_avatar: user?.user_metadata?.avatar_url || "",
-                        is_admin: false,
-                        created_at: new Date().toISOString(),
-                        order_id: "local-order",
-                        user_id: user?.id || "anonymous",
-                        is_read: true,
-                      };
-
-                      setMessages((prev) => [...prev, newMsg]);
-                      setNewMessage("");
-
-                      // Simulate response after 1 second
-                      setTimeout(() => {
-                        const responseMsg: Message = {
-                          id: `local-${Date.now() + 1}`,
-                          content:
-                            "This is a fallback mode response. The database is currently unavailable.",
-                          user_name: "Support",
-                          user_avatar: "",
-                          is_admin: true,
+                        // Add message
+                        const newMsg: Message = {
+                          id: `fallback-${Date.now()}`,
+                          content: newMessage,
+                          user_name: user?.user_metadata?.full_name || "You",
+                          user_avatar: user?.user_metadata?.avatar_url || "",
+                          is_admin: false,
                           created_at: new Date().toISOString(),
-                          order_id: "local-order",
-                          user_id: "system",
+                          order_id: "fallback",
+                          user_id: user?.id || "anonymous",
                           is_read: true,
                         };
-                        setMessages((prev) => [...prev, responseMsg]);
-                      }, 1000);
-                    }}
-                  >
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
-                        placeholder="Type your message..."
-                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!newMessage.trim()}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <Send className="w-6 h-6" />
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </div>
-        </main>
-      </PageContainer>
-    );
-  }
 
-  if (error) {
-    return (
-      <PageContainer title="CHAT" user={user}>
-        <main className="max-w-screen-xl mx-auto pb-16">
-          <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
-            <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
-              <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
-              <h2 className="text-xl text-white mb-2">Connection Error</h2>
-              <p className="text-white/70 mb-6">{error}</p>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
-              >
-                Refresh Page
-              </button>
-            </div>
-          </div>
-        </main>
-      </PageContainer>
-    );
-  }
+                        setMessages((prev) => [...prev, newMsg]);
+                        setNewMessage("");
 
-  return (
-    <PageContainer title="CHAT" showBack user={user}>
-      <main className="max-w-screen-xl mx-auto pb-16" {...swipeHandlers}>
-        <div className="flex h-[calc(100vh-5rem)]">
-          {/* Sidebar */}
-          <div
-            className={`fixed inset-y-0 left-0 z-20 w-80 bg-black/80 backdrop-blur-md transform transition-transform duration-300 ease-in-out ${
-              showSidebar ? "translate-x-0" : "-translate-x-full"
-            } md:relative md:translate-x-0`}
-          >
-            <div className="flex flex-col h-full p-4">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-white">Orders</h2>
-                <button
-                  onClick={() => setShowSidebar(false)}
-                  className="md:hidden text-white/70 hover:text-white"
-                >
-                  <XIcon className="w-6 h-6" />
-                </button>
-              </div>
-
-              <div className="mb-4">
-                <input
-                  type="text"
-                  placeholder="Search orders..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-              </div>
-
-              <div className="flex-1 overflow-y-auto">
-                {filteredOrders.length === 0 ? (
-                  <div className="text-center text-white/50 py-8">
-                    No orders found
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {filteredOrders.map((order) => (
-                      <button
-                        key={order.id}
-                        onClick={() => {
-                          setSelectedOrderId(order.id);
-                          fetchMessages(order.id);
-                          setShowSidebar(false);
-                        }}
-                        className={`w-full text-left p-3 rounded-lg transition-colors ${
-                          selectedOrderId === order.id
-                            ? "bg-emerald-500/20 text-emerald-400"
-                            : "bg-white/5 text-white hover:bg-white/10"
-                        }`}
-                      >
-                        <div className="font-medium">
-                          Order #{order.id.slice(0, 8)}
-                        </div>
-                        {isAdmin && order.messages?.length && (
-                          <div className="text-xs text-emerald-400 mt-1">
-                            {order.messages.length} message
-                            {order.messages.length !== 1 ? "s" : ""}
-                          </div>
-                        )}
-                      </button>
-                    ))}
+                        // Simulate response
+                        setTimeout(() => {
+                          const responseMsg: Message = {
+                            id: `fallback-${Date.now() + 1}`,
+                            content:
+                              "I'm here to help! This is a fallback mode response.",
+                            user_name: "Support",
+                            user_avatar: "",
+                            is_admin: true,
+                            created_at: new Date().toISOString(),
+                            order_id: "fallback",
+                            user_id: "admin",
+                            is_read: true,
+                          };
+                          setMessages((prev) => [...prev, responseMsg]);
+                        }, 1000);
+                      }}
+                    >
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newMessage}
+                          onChange={(e) => setNewMessage(e.target.value)}
+                          placeholder="Type your message..."
+                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newMessage.trim()}
+                          className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Send className="w-6 h-6" />
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 )}
               </div>
             </div>
-          </div>
+          </main>
+        </PageContainer>
+      );
+    }
 
-          {/* Chat area */}
-          <div className="flex-1 flex flex-col h-full">
-            {/* Chat header */}
-            <div className="p-4 border-b border-white/10 flex justify-between items-center">
-              <div className="flex items-center gap-2">
+    if (error) {
+      return (
+        <PageContainer title="CHAT" user={user}>
+          <main className="max-w-screen-xl mx-auto pb-16">
+            <div className="min-h-[calc(100vh-5rem)] flex items-center justify-center">
+              <div className="backdrop-blur-md bg-black/30 p-8 rounded-2xl max-w-md text-center">
+                <ChatIcon className="w-16 h-16 mx-auto mb-4 text-emerald-500/50" />
+                <h2 className="text-xl text-white mb-2">Connection Error</h2>
+                <p className="text-white/70 mb-6">{error}</p>
                 <button
-                  onClick={() => setShowSidebar(true)}
-                  className="md:hidden text-white/70 hover:text-white"
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
                 >
-                  <XIcon className="w-6 h-6" />
+                  Refresh Page
                 </button>
-                <h2 className="text-lg font-medium text-white">
-                  {selectedOrderId
-                    ? `Order #${selectedOrderId.slice(0, 8)}`
-                    : "Select an order"}
-                </h2>
               </div>
             </div>
+          </main>
+        </PageContainer>
+      );
+    }
 
-            {/* Messages area */}
-            {selectedOrderId ? (
-              <>
-                <div
-                  className="flex-1 overflow-y-auto p-4"
-                  onTouchStart={handleTouchStart}
-                  onTouchMove={handleTouchMove}
-                  onTouchEnd={handleTouchEnd}
-                >
-                  <div
-                    ref={refreshAreaRef}
-                    className="flex items-center justify-center transition-all duration-200 overflow-hidden"
-                    style={{ height: 0, opacity: 0 }}
+    return (
+      <PageContainer title="CHAT" showBack user={user}>
+        <main className="max-w-screen-xl mx-auto pb-16" {...swipeHandlers}>
+          <div className="flex h-[calc(100vh-5rem)]">
+            {/* Sidebar */}
+            <div
+              className={`fixed inset-y-0 left-0 z-20 w-80 bg-black/80 backdrop-blur-md transform transition-transform duration-300 ease-in-out ${
+                showSidebar ? "translate-x-0" : "-translate-x-full"
+              } md:relative md:translate-x-0`}
+            >
+              <div className="flex flex-col h-full p-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold text-white">Orders</h2>
+                  <button
+                    onClick={() => setShowSidebar(false)}
+                    className="md:hidden text-white/70 hover:text-white"
                   >
-                    <RefreshCw
-                      className={`w-6 h-6 text-white/70 ${
-                        refreshing ? "animate-spin" : ""
-                      }`}
-                    />
-                  </div>
+                    <XIcon className="w-6 h-6" />
+                  </button>
+                </div>
 
-                  {loading ? (
-                    <div className="h-full flex items-center justify-center">
-                      <LoadingSpinner size="lg" light />
-                    </div>
-                  ) : error ? (
-                    <div className="h-full flex items-center justify-center">
-                      <div className="text-center">
-                        <p className="text-red-400 mb-2">{error}</p>
-                        <button
-                          onClick={() => fetchMessages(selectedOrderId)}
-                          className="px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
-                        >
-                          Try Again
-                        </button>
-                      </div>
-                    </div>
-                  ) : messages.length === 0 ? (
-                    <div className="h-full flex items-center justify-center">
-                      <div className="text-center text-white/50">
-                        <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                        <p>No messages yet</p>
-                        <p className="text-sm mt-2">
-                          Start the conversation by sending a message
-                        </p>
-                      </div>
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    placeholder="Search orders..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                  />
+                </div>
+
+                <div className="flex-1 overflow-y-auto">
+                  {filteredOrders.length === 0 ? (
+                    <div className="text-center text-white/50 py-8">
+                      No orders found
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      {messages.map((message, index) => (
-                        <MessageBubble
-                          key={message.id}
-                          message={message}
-                          isLatest={index === messages.length - 1}
-                          sending={false}
-                          isUnread={unreadMessages.has(message.id)}
-                          onRetry={() => handleRetry(message.id)}
-                          isPending={pendingMessages.current.has(message.id)}
-                        />
+                    <div className="space-y-2">
+                      {filteredOrders.map((order) => (
+                        <button
+                          key={order.id}
+                          onClick={() => {
+                            setSelectedOrderId(order.id);
+                            fetchMessages(order.id);
+                            setShowSidebar(false);
+                          }}
+                          className={`w-full text-left p-3 rounded-lg transition-colors ${
+                            selectedOrderId === order.id
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-white/5 text-white hover:bg-white/10"
+                          }`}
+                        >
+                          <div className="font-medium">
+                            Order #{order.id.slice(0, 8)}
+                          </div>
+                          {isAdmin && order.messages?.length && (
+                            <div className="text-xs text-emerald-400 mt-1">
+                              {order.messages.length} message
+                              {order.messages.length !== 1 ? "s" : ""}
+                            </div>
+                          )}
+                        </button>
                       ))}
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
 
-                {/* Message input */}
-                <div className="p-4 border-t border-white/10">
-                  <form onSubmit={handleSendMessage}>
-                    {imagePreview && (
-                      <div className="mb-4 relative inline-block">
-                        <img
-                          src={imagePreview}
-                          alt="Preview"
-                          className="max-h-40 rounded-lg"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedImage(null);
-                            setImagePreview(null);
-                          }}
-                          className="absolute -top-2 -right-2 bg-black/50 rounded-full p-1 text-white hover:bg-black/70 transition-colors"
-                        >
-                          <XIcon className="w-4 h-4" />
-                        </button>
+            {/* Chat area */}
+            <div className="flex-1 flex flex-col h-full">
+              {/* Chat header */}
+              <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowSidebar(true)}
+                    className="md:hidden text-white/70 hover:text-white"
+                  >
+                    <XIcon className="w-6 h-6" />
+                  </button>
+                  <h2 className="text-lg font-medium text-white">
+                    {selectedOrderId
+                      ? `Order #${selectedOrderId.slice(0, 8)}`
+                      : "Select an order"}
+                  </h2>
+                </div>
+              </div>
+
+              {/* Messages area */}
+              {selectedOrderId ? (
+                <>
+                  <div
+                    className="flex-1 overflow-y-auto p-4"
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                  >
+                    <div
+                      ref={refreshAreaRef}
+                      className="flex items-center justify-center transition-all duration-200 overflow-hidden"
+                      style={{ height: 0, opacity: 0 }}
+                    >
+                      <RefreshCw
+                        className={`w-6 h-6 text-white/70 ${
+                          refreshing ? "animate-spin" : ""
+                        }`}
+                      />
+                    </div>
+
+                    {loading ? (
+                      <div className="h-full flex items-center justify-center">
+                        <LoadingSpinner size="lg" light />
+                      </div>
+                    ) : error ? (
+                      <div className="h-full flex items-center justify-center">
+                        <div className="text-center">
+                          <p className="text-red-400 mb-2">{error}</p>
+                          <button
+                            onClick={() => fetchMessages(selectedOrderId)}
+                            className="px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors"
+                          >
+                            Try Again
+                          </button>
+                        </div>
+                      </div>
+                    ) : messages.length === 0 ? (
+                      <div className="h-full flex items-center justify-center">
+                        <div className="text-center text-white/50">
+                          <ChatIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                          <p>No messages yet</p>
+                          <p className="text-sm mt-2">
+                            Start the conversation by sending a message
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {messages.map((message, index) => (
+                          <MessageBubble
+                            key={message.id}
+                            message={message}
+                            isLatest={index === messages.length - 1}
+                            sending={false}
+                            isUnread={unreadMessages.has(message.id)}
+                            onRetry={() => handleRetry(message.id)}
+                            isPending={pendingMessages.current.has(message.id)}
+                          />
+                        ))}
                       </div>
                     )}
+                  </div>
 
-                    <div className="flex gap-2">
-                      <input
-                        type="file"
-                        ref={fileInputRef}
-                        onChange={handleImageSelect}
-                        accept="image/*"
-                        className="hidden"
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
-                        disabled={sending}
-                      >
-                        <ImageIcon className="w-6 h-6" />
-                      </button>
-
-                      {typingUsers.size > 0 && (
-                        <div className="text-xs text-white/60 italic mb-1 h-4">
-                          {Array.from(typingUsers).join(", ")}{" "}
-                          {typingUsers.size === 1 ? "is" : "are"} typing...
+                  {/* Message input */}
+                  <div className="p-4 border-t border-white/10">
+                    <form onSubmit={handleSendMessage}>
+                      {imagePreview && (
+                        <div className="mb-4 relative inline-block">
+                          <img
+                            src={imagePreview}
+                            alt="Preview"
+                            className="max-h-40 rounded-lg"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedImage(null);
+                              setImagePreview(null);
+                            }}
+                            className="absolute -top-2 -right-2 bg-black/50 rounded-full p-1 text-white hover:bg-black/70 transition-colors"
+                          >
+                            <XIcon className="w-4 h-4" />
+                          </button>
                         </div>
                       )}
 
-                      <input
-                        type="text"
-                        value={newMessage}
-                        onChange={(e) => {
-                          setNewMessage(e.target.value);
-                          handleTyping();
-                        }}
-                        placeholder="Type your message..."
-                        className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                        disabled={sending}
-                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleImageSelect}
+                          accept="image/*"
+                          className="hidden"
+                        />
 
-                      <button
-                        type="submit"
-                        disabled={
-                          (!newMessage.trim() && !selectedImage) || sending
-                        }
-                        className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {sending ? (
-                          <RefreshCw className="w-6 h-6 animate-spin" />
-                        ) : (
-                          <Send className="w-6 h-6" />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
+                          disabled={sending}
+                        >
+                          <ImageIcon className="w-6 h-6" />
+                        </button>
+
+                        {typingUsers.size > 0 && (
+                          <div className="text-xs text-white/60 italic mb-1 h-4">
+                            {Array.from(typingUsers).join(", ")}{" "}
+                            {typingUsers.size === 1 ? "is" : "are"} typing...
+                          </div>
                         )}
-                      </button>
-                    </div>
-                  </form>
+
+                        <input
+                          type="text"
+                          value={newMessage}
+                          onChange={(e) => {
+                            setNewMessage(e.target.value);
+                            handleTyping();
+                          }}
+                          placeholder="Type your message..."
+                          className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                          disabled={sending}
+                        />
+
+                        <button
+                          type="submit"
+                          disabled={
+                            (!newMessage.trim() && !selectedImage) || sending
+                          }
+                          className="bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {sending ? (
+                            <RefreshCw className="w-6 h-6 animate-spin" />
+                          ) : (
+                            <Send className="w-6 h-6" />
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center text-white/50">
+                    <ChatIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                    <p className="text-lg">Select an order to start chatting</p>
+                    <p className="text-sm text-center max-w-md">
+                      Choose an order from the sidebar to start a conversation
+                      with support
+                    </p>
+                    <button
+                      onClick={() => setShowSidebar(true)}
+                      className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-4"
+                    >
+                      View Orders
+                    </button>
+                  </div>
                 </div>
-              </>
-            ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center text-white/50">
-                  <ChatIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                  <p className="text-lg">Select an order to start chatting</p>
-                  <p className="text-sm text-center max-w-md">
-                    Choose an order from the sidebar to start a conversation
-                    with support
-                  </p>
-                  <button
-                    onClick={() => setShowSidebar(true)}
-                    className="md:hidden px-4 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors mt-4"
-                  >
-                    View Orders
-                  </button>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
-      </main>
-    </PageContainer>
-  );
+        </main>
+      </PageContainer>
+    );
+  } catch (renderError) {
+    console.error("Error rendering ChatPage:", renderError);
+
+    // Super simple fallback UI that should never fail
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-4 flex flex-col items-center justify-center">
+        <h1 className="text-xl mb-4">Chat Error</h1>
+        <p className="mb-4">
+          We encountered an error loading the chat interface.
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-emerald-500 rounded"
+        >
+          Reload Page
+        </button>
+        <button
+          onClick={() => navigate("/")}
+          className="px-4 py-2 bg-blue-500 rounded mt-2"
+        >
+          Go to Home
+        </button>
+      </div>
+    );
+  }
 }
 
 export default React.memo(ChatPage);
