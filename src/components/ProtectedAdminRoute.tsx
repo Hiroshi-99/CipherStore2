@@ -1,6 +1,6 @@
 import React from "react";
 import { Navigate } from "react-router-dom";
-import { useAdmin } from "../contexts/AdminContext";
+import { useAdmin } from "../context/AdminContext";
 import LoadingSpinner from "./LoadingSpinner";
 
 interface ProtectedAdminRouteProps {

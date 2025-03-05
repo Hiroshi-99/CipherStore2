@@ -242,6 +242,12 @@ export const deliverAccountDirectly = async (orderId: string) => {
       }
     }
 
+    // Add this to deliverAccountDirectly
+    const storeResult = storeAccountLocally(orderId, accountId, password);
+    if (storeResult) {
+      console.log("Account stored in local storage as fallback");
+    }
+
     return {
       success: true,
       accountId,
@@ -254,5 +260,35 @@ export const deliverAccountDirectly = async (orderId: string) => {
       success: false,
       error: err,
     };
+  }
+};
+
+// Add a robust fallback system for stored accounts
+export const getStoredAccounts = () => {
+  try {
+    return JSON.parse(localStorage.getItem("account_credentials") || "{}");
+  } catch (e) {
+    return {};
+  }
+};
+
+export const storeAccountLocally = (
+  orderId: string,
+  accountId: string,
+  password: string
+) => {
+  try {
+    const accounts = getStoredAccounts();
+    accounts[orderId] = {
+      accountId,
+      password,
+      timestamp: new Date().toISOString(),
+      status: "active",
+    };
+    localStorage.setItem("account_credentials", JSON.stringify(accounts));
+    return true;
+  } catch (e) {
+    console.error("Failed to store account locally:", e);
+    return false;
   }
 };
