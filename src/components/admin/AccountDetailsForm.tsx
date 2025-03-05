@@ -6,6 +6,7 @@ import { generateUUID } from "../../utils/uuid";
 
 interface AccountDetailsFormProps {
   orderId: string;
+  onSuccess?: (accountId: string, password: string) => void;
 }
 
 interface AccountDetails {
@@ -13,156 +14,172 @@ interface AccountDetails {
   password: string;
 }
 
-const AccountDetailsForm: React.FC<AccountDetailsFormProps> = ({ orderId }) => {
+const AccountDetailsForm: React.FC<AccountDetailsFormProps> = ({
+  orderId,
+  onSuccess,
+}) => {
   const [localAccountDetails, setLocalAccountDetails] = useState({
     accountId: "",
     password: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errors, setErrors] = useState<{
+    accountId?: string;
+    password?: string;
+  }>({});
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Reset errors
+    setErrors({});
+
+    // Validate form
+    const newErrors: {
+      accountId?: string;
+      password?: string;
+    } = {};
+
     if (!localAccountDetails.accountId.trim()) {
-      toast.error("Account ID is required");
+      newErrors.accountId = "Account ID is required";
+    }
+
+    if (!localAccountDetails.password.trim()) {
+      newErrors.password = "Password is required";
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
       return;
     }
 
+    // Start submission
     setIsSubmitting(true);
 
     try {
       // Update the order with account details
-      const { error: updateError } = await supabase
+      const { error } = await supabase
         .from("orders")
         .update({
           account_id: localAccountDetails.accountId,
           account_password: localAccountDetails.password,
-          delivery_date: new Date().toISOString(),
           status: "delivered",
+          delivery_date: new Date().toISOString(),
         })
         .eq("id", orderId);
 
-      if (updateError) {
-        console.error(
-          "Error updating order with account details:",
-          updateError
-        );
+      if (error) {
+        console.error("Error delivering account:", error);
         toast.error("Failed to deliver account details");
         return;
       }
 
-      // Send a message to the user with their account details
-      const { data: orderData } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("id", orderId)
-        .single();
-
-      if (orderData) {
-        // Create a message with the account details
-        const message = {
-          id: generateUUID(),
-          order_id: orderId,
-          content: `Your account is ready! Here are your login details:\n\nAccount ID: ${localAccountDetails.accountId}\nPassword: ${localAccountDetails.password}\n\nPlease save these details securely.`,
-          created_at: new Date().toISOString(),
-          user_id: null, // System message
-          is_read: false,
-          user_name: "Support Team",
-          user_avatar: "https://i.imgur.com/eyaDC8l.png",
-        };
-
-        // Insert the message
-        const { error: messageError } = await supabase
-          .from("messages")
-          .insert(message);
-
-        if (messageError) {
-          console.error("Error sending account details message:", messageError);
-          // Continue anyway since the order was updated
-        }
-      }
-
+      // Success handling
       toast.success("Account details delivered successfully");
 
-      // Reset the form
+      // Clear form
       setLocalAccountDetails({
         accountId: "",
         password: "",
       });
+
+      // Call success callback if provided
+      if (onSuccess) {
+        onSuccess(localAccountDetails.accountId, localAccountDetails.password);
+      }
     } catch (err) {
-      console.error("Error in deliverAccountDetails:", err);
-      toast.error("Failed to deliver account details");
+      console.error("Error in account delivery:", err);
+      toast.error("An unexpected error occurred");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const generateRandomPassword = () => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setLocalAccountDetails((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const generatePassword = () => {
+    // Generate a more secure password - combination of letters, numbers, and special chars
     const chars =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
     let password = "";
     for (let i = 0; i < 12; i++) {
       password += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    setLocalAccountDetails((prev) => ({ ...prev, password }));
+
+    setLocalAccountDetails((prev) => ({
+      ...prev,
+      password,
+    }));
   };
 
   return (
-    <div className="bg-white/5 rounded-lg p-6 mt-4">
+    <div className="bg-white/5 rounded-lg p-6">
       <h3 className="text-lg font-medium text-white mb-4">
         Deliver Account Details
       </h3>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="accountId" className="block text-white/70 mb-2">
-            Account ID / Email <span className="text-red-400">*</span>
-          </label>
-          <input
-            id="accountId"
-            type="text"
-            value={localAccountDetails.accountId}
-            onChange={(e) =>
-              setLocalAccountDetails((prev) => ({
-                ...prev,
-                accountId: e.target.value,
-              }))
-            }
-            className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-            placeholder="Enter account ID or email"
-            required
-          />
-        </div>
-
-        <div>
-          <label htmlFor="password" className="block text-white/70 mb-2">
-            Password
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="password"
-              type="text"
-              value={localAccountDetails.password}
-              onChange={(e) =>
-                setLocalAccountDetails((prev) => ({
-                  ...prev,
-                  password: e.target.value,
-                }))
-              }
-              className="flex-1 bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-              placeholder="Enter password (optional)"
-            />
-            <button
-              type="button"
-              onClick={generateRandomPassword}
-              className="px-3 py-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
+      <form onSubmit={handleSubmit}>
+        <div className="space-y-4">
+          <div>
+            <label
+              htmlFor="accountId"
+              className="block text-sm font-medium text-white/70 mb-1"
             >
-              Generate
-            </button>
+              Account ID
+            </label>
+            <input
+              type="text"
+              id="accountId"
+              name="accountId"
+              value={localAccountDetails.accountId}
+              onChange={handleChange}
+              className={`w-full px-3 py-2 bg-white/10 border ${
+                errors.accountId ? "border-red-500" : "border-white/20"
+              } rounded-md text-white`}
+              placeholder="Enter account ID"
+            />
+            {errors.accountId && (
+              <p className="mt-1 text-sm text-red-500">{errors.accountId}</p>
+            )}
           </div>
-          <p className="text-white/50 text-sm mt-1">
-            Leave blank to only deliver the account ID
-          </p>
+
+          <div>
+            <label
+              htmlFor="password"
+              className="block text-sm font-medium text-white/70 mb-1"
+            >
+              Password
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                id="password"
+                name="password"
+                value={localAccountDetails.password}
+                onChange={handleChange}
+                className={`flex-1 px-3 py-2 bg-white/10 border ${
+                  errors.password ? "border-red-500" : "border-white/20"
+                } rounded-md text-white`}
+                placeholder="Enter password"
+              />
+              <button
+                type="button"
+                onClick={generatePassword}
+                className="px-3 py-2 bg-blue-500/30 text-blue-300 rounded-md hover:bg-blue-500/40 transition-colors"
+              >
+                Generate
+              </button>
+            </div>
+            {errors.password && (
+              <p className="mt-1 text-sm text-red-500">{errors.password}</p>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-end gap-3 mt-6">

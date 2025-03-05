@@ -11,6 +11,11 @@ interface OrderDetailModalProps {
   onFileUpload: (orderId: string, fileUrl: string) => void;
   setCurrentImageUrl: (url: string) => void;
   setShowImageModal: (show: boolean) => void;
+  onAccountDelivered?: (
+    orderId: string,
+    accountId: string,
+    password: string
+  ) => void;
 }
 
 const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
@@ -19,8 +24,28 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   onFileUpload,
   setCurrentImageUrl,
   setShowImageModal,
+  onAccountDelivered,
 }) => {
   if (!selectedOrderDetail) return null;
+
+  const handleAccountDeliverySuccess = (
+    accountId: string,
+    password: string
+  ) => {
+    if (selectedOrderDetail && onAccountDelivered) {
+      onAccountDelivered(selectedOrderDetail.id, accountId, password);
+    }
+
+    if (selectedOrderDetail) {
+      setSelectedOrderDetail({
+        ...selectedOrderDetail,
+        account_id: accountId,
+        account_password: password,
+        status: "delivered",
+        delivery_date: new Date().toISOString(),
+      });
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
@@ -135,7 +160,10 @@ const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 </div>
               </div>
             ) : selectedOrderDetail.status === "active" ? (
-              <AccountDetailsForm orderId={selectedOrderDetail.id} />
+              <AccountDetailsForm
+                orderId={selectedOrderDetail.id}
+                onSuccess={handleAccountDeliverySuccess}
+              />
             ) : null}
 
             {/* Account File Section */}
