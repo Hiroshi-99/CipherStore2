@@ -1330,16 +1330,19 @@ function AdminPage() {
   // Add this to the top of your component
   const perfMonitor = usePerformanceMonitor("AdminPage");
 
-  // Wrap expensive operations with the measure utility
+  // Replace the duplicate handleApprove with wrapped version
+  // Instead of creating a new function at line 1334, modify your original handleApprove definition:
+
   const handleApprove = perfMonitor.measure(
     "approve_order",
     useCallback(async (orderId: string) => {
-      const result = await handleApprove(orderId);
-      if (result?.success) {
-        updateLocalOrderStatus(orderId, "active");
-      }
-      return result;
-    }, [])
+      // Your existing handleApprove implementation
+      if (!confirm("Are you sure you want to approve this order?")) {
+        return { success: false };
+      
+      // Rest of your original function...
+      
+    }, [/* your dependencies */])
   );
 
   // Main admin dashboard
