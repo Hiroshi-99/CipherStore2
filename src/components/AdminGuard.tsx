@@ -11,14 +11,24 @@ const AdminGuard: React.FC<AdminGuardProps> = ({ children }) => {
   const { isAdmin, isAdminLoading, checkAdminStatus } = useAdmin();
 
   useEffect(() => {
-    // Check for dev override
-    const devOverride = window.localStorage.getItem("dev_admin_override");
-    if (devOverride === "true") {
+    const isProduction = process.env.NODE_ENV === "production";
+    const devOverride =
+      window.localStorage.getItem("dev_admin_override") === "true";
+
+    if (devOverride && !isProduction) {
       console.log("Using development admin override");
     } else {
-      // Refresh admin status on mount
       checkAdminStatus();
     }
+
+    // Create a periodic check to ensure admin status stays valid
+    const intervalId = setInterval(() => {
+      if (!devOverride || isProduction) {
+        checkAdminStatus();
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+
+    return () => clearInterval(intervalId);
   }, [checkAdminStatus]);
 
   // Handle dev override mode

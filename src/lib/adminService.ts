@@ -2,15 +2,45 @@ import { supabase } from "./supabase";
 import { safeInsert } from "./database";
 
 /**
- * Checks if a user has admin privileges
- * @param userId The user ID to check
- * @returns True if the user is an admin, false otherwise
+ * Checks if a user has admin privileges with better fallbacks
  */
 export const checkIfAdmin = async (userId: string) => {
   console.log("Checking admin status for user:", userId);
 
+  // First check for dev override
   try {
-    // First try to check admin_users table
+    const devAdminOverride =
+      typeof window !== "undefined" &&
+      window.localStorage.getItem("dev_admin_override") === "true";
+    if (devAdminOverride) {
+      console.log("Using development admin override");
+      return { isAdmin: true, success: true };
+    }
+  } catch (e) {
+    // Ignore localStorage errors
+  }
+
+  try {
+    // Try the serverless function first (more reliable)
+    try {
+      const response = await fetch("/.netlify/functions/admin-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result?.isAdmin) {
+          console.log("Admin status confirmed via serverless function");
+          return { isAdmin: true, success: true };
+        }
+      }
+    } catch (functionError) {
+      console.log("Serverless admin check failed, trying direct DB access");
+    }
+
+    // Fallback to direct database check
     try {
       const { data, error } = await supabase
         .from("admin_users")
@@ -19,55 +49,22 @@ export const checkIfAdmin = async (userId: string) => {
         .single();
 
       if (!error && data) {
-        console.log("User found in admin_users table:", data);
+        console.log("User found in admin_users table");
         return { isAdmin: true, success: true };
       }
-    } catch (adminTableError) {
-      console.log(
-        "Error checking admin_users table, trying alternative method"
-      );
+    } catch (dbError) {
+      console.log("Direct database check failed");
     }
 
-    // Try to use a serverless function instead of direct query
-    try {
-      // Try to get admin status from the serverless function
-      const response = await fetch("/.netlify/functions/check-admin-status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result?.data?.isAdmin) {
-          return { isAdmin: true, success: true };
-        }
-      }
-    } catch (functionError) {
-      console.log(
-        "Error using serverless function, falling back to local check"
-      );
-    }
-
-    // Final fallback: Check hardcoded admin list or localStorage
-    // This is for development purposes
-    const devAdminOverride =
-      localStorage.getItem("dev_admin_override") === "true";
-    if (devAdminOverride) {
-      console.log("Using development admin override");
-      return { isAdmin: true, success: true };
+    // Last attempt: force reload and check again if in dev mode
+    if (process.env.NODE_ENV === "development") {
+      console.log("Development mode: Consider using Force Admin mode button");
     }
 
     return { isAdmin: false, success: false };
   } catch (err) {
     console.error("Exception in checkIfAdmin:", err);
-    // Try the dev override as last resort
-    const devAdminOverride =
-      localStorage.getItem("dev_admin_override") === "true";
-    if (devAdminOverride) {
-      return { isAdmin: true, success: true };
-    }
-    return { isAdmin: false, success: false, error: "Internal error" };
+    return { isAdmin: false, success: false, error: String(err) };
   }
 };
 

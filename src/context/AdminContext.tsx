@@ -52,6 +52,13 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
 
       if (!session?.user) {
         setIsAdmin(false);
+        localStorage.setItem(
+          "admin_status",
+          JSON.stringify({
+            isAdmin: false,
+            timestamp: Date.now(),
+          })
+        );
         return;
       }
 
@@ -59,11 +66,17 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
       const result = await checkIfAdmin(session.user.id);
       console.log("Admin check result:", result);
 
-      if (result?.isAdmin || result?.success) {
-        setIsAdmin(true);
-      } else {
-        setIsAdmin(false);
-      }
+      const isAdminUser = !!(result?.isAdmin || result?.success);
+      setIsAdmin(isAdminUser);
+
+      // Cache result with timestamp
+      localStorage.setItem(
+        "admin_status",
+        JSON.stringify({
+          isAdmin: isAdminUser,
+          timestamp: Date.now(),
+        })
+      );
     } catch (err) {
       console.error("Error checking admin status:", err);
       setIsAdmin(false);
@@ -72,10 +85,49 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Run the check on initial load
-  useEffect(() => {
-    checkAdminStatus();
+  // Add this function to initialize admin status on first load
+  const initializeAdminStatus = useCallback(async () => {
+    try {
+      // Check localStorage for cached admin status with timestamp
+      const cachedStatus = localStorage.getItem("admin_status");
+      const now = Date.now();
+
+      if (cachedStatus) {
+        const { isAdmin: cachedIsAdmin, timestamp } = JSON.parse(cachedStatus);
+        const age = now - timestamp;
+
+        // Use cached result if less than 5 minutes old
+        if (age < 5 * 60 * 1000) {
+          console.log("Using cached admin status", cachedIsAdmin);
+          setIsAdmin(cachedIsAdmin);
+          setIsAdminLoading(false);
+          return;
+        }
+      }
+
+      // If no valid cache, check status
+      await checkAdminStatus();
+    } catch (err) {
+      console.error("Error initializing admin status:", err);
+      setIsAdminLoading(false);
+    }
   }, []);
+
+  // Use this in useEffect
+  useEffect(() => {
+    initializeAdminStatus();
+
+    // Also listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      checkAdminStatus();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [initializeAdminStatus]);
 
   const handleApprove = useCallback(async (orderId: string) => {
     if (!confirm("Are you sure you want to approve this order?")) {

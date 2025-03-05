@@ -1095,15 +1095,24 @@ function AdminPage() {
               Check Admin Status Again
             </button>
 
+            {process.env.NODE_ENV === "development" && (
+              <button
+                onClick={() => {
+                  console.log("Forcing admin mode for development only");
+                  window.localStorage.setItem("dev_admin_override", "true");
+                  window.location.reload();
+                }}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors w-full"
+              >
+                Force Admin Mode (Dev Only)
+              </button>
+            )}
+
             <button
-              onClick={() => {
-                console.log("Forcing admin mode for development only");
-                window.localStorage.setItem("dev_admin_override", "true");
-                window.location.reload();
-              }}
-              className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors w-full"
+              onClick={() => navigate("/")}
+              className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors w-full"
             >
-              Force Admin Mode (Dev Only)
+              Return to Homepage
             </button>
           </div>
         </div>
