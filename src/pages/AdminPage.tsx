@@ -1923,6 +1923,45 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add this function to handle file uploads from the OrderDetailModal
+  const onFileUpload = useCallback(async (orderId: string, fileUrl: string) => {
+    try {
+      toast.info("Updating order with new file...");
+
+      // Update the order with the new account file URL
+      const { error } = await supabase
+        .from("orders")
+        .update({ account_file_url: fileUrl })
+        .eq("id", orderId);
+
+      if (error) {
+        console.error("Error updating order with file:", error);
+        toast.error("Failed to update order with uploaded file");
+        return;
+      }
+
+      // Update local state
+      setOrders((prevOrders) =>
+        prevOrders.map((order) =>
+          order.id === orderId ? { ...order, account_file_url: fileUrl } : order
+        )
+      );
+
+      toast.success("Account file uploaded successfully");
+
+      // Optionally, you can update the selected order detail if it's open
+      if (selectedOrderDetail && selectedOrderDetail.id === orderId) {
+        setSelectedOrderDetail({
+          ...selectedOrderDetail,
+          account_file_url: fileUrl,
+        });
+      }
+    } catch (err) {
+      console.error("Error in onFileUpload:", err);
+      toast.error("Failed to process file upload");
+    }
+  }, []);
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
