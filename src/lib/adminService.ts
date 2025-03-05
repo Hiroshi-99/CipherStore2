@@ -8,17 +8,26 @@ import { getMockUsers, isDevelopmentWithNetworkIssues } from "./devFallbacks";
 export const checkIfAdmin = async (userId: string) => {
   console.log("Checking admin status for user:", userId);
 
-  // First check for dev override
-  try {
-    const devAdminOverride =
-      typeof window !== "undefined" &&
-      window.localStorage.getItem("dev_admin_override") === "true";
-    if (devAdminOverride) {
-      console.log("Using development admin override");
+  // Development mode overrides
+  if (process.env.NODE_ENV === "development") {
+    console.log("Development mode - using simplified admin check");
+    // Check for localStorage override first
+    try {
+      const devAdminOverride =
+        window.localStorage.getItem("dev_admin_override") === "true";
+      if (devAdminOverride) {
+        console.log("Using development admin override from localStorage");
+        return { isAdmin: true, success: true };
+      }
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+
+    // Allow a fallback if userId is undefined
+    if (!userId) {
+      console.log("No user ID in development mode, granting admin access");
       return { isAdmin: true, success: true };
     }
-  } catch (e) {
-    // Ignore localStorage errors
   }
 
   try {

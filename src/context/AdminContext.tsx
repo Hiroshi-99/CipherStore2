@@ -70,7 +70,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
         }
 
         console.log("Checking admin status for user:", session.user.id);
-        const result = await checkIfAdmin(session.user.user_metadata.id);
+        const result = await checkIfAdmin(session.user.id);
         console.log("Admin check result:", result);
 
         const isAdminUser = !!(result?.isAdmin || result?.success);
