@@ -1,11 +1,13 @@
-import React, { useState, useRef } from "react";
-import { Upload, X, Check, AlertCircle } from "lucide-react";
+import React, { useState, useRef, useCallback } from "react";
+import { Upload, X, Check, AlertCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabase";
 import { uploadImage } from "../lib/storage";
+import { generateUUID } from "../utils/uuid";
 
 interface FileUploadProps {
-  onUploadSuccess?: (url: string) => void;
+  orderId: string;
+  onUploadSuccess: (fileUrl: string) => void;
   onUploadError?: (error: Error) => void;
   acceptedFileTypes?: string;
   maxSizeMB?: number;
@@ -14,6 +16,7 @@ interface FileUploadProps {
 }
 
 const FileUpload: React.FC<FileUploadProps> = ({
+  orderId,
   onUploadSuccess,
   onUploadError,
   acceptedFileTypes = "image/*",
@@ -27,111 +30,88 @@ const FileUpload: React.FC<FileUploadProps> = ({
   const [preview, setPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleFileUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      try {
+        const files = event.target.files;
+        if (!files || files.length === 0) {
+          return;
+        }
 
-    // Validate file type
-    if (!file.type.match(acceptedFileTypes.replace("*", ""))) {
-      const errorMsg = `Invalid file type. Please upload ${acceptedFileTypes} files.`;
-      setError(errorMsg);
-      toast.error(errorMsg);
-      if (onUploadError) onUploadError(new Error(errorMsg));
-      return;
-    }
-
-    // Validate file size
-    if (file.size > maxSizeMB * 1024 * 1024) {
-      const errorMsg = `File too large. Maximum size is ${maxSizeMB}MB.`;
-      setError(errorMsg);
-      toast.error(errorMsg);
-      if (onUploadError) onUploadError(new Error(errorMsg));
-      return;
-    }
-
-    // Clear previous errors
-    setError(null);
-
-    // Show preview for images
-    if (file.type.startsWith("image/")) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setPreview(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-
-    // Start upload
-    setIsUploading(true);
-    setUploadProgress(10); // Initial progress
-
-    try {
-      // Get authentication token
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        throw new Error("You must be logged in to upload files");
-      }
-
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setUploadProgress((prev) => Math.min(prev + 10, 90));
-      }, 300);
-
-      // Generate a unique filename
-      const fileName = `${Date.now()}-${file.name.replace(
-        /[^a-zA-Z0-9.]/g,
-        "_"
-      )}`;
-
-      // Upload the file
-      const { data, error } = await uploadImage(
-        file,
-        fileName,
-        sessionData.session.access_token
-      );
-
-      clearInterval(progressInterval);
-
-      if (error) {
-        throw error;
-      }
-
-      // Complete progress
-      setUploadProgress(100);
-
-      // Get the URL
-      const fileUrl =
-        data.url ||
-        `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${
-          data.path
-        }`;
-
-      // Success
-      toast.success("File uploaded successfully!");
-      if (onUploadSuccess) onUploadSuccess(fileUrl);
-
-      // Reset the file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-
-      // Reset progress after a delay
-      setTimeout(() => {
+        setIsUploading(true);
         setUploadProgress(0);
+
+        const file = files[0];
+        const fileExt = file.name.split(".").pop();
+        const fileName = `${orderId}_${generateUUID()}.${fileExt}`;
+        const filePath = `account_files/${fileName}`;
+
+        // Validate file type
+        if (!file.type.match(acceptedFileTypes.replace("*", ""))) {
+          const errorMsg = `Invalid file type. Please upload ${acceptedFileTypes} files.`;
+          setError(errorMsg);
+          toast.error(errorMsg);
+          if (onUploadError) onUploadError(new Error(errorMsg));
+          return;
+        }
+
+        // Validate file size
+        if (file.size > maxSizeMB * 1024 * 1024) {
+          const errorMsg = `File too large. Maximum size is ${maxSizeMB}MB.`;
+          setError(errorMsg);
+          toast.error(errorMsg);
+          if (onUploadError) onUploadError(new Error(errorMsg));
+          return;
+        }
+
+        // Show preview for images
+        if (file.type.startsWith("image/")) {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            setPreview(e.target?.result as string);
+          };
+          reader.readAsDataURL(file);
+        }
+
+        // Upload the file to Supabase Storage
+        const { data, error } = await supabase.storage
+          .from("account-files")
+          .upload(filePath, file, {
+            cacheControl: "3600",
+            upsert: false,
+            onUploadProgress: (progress) => {
+              const percent = Math.round(
+                (progress.loaded / progress.total) * 100
+              );
+              setUploadProgress(percent);
+            },
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        // Get the public URL of the uploaded file
+        const { data: urlData } = supabase.storage
+          .from("account-files")
+          .getPublicUrl(filePath);
+
+        const fileUrl = urlData.publicUrl;
+
+        // Call the success callback with the file URL
+        onUploadSuccess(fileUrl);
+
+        toast.success("File uploaded successfully");
+        setUploadProgress(100);
+      } catch (error) {
+        console.error("Error uploading file:", error);
+        toast.error("Failed to upload file");
+      } finally {
         setIsUploading(false);
-      }, 1000);
-    } catch (err) {
-      console.error("Upload error:", err);
-      const errorMsg =
-        err instanceof Error ? err.message : "Failed to upload file";
-      setError(errorMsg);
-      toast.error(errorMsg);
-      if (onUploadError)
-        onUploadError(err instanceof Error ? err : new Error(errorMsg));
-      setUploadProgress(0);
-      setIsUploading(false);
-    }
-  };
+      }
+    },
+    [orderId, onUploadSuccess, acceptedFileTypes, maxSizeMB]
+  );
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -189,24 +169,28 @@ const FileUpload: React.FC<FileUploadProps> = ({
           <input
             type="file"
             ref={fileInputRef}
-            onChange={handleFileChange}
+            onChange={handleFileUpload}
             accept={acceptedFileTypes}
             className="hidden"
             disabled={isUploading}
           />
 
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            className={`px-4 py-2 rounded-md ${
-              isUploading
-                ? "bg-gray-300 cursor-not-allowed"
-                : "bg-blue-500 hover:bg-blue-600 text-white"
-            } transition-colors`}
+          <label
+            htmlFor={`file-upload-${orderId}`}
+            className="flex items-center justify-center px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded cursor-pointer transition-colors"
           >
-            {isUploading ? "Uploading..." : buttonText}
-          </button>
+            {isUploading ? (
+              <>
+                <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
+                Uploading ({uploadProgress}%)
+              </>
+            ) : (
+              <>
+                <Upload className="w-5 h-5 mr-2" />
+                Upload Account File
+              </>
+            )}
+          </label>
 
           {error && (
             <div className="mt-2 text-red-500 flex items-center justify-center">
