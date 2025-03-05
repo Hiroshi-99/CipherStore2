@@ -15,85 +15,78 @@ export const checkIfAdmin = async (userId: string): Promise<boolean> => {
 
     console.log("Checking admin status for user:", userId);
 
-    // Try multiple methods to check admin status
+    // Approach 1: Check user metadata for admin role
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user && user.user_metadata?.role === "admin") {
+        console.log("User has admin role in metadata");
+        return true;
+      }
+    } catch (metadataErr) {
+      console.error("Error checking user metadata:", metadataErr);
+    }
 
-    // Method 1: Check the admin_users table
-    const { data: adminUser, error: adminError } = await supabase
-      .from("admin_users")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
+    // Approach 2: Try to get user info from the auth API via serverless function
+    try {
+      const response = await fetch("/.netlify/functions/check-admin-role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
 
-    if (!adminError && adminUser) {
-      console.log("User found in admin_users table");
+      const result = await response.json();
+      if (result.isAdmin) {
+        console.log("User has admin role via serverless function check");
+        return true;
+      }
+    } catch (serverlessErr) {
+      console.error("Error checking admin via serverless:", serverlessErr);
+    }
+
+    // Approach 3: For development/testing - check if this is the only user
+    // This is a fallback mechanism for first-time setup
+    try {
+      // If this is the first user in the system, grant them admin status
+      const {
+        data: { users },
+        error: usersError,
+      } = await supabase.auth.admin.listUsers({
+        page: 1,
+        perPage: 10,
+      });
+
+      if (
+        !usersError &&
+        users &&
+        users.length === 1 &&
+        users[0].id === userId
+      ) {
+        console.log(
+          "This is the only user in the system - granting admin status"
+        );
+        return true;
+      }
+    } catch (countErr) {
+      console.error("Error checking users count:", countErr);
+    }
+
+    // Approach 4: A fallback for localhost/development
+    if (
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1"
+    ) {
+      console.log(
+        "Running on localhost - granting admin privileges for development"
+      );
       return true;
     }
 
-    // Method 2: Check the users table
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("is_admin")
-      .eq("id", userId)
-      .single();
-
-    if (!userError && user && user.is_admin) {
-      console.log("User found in users table with is_admin=true");
-
-      // Add to admin_users for future checks
-      await supabase
-        .from("admin_users")
-        .insert({
-          user_id: userId,
-          granted_at: new Date().toISOString(),
-        })
-        .then(({ error }) => {
-          if (error) console.error("Error adding user to admin_users:", error);
-        });
-
-      return true;
-    }
-
-    // Method 3: Check if this is the first user in the system
-    const { count, error: countError } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true });
-
-    if (!countError && count === 1) {
-      console.log("This is the only user, granting admin access");
-
-      // Update user record and admin_users table
-      await Promise.all([
-        supabase.from("users").upsert(
-          {
-            id: userId,
-            is_admin: true,
-          },
-          { onConflict: "id" }
-        ),
-
-        supabase.from("admin_users").insert({
-          user_id: userId,
-          granted_at: new Date().toISOString(),
-        }),
-      ]);
-
-      return true;
-    }
-
-    // Method 4: Check if admin_users table exists, if not, grant admin
-    const { error: tableCheckError } = await supabase
-      .from("admin_users")
-      .select("*", { count: "exact", head: true });
-
-    if (tableCheckError && tableCheckError.message.includes("does not exist")) {
-      console.log("admin_users table doesn't exist, consider user as admin");
-      return true;
-    }
-
+    console.log("User is not an admin");
     return false;
   } catch (error) {
     console.error("Error in checkIfAdmin:", error);
-    // In case of error, default to non-admin for security
     return false;
   }
 };

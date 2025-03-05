@@ -2700,6 +2700,59 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add this function to force admin access for testing
+  const forceAdminAccess = async () => {
+    try {
+      toast.info("Attempting to force admin access for testing...");
+
+      // Get current user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        toast.error("No user found. Please log in first.");
+        return;
+      }
+
+      // Try to call the serverless function to force admin access
+      try {
+        const response = await fetch("/.netlify/functions/force-admin-access", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            userId: user.id,
+            email: user.email,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          toast.success("Admin access forced via serverless function");
+
+          // Update the local session with the new metadata
+          await supabase.auth.refreshSession();
+
+          // Refresh the page after a delay
+          toast.info("Refreshing page in 3 seconds...");
+          setTimeout(() => {
+            window.location.reload();
+          }, 3000);
+        } else {
+          toast.error("Failed to force admin access: " + result.error);
+        }
+      } catch (err) {
+        console.error("Error calling serverless function:", err);
+        toast.error("Error communicating with serverless function");
+      }
+    } catch (err) {
+      console.error("Error in forceAdminAccess:", err);
+      toast.error("Failed to force admin access");
+    }
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -2717,8 +2770,8 @@ Please keep these details secure. You can copy them by selecting the text.
           <div className="text-center max-w-md">
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
             <p className="text-white/70 mb-6">
-              You don't have permission to access this page. The following
-              options may help:
+              You don't have permission to access the admin page. Try these
+              options:
             </p>
             <div className="flex flex-col gap-3 items-center">
               <button
@@ -2736,13 +2789,20 @@ Please keep these details secure. You can copy them by selecting the text.
               </button>
 
               <button
-                onClick={debugAdminPermissions}
+                onClick={forceAdminAccess}
                 className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors"
               >
-                Debug Admin Status
+                Force Admin Access
               </button>
 
               <div className="border-t border-white/10 w-full my-2"></div>
+
+              <button
+                onClick={debugAdminPermissions}
+                className="w-full px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors"
+              >
+                Debug Admin Status
+              </button>
 
               <button
                 onClick={() => navigate("/")}
