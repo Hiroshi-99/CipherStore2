@@ -784,6 +784,27 @@ function AdminPage() {
           </div>
         )}
 
+        {/* Manual user addition form */}
+        <div className="mb-6 bg-white/5 p-4 rounded-lg">
+          <h3 className="text-lg text-white mb-3">Add Admin User</h3>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              placeholder="Enter email address"
+              value={newAdminEmail}
+              onChange={(e) => setNewAdminEmail(e.target.value)}
+              className="flex-1 bg-white/10 border border-white/20 rounded-md px-4 py-2 text-white placeholder-white/50"
+            />
+            <button
+              onClick={addAdminByEmail}
+              disabled={actionInProgress === "adding-admin"}
+              className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded"
+            >
+              Add Admin
+            </button>
+          </div>
+        </div>
+
         {/* User search field */}
         <div className="mb-6">
           <div className="relative">
