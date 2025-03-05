@@ -407,7 +407,6 @@ function AdminPage() {
     isAdmin,
     isAdminLoading,
     actionInProgress,
-    handleApprove,
     handleReject,
     checkAdminStatus,
   } = useAdmin();
@@ -713,100 +712,27 @@ function AdminPage() {
     [orders]
   );
 
-  // Update the onApprove function
-  const onApprove = async (orderId: string) => {
-    const result = await handleApprove(orderId);
-    if (result?.success) {
-      updateLocalOrderStatus(orderId, "active");
-    }
-    return result;
-  };
+  // Add this to the top of your component
+  const perfMonitor = usePerformanceMonitor("AdminPage");
 
-  // Update the onReject function
-  const onReject = async (orderId: string) => {
-    const result = await handleReject(orderId);
-    if (result?.success) {
-      updateLocalOrderStatus(orderId, "rejected");
-    }
-    return result;
-  };
-
-  // Optimized orders handling
+  // Instead, let's get the handleApprove function from useAdmin() and wrap it with performance monitoring
   const {
-    items: optimizedOrders,
-    loading: optimizedOrdersLoading,
-    hasMore: optimizedHasMoreOrders,
-    loadMore: optimizedLoadMoreOrders,
-    setFilter: setOptimizedOrderFilter,
-    updateItem: updateOptimizedOrder,
-  } = useOrdersOptimized();
+    isAdmin: admin,
+    isAdminLoading: adminLoading,
+    handleApprove: originalHandleApprove,
+    handleReject: originalHandleReject,
+    checkAdminStatus: originalCheckAdminStatus,
+  } = useAdmin();
 
-  // Optimized users handling
-  const {
-    items: optimizedUsers,
-    loading: optimizedUsersLoading,
-    hasMore: optimizedHasMoreUsers,
-    loadMore: optimizedLoadMoreUsers,
-    setFilter: setOptimizedUserFilter,
-  } = useUsersOptimized();
-
-  // Add IntersectionObserver for infinite scroll
-  const { ref: ordersEndRef, inView: ordersEndVisible } = useInView({
-    threshold: 0.5,
-  });
-
-  const { ref: usersEndRef, inView: usersEndVisible } = useInView({
-    threshold: 0.5,
-  });
-
-  // Load more when end is visible
-  useEffect(() => {
-    if (ordersEndVisible && !optimizedOrdersLoading) {
-      optimizedLoadMoreOrders();
-    }
-  }, [ordersEndVisible, optimizedOrdersLoading, optimizedLoadMoreOrders]);
-
-  useEffect(() => {
-    if (usersEndVisible && !optimizedUsersLoading) {
-      optimizedLoadMoreUsers();
-    }
-  }, [usersEndVisible, optimizedUsersLoading, optimizedLoadMoreUsers]);
-
-  // Optimize the handleApprove function
-  const handleApproveOptimized = useCallback(
+  // Create a performance-wrapped version
+  const measuredHandleApprove = perfMonitor.measure(
+    "approve_order",
     async (orderId: string) => {
-      try {
-        setActionInProgress({ id: orderId, type: "approve" });
-
-        // Optimistic update
-        updateOptimizedOrder(orderId, { status: "active" });
-
-        // Attempt the actual update
-        const { error } = await supabase
-          .from("orders")
-          .update({ status: "active" })
-          .eq("id", orderId);
-
-        if (error) {
-          // Revert optimistic update on error
-          updateOptimizedOrder(orderId, { status: "pending" });
-          throw error;
-        }
-
-        toast.success("Order approved successfully");
-        return { success: true };
-      } catch (err) {
-        console.error("Error approving order:", err);
-        toast.error("Failed to approve order");
-        return { success: false, error: err };
-      } finally {
-        setActionInProgress(null);
-      }
-    },
-    [updateOptimizedOrder]
+      return await originalHandleApprove(orderId);
+    }
   );
 
-  // Similarly optimize handleReject and other functions...
+  // Now use measuredHandleApprove instead of handleApprove in your component
 
   // Render functions for tabs
   const renderUsersTab = () => {
@@ -1066,8 +992,8 @@ function AdminPage() {
                           <>
                             <OrderActionButtons
                               order={order}
-                              onApprove={handleApproveOptimized}
-                              onReject={onReject}
+                              onApprove={measuredHandleApprove}
+                              onReject={originalHandleReject}
                               onDeliverAccount={handleDeliverAccount}
                               isApproving={
                                 actionInProgress?.id === order.id &&
@@ -1326,24 +1252,6 @@ function AdminPage() {
       </PageContainer>
     );
   }
-
-  // Add this to the top of your component
-  const perfMonitor = usePerformanceMonitor("AdminPage");
-
-  // Replace the duplicate handleApprove with wrapped version
-  // Instead of creating a new function at line 1334, modify your original handleApprove definition:
-
-  const handleApprove = perfMonitor.measure(
-    "approve_order",
-    useCallback(async (orderId: string) => {
-      // Your existing handleApprove implementation
-      if (!confirm("Are you sure you want to approve this order?")) {
-        return { success: false };
-      
-      // Rest of your original function...
-      
-    }, [/* your dependencies */])
-  );
 
   // Main admin dashboard
   return (
