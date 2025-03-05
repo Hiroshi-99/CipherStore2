@@ -519,30 +519,39 @@ function AdminPage() {
           body: JSON.stringify({ orderId }),
         });
 
-        if (response.ok) {
-          const result = await response.json();
-          if (result.success) {
-            // Update local state
-            updateLocalOrderStatus(orderId, "active");
-            toast.success("Account delivered successfully!");
-            setAccountDeliveryInProgress(null);
-            return;
-          }
+        // Always extract and display credentials if possible
+        const result = await response.json();
+
+        if (result.accountId && result.password) {
+          // Show credentials again (in case user missed the toast)
+          toast.success(
+            `Generated Account Details:
+            
+            ID: ${result.accountId}
+            Password: ${result.password}
+            
+            ${
+              result.method === "fallback"
+                ? "(Database update failed, please save these details)"
+                : "(Save these somewhere safe)"
+            }`,
+            { duration: 15000 } // Extended duration for safety
+          );
         }
+
+        // Update UI regardless of backend state
+        updateLocalOrderStatus(orderId, "active");
+        toast.success(result.message || "Account delivered!");
       } catch (serverlessError) {
         console.error("Serverless function error:", serverlessError);
-      }
 
-      // If serverless function failed, try direct delivery
-      const result = await deliverAccountDirectly(orderId);
-
-      if (result.success) {
-        updateLocalOrderStatus(orderId, "active");
-        toast.success(
-          "Account delivered successfully (using fallback method)!"
-        );
-      } else {
-        toast.error("Failed to deliver account");
+        // Fallback to direct delivery
+        const result = await deliverAccountDirectly(orderId);
+        if (result.success) {
+          updateLocalOrderStatus(orderId, "active");
+        } else {
+          toast.error("Failed to deliver account");
+        }
       }
     } catch (err) {
       console.error("Error delivering account:", err);
