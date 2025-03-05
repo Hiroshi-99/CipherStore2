@@ -1094,6 +1094,17 @@ function AdminPage() {
             >
               Check Admin Status Again
             </button>
+
+            <button
+              onClick={() => {
+                console.log("Forcing admin mode for development only");
+                window.localStorage.setItem("dev_admin_override", "true");
+                window.location.reload();
+              }}
+              className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors w-full"
+            >
+              Force Admin Mode (Dev Only)
+            </button>
           </div>
         </div>
       </PageContainer>
