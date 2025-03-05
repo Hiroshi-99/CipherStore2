@@ -109,21 +109,37 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Add this function to initialize admin status on first load
   const initializeAdminStatus = useCallback(async () => {
+    // Check for development mode first to avoid any unnecessary API calls
+    if (process.env.NODE_ENV === "development") {
+      const devOverride = localStorage.getItem("dev_admin_override") === "true";
+      if (devOverride) {
+        console.log("Using development admin override in init");
+        setIsAdmin(true);
+        setIsAdminLoading(false);
+        return;
+      }
+    }
+
     try {
       // Check localStorage for cached admin status with timestamp
       const cachedStatus = localStorage.getItem("admin_status");
       const now = Date.now();
 
       if (cachedStatus) {
-        const { isAdmin: cachedIsAdmin, timestamp } = JSON.parse(cachedStatus);
-        const age = now - timestamp;
+        try {
+          const { isAdmin: cachedIsAdmin, timestamp } =
+            JSON.parse(cachedStatus);
+          const age = now - timestamp;
 
-        // Use cached result if less than 5 minutes old
-        if (age < 5 * 60 * 1000) {
-          console.log("Using cached admin status", cachedIsAdmin);
-          setIsAdmin(cachedIsAdmin);
-          setIsAdminLoading(false);
-          return;
+          // Use cached result if less than 15 minutes old (increased from 5)
+          if (age < 15 * 60 * 1000) {
+            console.log("Using cached admin status", cachedIsAdmin);
+            setIsAdmin(cachedIsAdmin);
+            setIsAdminLoading(false);
+            return;
+          }
+        } catch (cacheError) {
+          console.error("Error parsing cached admin status:", cacheError);
         }
       }
 
@@ -133,17 +149,26 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
       console.error("Error initializing admin status:", err);
       setIsAdminLoading(false);
     }
-  }, []);
+  }, [checkAdminStatus]);
 
   // Use this in useEffect
   useEffect(() => {
-    initializeAdminStatus();
+    // Only initialize once
+    let isInitialized = false;
 
-    // Also listen for auth changes
+    if (!isInitialized) {
+      isInitialized = true;
+      initializeAdminStatus();
+    }
+
+    // Only listen for sign-in/sign-out, not every auth state change
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      checkAdminStatus();
+    } = supabase.auth.onAuthStateChange((event) => {
+      // Only trigger on sign in or sign out
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        checkAdminStatus();
+      }
     });
 
     return () => {

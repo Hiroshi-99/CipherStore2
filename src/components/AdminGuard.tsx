@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import { useAdmin } from "../context/AdminContext";
 import LoadingSpinner from "./LoadingSpinner";
@@ -9,17 +9,16 @@ interface AdminGuardProps {
 
 const AdminGuard: React.FC<AdminGuardProps> = ({ children }) => {
   const { isAdmin, isAdminLoading, checkAdminStatus } = useAdmin();
+  const initialCheckDoneRef = useRef(false);
 
   useEffect(() => {
     const isProduction = process.env.NODE_ENV === "production";
     const devOverride =
       window.localStorage.getItem("dev_admin_override") === "true";
 
-    let initialCheckDone = false;
-
-    // Only check once on initial load
-    if (!initialCheckDone) {
-      initialCheckDone = true;
+    // Only perform the check once
+    if (!initialCheckDoneRef.current) {
+      initialCheckDoneRef.current = true;
 
       if (devOverride && !isProduction) {
         console.log("Using development admin override in guard");
@@ -28,12 +27,12 @@ const AdminGuard: React.FC<AdminGuardProps> = ({ children }) => {
       }
     }
 
-    // Create a periodic check but with a longer interval
+    // Setup infrequent refresh (much less frequent)
     const intervalId = setInterval(() => {
       if (!devOverride || isProduction) {
         checkAdminStatus();
       }
-    }, 15 * 60 * 1000); // Check every 15 minutes instead of 5
+    }, 30 * 60 * 1000); // Check every 30 minutes
 
     return () => clearInterval(intervalId);
   }, [checkAdminStatus]);
