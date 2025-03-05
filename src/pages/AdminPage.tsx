@@ -58,6 +58,8 @@ import { useAdminOrders } from "../hooks/useAdminOrders";
 import OrdersSkeleton from "../components/OrdersSkeleton";
 import { useAdmin } from "../context/AdminContext";
 import OrderActionButtons from "../components/admin/OrderActionButtons";
+import { deliverAccountDetails } from "../lib/accountService";
+import { isDev } from "../lib/devMode";
 
 interface Admin {
   id: string;
@@ -496,151 +498,25 @@ function AdminPage() {
     [selectedOrderDetail, setSelectedOrderDetail, setOrders]
   );
 
-  // Update the handleDeliverAccount function to be more resilient
+  // Update the handleDeliverAccount function
   const handleDeliverAccount = async (orderId: string) => {
     try {
       setAccountDeliveryInProgress(orderId);
 
-      // First check if we can get the order
-      const { data: order, error: orderError } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("id", orderId)
-        .single();
+      const result = await deliverAccountDetails(orderId);
 
-      if (orderError) {
-        console.error("Error fetching order:", orderError);
-        toast.error("Could not find order");
-        return;
-      }
-
-      // Generate random account credentials
-      const accountId = `ACC${Math.floor(Math.random() * 10000)
-        .toString()
-        .padStart(4, "0")}`;
-      const password = Math.random().toString(36).substring(2, 10);
-
-      // Display the credentials immediately so they're not lost
-      toast.success(
-        <div>
-          <p>Generated account details:</p>
-          <p>
-            Account ID: <strong>{accountId}</strong>
-          </p>
-          <p>
-            Password: <strong>{password}</strong>
-          </p>
-        </div>
-      );
-
-      // Try different update approaches in sequence until one works
-
-      // First try: Use direct column updates if they exist
-      try {
-        if ("account_id" in order) {
-          const { error: updateError } = await supabase
-            .from("orders")
-            .update({
-              account_id: accountId,
-              account_password: password,
-              account_delivered: true,
-              account_delivered_at: new Date().toISOString(),
-            })
-            .eq("id", orderId);
-
-          if (!updateError) {
-            console.log("Updated using direct columns");
-            return;
-          }
+      if (result.success) {
+        if (result.method === "toast_only") {
+          toast.info("Credentials displayed but couldn't be saved to database");
+        } else if (isDev()) {
+          toast.info(
+            `Dev mode: Account delivered via ${result.method || "fallback"}`
+          );
         }
-      } catch (err) {
-        console.log("First update method failed:", err);
-      }
-
-      // Second try: Use a metadata JSON field
-      try {
-        // First get the current metadata if it exists
-        let currentMetadata = {};
-        try {
-          if (order.metadata) {
-            if (typeof order.metadata === "string") {
-              currentMetadata = JSON.parse(order.metadata);
-            } else if (typeof order.metadata === "object") {
-              currentMetadata = order.metadata;
-            }
-          }
-        } catch (parseErr) {
-          console.log("Error parsing existing metadata, using empty object");
-        }
-
-        const { error: metadataError } = await supabase
-          .from("orders")
-          .update({
-            metadata: JSON.stringify({
-              ...currentMetadata,
-              account: {
-                id: accountId,
-                password: password,
-                delivered: true,
-                delivered_at: new Date().toISOString(),
-              },
-            }),
-          })
-          .eq("id", orderId);
-
-        if (!metadataError) {
-          console.log("Updated using metadata field");
-          return;
-        }
-      } catch (metadataErr) {
-        console.log("Metadata update method failed:", metadataErr);
-      }
-
-      // Third try: Use a serverless function if available
-      try {
-        const response = await fetch("/.netlify/functions/update-order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            orderId,
-            accountId,
-            password,
-            action: "deliver_account",
-          }),
-        });
-
-        if (response.ok) {
-          console.log("Updated using serverless function");
-          return;
-        }
-      } catch (serverlessErr) {
-        console.log("Serverless update failed:", serverlessErr);
-      }
-
-      // Last resort: Store in localStorage as a fallback
-      try {
-        const deliveredAccounts = JSON.parse(
-          localStorage.getItem("delivered_accounts") || "{}"
-        );
-        deliveredAccounts[orderId] = {
-          accountId,
-          password,
-          timestamp: Date.now(),
-        };
-        localStorage.setItem(
-          "delivered_accounts",
-          JSON.stringify(deliveredAccounts)
-        );
-        console.log("Stored account details in localStorage as fallback");
-      } catch (localStorageErr) {
-        console.error("All update methods failed:", localStorageErr);
-        toast.error(
-          "Failed to save account details - please note them down manually!"
-        );
       }
     } catch (err) {
-      console.error("Error in account delivery:", err);
-      toast.error("Error delivering account details");
+      console.error("Error in account delivery handler:", err);
+      toast.error("An unexpected error occurred");
     } finally {
       setAccountDeliveryInProgress(null);
     }
