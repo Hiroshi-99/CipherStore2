@@ -232,77 +232,45 @@ function AdminPage() {
     // Fetch users function
     const fetchUsers = useCallback(async () => {
       try {
-        // First try the standard approach (will likely fail due to policy recursion)
+        setFetchError(null);
+
+        // Try a direct admin listing from adminService instead of the serverless function
         try {
-          const { data, error } = await supabase
-            .from("users")
-            .select("*")
-            .order("created_at", { ascending: false });
+          const { users, error } = await getAllUsersClientSide();
 
-          if (!error) {
-            // If successful, process the users
-            const processedUsers = data.map((user) => ({
-              id: user.id,
-              email: user.email,
-              fullName:
-                user.full_name || user.email?.split("@")[0] || "Unknown",
-              isAdmin: user.is_admin || false,
-              lastSignIn: user.last_sign_in,
-              createdAt: user.created_at,
-            }));
-
-            setUsers(processedUsers);
+          if (!error && users.length > 0) {
+            // Process users if successful
+            setUsers(users);
             return;
           }
-
-          // If error is not recursion-related, throw it to be caught below
-          if (error.code !== "42P17") {
-            throw error;
-          }
-
-          // Continue to fallback if we have recursion error
         } catch (directError) {
-          console.log(
-            "Direct fetch failed, trying serverless function:",
-            directError
-          );
+          console.log("Direct client-side fetch failed:", directError);
         }
 
-        // Fallback to serverless function
-        const response = await fetch("/.netlify/functions/get-users", {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
+        // Create a mock user list for development purposes
+        const mockUsers = [
+          {
+            id: user?.id || "current-user",
+            email: user?.email || "current@example.com",
+            fullName: user?.user_metadata?.full_name || "Current Admin",
+            isAdmin: true,
+            lastSignIn: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
           },
-        });
+        ];
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "Failed to fetch users");
-        }
-
-        const result = await response.json();
-
-        // Process the users from the serverless function
-        const processedUsers = result.users.map((user) => ({
-          id: user.id,
-          email: user.email,
-          fullName: user.full_name || user.email?.split("@")[0] || "Unknown",
-          isAdmin: user.is_admin || false,
-          lastSignIn: user.last_sign_in,
-          createdAt: user.created_at,
-        }));
-
-        setUsers(processedUsers);
+        // Set mock users as fallback
+        setUsers(mockUsers);
+        setFetchError("Using limited user data. Server functions unavailable.");
       } catch (err) {
         console.error("Error fetching users:", err);
         toast.error("Failed to fetch users");
+        setFetchError("Failed to load users: " + (err.message || String(err)));
 
         // Set empty users array as fallback
         setUsers([]);
-        setFetchError("Failed to fetch users. Please try again later.");
       }
-    }, [supabase]);
+    }, [user]);
 
     // Add admin function
     const addAdminByEmail = useCallback(async () => {
@@ -1090,6 +1058,22 @@ function AdminPage() {
     return (
       <div>
         <h2 className="text-xl text-white mb-6">Admin Settings</h2>
+
+        {/* Environment variable notice */}
+        <div className="bg-yellow-900/20 border border-yellow-500/20 rounded-lg p-4 mb-6">
+          <h3 className="text-yellow-300 font-medium mb-2">
+            Server Functions Status
+          </h3>
+          <p className="text-white/70 mb-3">
+            Some server functions are unavailable due to missing environment
+            variables. This is expected in the development environment and some
+            features may be limited.
+          </p>
+          <p className="text-white/50 text-sm">
+            To enable all features, add SUPABASE_URL and
+            SUPABASE_SERVICE_ROLE_KEY to your Netlify environment variables.
+          </p>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-white/5 rounded-lg p-6">
