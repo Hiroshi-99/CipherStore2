@@ -1473,6 +1473,74 @@ Please keep these details secure. You can copy them by selecting the text.
     []
   );
 
+  // Add this function to fix schema issues
+  const updateOrdersSchema = async () => {
+    try {
+      toast.info("Updating database schema...");
+
+      // Call the serverless function to update the schema
+      const response = await fetch("/.netlify/functions/update-orders-schema", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update schema");
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        toast.success("Database schema updated successfully! Refreshing...");
+        // Reload the page after a short delay
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      } else {
+        throw new Error(result.message || "Schema update failed");
+      }
+    } catch (err) {
+      console.error("Error updating schema:", err);
+      toast.error("Failed to update database schema");
+    }
+  };
+
+  const renderSettingsTab = () => {
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg font-medium mb-3">Database Maintenance</h3>
+            <p className="text-white/70 mb-4">
+              Use these tools to fix database issues or update schema as needed.
+            </p>
+            <div className="space-y-3">
+              <button
+                onClick={updateOrdersSchema}
+                className="w-full px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded transition-colors"
+              >
+                Fix Account Schema
+              </button>
+              <button
+                onClick={setupAdminTables}
+                className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+              >
+                Fix Admin Tables
+              </button>
+            </div>
+          </div>
+
+          {/* Other settings panels */}
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -1491,7 +1559,7 @@ Please keep these details secure. You can copy them by selecting the text.
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
             <p className="text-white/70 mb-6">
               You don't have permission to access this page. If you believe this
-              is an error, you can try to set up the admin database tables.
+              is an error, you can try to fix the database settings.
             </p>
             <div className="flex flex-col gap-4 items-center">
               <button
@@ -1499,6 +1567,12 @@ Please keep these details secure. You can copy them by selecting the text.
                 className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors w-full"
               >
                 Set Up Admin Tables
+              </button>
+              <button
+                onClick={updateOrdersSchema}
+                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg transition-colors w-full"
+              >
+                Fix Orders Schema
               </button>
               <button
                 onClick={checkDatabaseAccess}

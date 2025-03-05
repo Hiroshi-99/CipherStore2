@@ -70,7 +70,18 @@ const AccountDetailsForm: React.FC<AccountDetailsFormProps> = ({
 
       if (error) {
         console.error("Error delivering account:", error);
-        toast.error("Failed to deliver account details");
+
+        // Check if it's a schema error
+        if (
+          error.message?.includes("column") &&
+          error.message?.includes("orders")
+        ) {
+          toast.error(
+            "Database schema issue detected. Please ask an administrator to fix the schema."
+          );
+        } else {
+          toast.error("Failed to deliver account details");
+        }
         return;
       }
 
