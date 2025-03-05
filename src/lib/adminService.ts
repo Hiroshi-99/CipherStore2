@@ -6,78 +6,48 @@ import { safeInsert } from "./database";
  * @param userId The user ID to check
  * @returns True if the user is an admin, false otherwise
  */
-export const checkIfAdmin = async (
-  userId: string
-): Promise<{ isAdmin: boolean; error?: string }> => {
+export const checkIfAdmin = async (userId: string) => {
+  console.log("Checking admin status for user:", userId);
+
   try {
-    if (!userId) {
-      console.error("No user ID provided to checkIfAdmin");
-      return { isAdmin: false, error: "No user ID provided" };
-    }
-
-    console.log("Checking admin status for user:", userId);
-
-    // First check the admin_users table (handle multiple results)
-    const { data: adminUsers, error: adminError } = await supabase
+    // First check if user exists in admin_users table
+    const { data, error } = await supabase
       .from("admin_users")
       .select("*")
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .single();
 
-    if (adminError) {
-      console.error("Error checking admin_users table:", adminError);
-    } else if (adminUsers && adminUsers.length > 0) {
-      console.log("User found in admin_users table:", adminUsers[0]);
-      return { isAdmin: true };
+    if (error && error.code !== "PGRST116") {
+      console.error("Error checking admin status:", error);
+      return { isAdmin: false, success: false, error: error.message };
     }
 
-    // Try to fetch user via Netlify function as fallback
-    try {
-      const response = await fetch("/.netlify/functions/check-admin-status", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.data && result.data.isAdmin) {
-          console.log("User is admin according to serverless function");
-          return { isAdmin: true };
-        }
-      }
-    } catch (fnError) {
-      console.error("Error checking admin status via function:", fnError);
+    if (data) {
+      console.log("User found in admin_users table:", data);
+      return { isAdmin: true, success: true };
     }
 
-    // For development/testing - set specific users as admins
-    const adminEmails = ["teeangly034@gmail.com", "admin@example.com"];
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    // Try checking is_admin field in users table as fallback
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("id", userId)
+      .single();
 
-    if (user && user.email && adminEmails.includes(user.email)) {
-      console.log("User is admin by email match:", user.email);
-
-      // Try to add to admin_users for future checks
-      try {
-        await supabase.from("admin_users").upsert({
-          user_id: userId,
-          granted_at: new Date().toISOString(),
-        });
-      } catch (upsertError) {
-        console.error("Could not add user to admin_users:", upsertError);
-      }
-
-      return { isAdmin: true };
+    if (userError) {
+      console.error("Error checking is_admin field:", userError);
+      return { isAdmin: false, success: false, error: userError.message };
     }
 
-    console.log("User is not an admin");
-    return { isAdmin: false };
-  } catch (error) {
-    console.error("Error in checkIfAdmin:", error);
-    return { isAdmin: false, error: "Error checking admin status" };
+    if (userData?.is_admin) {
+      console.log("User has is_admin=true in users table");
+      return { isAdmin: true, success: true };
+    }
+
+    return { isAdmin: false, success: false };
+  } catch (err) {
+    console.error("Exception in checkIfAdmin:", err);
+    return { isAdmin: false, success: false, error: "Internal error" };
   }
 };
 
