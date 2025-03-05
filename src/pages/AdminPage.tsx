@@ -201,6 +201,7 @@ function AdminPage() {
       ordersLoading,
       currentPage,
       stats,
+      setStats,
     };
   };
 
@@ -215,6 +216,7 @@ function AdminPage() {
     ordersLoading,
     currentPage,
     stats,
+    setStats,
   } = useOrdersState();
 
   // User state management
