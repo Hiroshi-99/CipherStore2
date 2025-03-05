@@ -1,7 +1,7 @@
 import React from "react";
 import { CheckCircle, XCircle, Eye, Key } from "lucide-react";
 import type { Order } from "../../hooks/useOrderFilters";
-import { LoadingSpinner } from "../../components/LoadingSpinner";
+import LoadingSpinner from "../../components/LoadingSpinner";
 
 interface OrderActionButtonsProps {
   order: Order;
