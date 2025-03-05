@@ -60,6 +60,12 @@ import { useAdmin } from "../context/AdminContext";
 import OrderActionButtons from "../components/admin/OrderActionButtons";
 import { deliverAccountDetails } from "../lib/accountService";
 import { isDev } from "../lib/devMode";
+import {
+  useOrdersOptimized,
+  useUsersOptimized,
+} from "../hooks/useAdminOptimized";
+import { useInView } from "react-intersection-observer";
+import { usePerformanceMonitor } from "../utils/performance";
 
 interface Admin {
   id: string;
@@ -571,28 +577,20 @@ function AdminPage() {
       toast.info("Updating database schema...");
 
       // Call the serverless function to update the schema
-      const response = await fetch("/.netlify/functions/update-orders-schema", {
+      const response = await fetch("/.netlify/functions/fix-orders-schema", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to update schema");
-      }
+      const data = await response.json();
 
-      const result = await response.json();
-
-      if (result.success) {
-        toast.success("Database schema updated successfully! Refreshing...");
+      if (data.success) {
+        toast.success("Database schema updated successfully");
         // Reload the page after a short delay
         setTimeout(() => {
           window.location.reload();
         }, 2000);
       } else {
-        throw new Error(result.message || "Schema update failed");
+        toast.error(`Failed to update schema: ${data.error}`);
       }
     } catch (err) {
       console.error("Error updating schema:", err);
@@ -732,6 +730,83 @@ function AdminPage() {
     }
     return result;
   };
+
+  // Optimized orders handling
+  const {
+    items: optimizedOrders,
+    loading: optimizedOrdersLoading,
+    hasMore: optimizedHasMoreOrders,
+    loadMore: optimizedLoadMoreOrders,
+    setFilter: setOptimizedOrderFilter,
+    updateItem: updateOptimizedOrder,
+  } = useOrdersOptimized();
+
+  // Optimized users handling
+  const {
+    items: optimizedUsers,
+    loading: optimizedUsersLoading,
+    hasMore: optimizedHasMoreUsers,
+    loadMore: optimizedLoadMoreUsers,
+    setFilter: setOptimizedUserFilter,
+  } = useUsersOptimized();
+
+  // Add IntersectionObserver for infinite scroll
+  const { ref: ordersEndRef, inView: ordersEndVisible } = useInView({
+    threshold: 0.5,
+  });
+
+  const { ref: usersEndRef, inView: usersEndVisible } = useInView({
+    threshold: 0.5,
+  });
+
+  // Load more when end is visible
+  useEffect(() => {
+    if (ordersEndVisible && !optimizedOrdersLoading) {
+      optimizedLoadMoreOrders();
+    }
+  }, [ordersEndVisible, optimizedOrdersLoading, optimizedLoadMoreOrders]);
+
+  useEffect(() => {
+    if (usersEndVisible && !optimizedUsersLoading) {
+      optimizedLoadMoreUsers();
+    }
+  }, [usersEndVisible, optimizedUsersLoading, optimizedLoadMoreUsers]);
+
+  // Optimize the handleApprove function
+  const handleApproveOptimized = useCallback(
+    async (orderId: string) => {
+      try {
+        setActionInProgress({ id: orderId, type: "approve" });
+
+        // Optimistic update
+        updateOptimizedOrder(orderId, { status: "active" });
+
+        // Attempt the actual update
+        const { error } = await supabase
+          .from("orders")
+          .update({ status: "active" })
+          .eq("id", orderId);
+
+        if (error) {
+          // Revert optimistic update on error
+          updateOptimizedOrder(orderId, { status: "pending" });
+          throw error;
+        }
+
+        toast.success("Order approved successfully");
+        return { success: true };
+      } catch (err) {
+        console.error("Error approving order:", err);
+        toast.error("Failed to approve order");
+        return { success: false, error: err };
+      } finally {
+        setActionInProgress(null);
+      }
+    },
+    [updateOptimizedOrder]
+  );
+
+  // Similarly optimize handleReject and other functions...
 
   // Render functions for tabs
   const renderUsersTab = () => {
@@ -932,7 +1007,7 @@ function AdminPage() {
         </div>
 
         {/* Orders List */}
-        {ordersLoading ? (
+        {optimizedOrdersLoading ? (
           <OrdersSkeleton />
         ) : (
           <>
@@ -991,16 +1066,16 @@ function AdminPage() {
                           <>
                             <OrderActionButtons
                               order={order}
-                              onApprove={onApprove}
+                              onApprove={handleApproveOptimized}
                               onReject={onReject}
                               onDeliverAccount={handleDeliverAccount}
                               isApproving={
-                                actionInProgress === order.id &&
-                                actionType === "approve"
+                                actionInProgress?.id === order.id &&
+                                actionInProgress?.type === "approve"
                               }
                               isRejecting={
-                                actionInProgress === order.id &&
-                                actionType === "reject"
+                                actionInProgress?.id === order.id &&
+                                actionInProgress?.type === "reject"
                               }
                               isDeliveringAccount={
                                 accountDeliveryInProgress === order.id
@@ -1030,13 +1105,13 @@ function AdminPage() {
                 ))}
 
                 {/* Load More Button */}
-                {hasMoreOrders && (
+                {optimizedHasMoreOrders && (
                   <div id="load-more-trigger" className="py-4 text-center">
-                    {isFetchingNextPage ? (
+                    {optimizedOrdersLoading ? (
                       <LoadingSpinner size="md" light />
                     ) : (
                       <button
-                        onClick={loadMoreOrders}
+                        onClick={optimizedLoadMoreOrders}
                         className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded transition-colors"
                       >
                         Load More Orders
@@ -1118,6 +1193,40 @@ function AdminPage() {
               </button>
             </div>
           </div>
+        </div>
+
+        <div className="p-6 bg-gray-800 rounded-lg mb-6">
+          <h3 className="text-lg font-medium text-white mb-4">
+            Database Management
+          </h3>
+          <p className="text-white/70 mb-4">
+            Fix database schema issues for account delivery and other features.
+          </p>
+          <button
+            onClick={async () => {
+              try {
+                toast.info("Updating database schema...");
+                const response = await fetch(
+                  "/.netlify/functions/fix-orders-schema",
+                  {
+                    method: "POST",
+                  }
+                );
+                const data = await response.json();
+                if (data.success) {
+                  toast.success("Database schema updated successfully");
+                } else {
+                  toast.error(`Failed to update schema: ${data.error}`);
+                }
+              } catch (err) {
+                console.error("Error updating schema:", err);
+                toast.error("Failed to update database schema");
+              }
+            }}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md"
+          >
+            Fix Database Schema
+          </button>
         </div>
       </div>
     );
@@ -1217,6 +1326,21 @@ function AdminPage() {
       </PageContainer>
     );
   }
+
+  // Add this to the top of your component
+  const perfMonitor = usePerformanceMonitor("AdminPage");
+
+  // Wrap expensive operations with the measure utility
+  const handleApprove = perfMonitor.measure(
+    "approve_order",
+    useCallback(async (orderId: string) => {
+      const result = await handleApprove(orderId);
+      if (result?.success) {
+        updateLocalOrderStatus(orderId, "active");
+      }
+      return result;
+    }, [])
+  );
 
   // Main admin dashboard
   return (

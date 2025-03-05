@@ -42,6 +42,30 @@ export const deliverAccountDetails = async (orderId: string) => {
     logDev("Saved to dev storage", accounts);
   }
 
+  // Try the serverless function approach first (most reliable)
+  try {
+    const response = await fetch("/.netlify/functions/deliver-account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId }),
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      if (result.success) {
+        logDev("Updated using serverless function", result);
+        return {
+          success: true,
+          method: "serverless",
+          accountId: result.accountId,
+          password: result.password,
+        };
+      }
+    }
+  } catch (serverlessErr) {
+    logDev("Serverless delivery failed", serverlessErr);
+  }
+
   // First check if we can get the order
   try {
     const { data: order, error } = await supabase
