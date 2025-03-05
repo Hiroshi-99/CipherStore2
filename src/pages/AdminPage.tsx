@@ -225,21 +225,64 @@ function AdminPage() {
     const [actionInProgress, setActionInProgress] = useState<string | null>(
       null
     );
+    const [fetchError, setFetchError] = useState<string | null>(null);
 
     // Fetch users function
     const fetchUsers = useCallback(async () => {
       try {
-        const { data, error } = await supabase
-          .from("users")
-          .select("*")
-          .order("created_at", { ascending: false });
+        // First try the standard approach (will likely fail due to policy recursion)
+        try {
+          const { data, error } = await supabase
+            .from("users")
+            .select("*")
+            .order("created_at", { ascending: false });
 
-        if (error) {
-          throw error;
+          if (!error) {
+            // If successful, process the users
+            const processedUsers = data.map((user) => ({
+              id: user.id,
+              email: user.email,
+              fullName:
+                user.full_name || user.email?.split("@")[0] || "Unknown",
+              isAdmin: user.is_admin || false,
+              lastSignIn: user.last_sign_in,
+              createdAt: user.created_at,
+            }));
+
+            setUsers(processedUsers);
+            return;
+          }
+
+          // If error is not recursion-related, throw it to be caught below
+          if (error.code !== "42P17") {
+            throw error;
+          }
+
+          // Continue to fallback if we have recursion error
+        } catch (directError) {
+          console.log(
+            "Direct fetch failed, trying serverless function:",
+            directError
+          );
         }
 
-        // Transform the data to match our User interface
-        const processedUsers = data.map((user) => ({
+        // Fallback to serverless function
+        const response = await fetch("/.netlify/functions/get-users", {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Failed to fetch users");
+        }
+
+        const result = await response.json();
+
+        // Process the users from the serverless function
+        const processedUsers = result.users.map((user) => ({
           id: user.id,
           email: user.email,
           fullName: user.full_name || user.email?.split("@")[0] || "Unknown",
@@ -252,8 +295,12 @@ function AdminPage() {
       } catch (err) {
         console.error("Error fetching users:", err);
         toast.error("Failed to fetch users");
+
+        // Set empty users array as fallback
+        setUsers([]);
+        setFetchError("Failed to fetch users. Please try again later.");
       }
-    }, []);
+    }, [supabase]);
 
     // Add admin function
     const addAdminByEmail = useCallback(async () => {
@@ -334,6 +381,7 @@ function AdminPage() {
       setNewAdminEmail,
       addAdminByEmail,
       actionInProgress,
+      fetchError,
     };
   };
 
@@ -349,6 +397,7 @@ function AdminPage() {
     setNewAdminEmail,
     addAdminByEmail,
     actionInProgress,
+    fetchError,
   } = useUsersState();
 
   // Main component state
@@ -631,24 +680,33 @@ function AdminPage() {
           .update({ status: "active" })
           .eq("id", orderId);
 
-        if (error) throw error;
+        if (error) {
+          throw error;
+        }
 
-        // Update optimistically
+        // Update local state
         setOrders((prevOrders) =>
           prevOrders.map((order) =>
             order.id === orderId ? { ...order, status: "active" } : order
           )
         );
 
+        // Update stats
+        setStats((prev) => ({
+          ...prev,
+          pending: Math.max(0, prev.pending - 1),
+          approved: prev.approved + 1,
+        }));
+
         toast.success("Order approved successfully");
       } catch (err) {
-        console.error("Error in handleApprove:", err);
+        console.error("Error approving order:", err);
         toast.error("Failed to approve order");
       } finally {
         setActionInProgress(null);
       }
     },
-    [setOrders]
+    [setOrders, setStats, supabase]
   );
 
   const handleReject = useCallback(
@@ -666,24 +724,33 @@ function AdminPage() {
           .update({ status: "rejected" })
           .eq("id", orderId);
 
-        if (error) throw error;
+        if (error) {
+          throw error;
+        }
 
-        // Update optimistically
+        // Update local state
         setOrders((prevOrders) =>
           prevOrders.map((order) =>
             order.id === orderId ? { ...order, status: "rejected" } : order
           )
         );
 
+        // Update stats
+        setStats((prev) => ({
+          ...prev,
+          pending: Math.max(0, prev.pending - 1),
+          rejected: prev.rejected + 1,
+        }));
+
         toast.success("Order rejected successfully");
       } catch (err) {
-        console.error("Error in handleReject:", err);
+        console.error("Error rejecting order:", err);
         toast.error("Failed to reject order");
       } finally {
         setActionInProgress(null);
       }
     },
-    [setOrders]
+    [setOrders, setStats, supabase]
   );
 
   // Custom hook for order filtering
@@ -700,6 +767,20 @@ function AdminPage() {
     return (
       <div>
         <h2 className="text-xl text-white mb-6">User Management</h2>
+
+        {/* Error message display */}
+        {fetchError && (
+          <div className="mb-6 p-4 bg-red-900/20 border border-red-500/20 rounded-lg">
+            <p className="text-red-300 mb-2">Error loading users:</p>
+            <p className="text-white/70">{fetchError}</p>
+            <button
+              onClick={fetchUsers}
+              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
+        )}
 
         {/* User search field */}
         <div className="mb-6">
@@ -899,7 +980,8 @@ function AdminPage() {
                             className={`px-3 py-1 rounded-full text-xs font-medium ${
                               order.status === "pending"
                                 ? "bg-yellow-500/20 text-yellow-300"
-                                : order.status === "active"
+                                : order.status === "approved" ||
+                                  order.status === "active"
                                 ? "bg-green-500/20 text-green-300"
                                 : order.status === "rejected"
                                 ? "bg-red-500/20 text-red-300"
@@ -914,6 +996,30 @@ function AdminPage() {
                         </div>
                       </div>
                       <div className="flex gap-2">
+                        {order.status === "pending" && (
+                          <>
+                            <button
+                              className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-full"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleApprove(order.id);
+                              }}
+                              disabled={actionInProgress === order.id}
+                            >
+                              <CheckCircle size={20} />
+                            </button>
+                            <button
+                              className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReject(order.id);
+                              }}
+                              disabled={actionInProgress === order.id}
+                            >
+                              <XCircle size={20} />
+                            </button>
+                          </>
+                        )}
                         <button
                           className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full"
                           onClick={(e) => {
@@ -925,6 +1031,12 @@ function AdminPage() {
                         </button>
                       </div>
                     </div>
+                    {actionInProgress === order.id && (
+                      <div className="mt-3 flex items-center justify-center">
+                        <RefreshCw className="w-5 h-5 text-blue-400 animate-spin mr-2" />
+                        <span className="text-blue-400">Processing...</span>
+                      </div>
+                    )}
                   </div>
                 ))}
 
