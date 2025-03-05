@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Navigate } from "react-router-dom";
-import { useAdmin } from "../contexts/AdminContext";
+import { useAdmin } from "../context/AdminContext";
 import LoadingSpinner from "./LoadingSpinner";
 
 interface AdminGuardProps {
@@ -8,9 +8,24 @@ interface AdminGuardProps {
 }
 
 const AdminGuard: React.FC<AdminGuardProps> = ({ children }) => {
-  const { isAdmin, isAdminLoading } = useAdmin();
+  const { isAdmin, isAdminLoading, checkAdminStatus } = useAdmin();
 
-  if (isAdminLoading) {
+  useEffect(() => {
+    // Check for dev override
+    const devOverride = window.localStorage.getItem("dev_admin_override");
+    if (devOverride === "true") {
+      console.log("Using development admin override");
+    } else {
+      // Refresh admin status on mount
+      checkAdminStatus();
+    }
+  }, [checkAdminStatus]);
+
+  // Handle dev override mode
+  const devAdminOverride =
+    window.localStorage.getItem("dev_admin_override") === "true";
+
+  if (isAdminLoading && !devAdminOverride) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <LoadingSpinner size="lg" light />
@@ -18,7 +33,7 @@ const AdminGuard: React.FC<AdminGuardProps> = ({ children }) => {
     );
   }
 
-  if (!isAdmin) {
+  if (!isAdmin && !devAdminOverride) {
     return <Navigate to="/" replace />;
   }
 

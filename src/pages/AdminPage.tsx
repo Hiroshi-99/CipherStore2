@@ -365,7 +365,6 @@ function AdminPage() {
   // Main component state
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [selectedTab, setSelectedTab] = useState("users");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -375,65 +374,44 @@ function AdminPage() {
   const [showImageModal, setShowImageModal] = useState(false);
   const [currentImageUrl, setCurrentImageUrl] = useState("");
 
-  // Inside your AdminPage component, add this near the top:
-  const { actionInProgress, handleApprove, handleReject } = useAdmin();
+  // Get admin state and actions from context
+  const {
+    isAdmin,
+    isAdminLoading,
+    actionInProgress,
+    handleApprove,
+    handleReject,
+    checkAdminStatus,
+  } = useAdmin();
 
-  // Initialize the page
+  // Modified initialization to use context
   useEffect(() => {
-    const checkIfUserIsAdmin = async () => {
-      try {
-        setLoading(true);
+    const getCurrentUser = async () => {
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser();
+      setUser(currentUser);
 
-        // First, get current user
-        const {
-          data: { user: currentUser },
-        } = await supabase.auth.getUser();
-
-        if (!currentUser) {
-          // Not logged in
-          navigate("/login");
-          return;
-        }
-
-        setUser(currentUser);
-        console.log("Current user:", currentUser);
-
-        // Check admin status directly in this component
-        const adminCheckResult = await checkIfAdmin(currentUser.id);
-        console.log("Admin check result:", adminCheckResult);
-
-        // Handle different response formats
-        if ("isAdmin" in adminCheckResult && adminCheckResult.isAdmin) {
-          setIsAdmin(true);
-          // Fetch initial data now that we know user is admin
-          fetchOrders();
-          fetchUsers();
-        } else if ("success" in adminCheckResult && adminCheckResult.success) {
-          setIsAdmin(true);
-          // Fetch initial data now that we know user is admin
-          fetchOrders();
-          fetchUsers();
-        } else {
-          console.log("User is not an admin");
-          // Keep isAdmin as false
-        }
-      } catch (err) {
-        console.error("Error checking admin status:", err);
-        // Try direct database check as fallback
-        if (user?.id) {
-          const manualCheckResult = await checkManualAdmin();
-          if (manualCheckResult) {
-            fetchOrders();
-            fetchUsers();
-          }
-        }
-      } finally {
-        setLoading(false);
+      if (!currentUser) {
+        navigate("/login");
+        return;
       }
+
+      // Load orders and users if component is still mounted
+      fetchOrders();
+      fetchUsers();
+      setLoading(false);
     };
 
-    checkIfUserIsAdmin();
+    getCurrentUser();
   }, [navigate]);
+
+  // Creating a force admin override button for development
+  const forceAdminMode = () => {
+    console.log("Forcing admin mode for development only");
+    window.localStorage.setItem("dev_admin_override", "true");
+    window.location.reload();
+  };
 
   // Effect to load data when tab changes
   useEffect(() => {
@@ -688,10 +666,9 @@ function AdminPage() {
 
   // Add this function to allow forcing admin mode for development
   const forceAdminMode = () => {
-    console.log("Forcing admin mode");
-    setIsAdmin(true);
-    fetchOrders();
-    fetchUsers();
+    console.log("Forcing admin mode for development only");
+    window.localStorage.setItem("dev_admin_override", "true");
+    window.location.reload();
   };
 
   // Render functions for tabs
@@ -1103,7 +1080,7 @@ function AdminPage() {
   };
 
   // Loading state
-  if (loading) {
+  if (loading || isAdminLoading) {
     return (
       <PageContainer title="ADMIN" user={user}>
         <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
@@ -1117,51 +1094,27 @@ function AdminPage() {
   if (!isAdmin) {
     return (
       <PageContainer title="ADMIN" user={user}>
-        <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
-          <div className="text-center max-w-md">
-            <h2 className="text-xl text-white mb-4">Access Denied</h2>
-            <p className="text-white/70 mb-6">
-              You don't have permission to access this page. If you believe this
-              is an error, you can try to fix the database settings.
-            </p>
-            <div className="flex flex-col gap-4 items-center">
-              <button
-                onClick={setupAdminTables}
-                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors w-full"
-              >
-                Set Up Admin Tables
-              </button>
-              <button
-                onClick={updateOrdersSchema}
-                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg transition-colors w-full"
-              >
-                Fix Orders Schema
-              </button>
-              <button
-                onClick={checkDatabaseAccess}
-                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors w-full"
-              >
-                Check Database Access
-              </button>
-              <button
-                onClick={checkManualAdmin}
-                className="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors w-full"
-              >
-                Check Admin Status Again
-              </button>
-              <button
-                onClick={forceAdminMode}
-                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors w-full"
-              >
-                Force Admin Mode (Dev Only)
-              </button>
-              <button
-                onClick={() => navigate("/")}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors w-full"
-              >
-                Go Home
-              </button>
-            </div>
+        <div className="flex flex-col items-center justify-center min-h-[calc(100vh-5rem)] max-w-lg mx-auto text-center">
+          <h2 className="text-2xl font-bold text-white mb-4">Access Denied</h2>
+          <p className="text-white/70 mb-8">
+            You don't have administrator privileges. If you believe this is an
+            error, please contact support.
+          </p>
+
+          <div className="space-y-4 w-full">
+            <button
+              onClick={checkAdminStatus}
+              className="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors w-full"
+            >
+              Check Admin Status Again
+            </button>
+
+            <button
+              onClick={forceAdminMode}
+              className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors w-full"
+            >
+              Force Admin Mode (Dev Only)
+            </button>
           </div>
         </div>
       </PageContainer>
