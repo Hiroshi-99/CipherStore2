@@ -327,36 +327,7 @@ function AdminPage() {
     try {
       setLoading(true);
 
-      // Check for local admin mode first
-      if (localStorage.getItem("adminMode") === "true") {
-        console.log("Local admin mode is enabled");
-        setIsAdmin(true);
-
-        // Get the current user for display
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
-        if (user) {
-          setCurrentUser({
-            id: user.id,
-            email: user.email || "",
-            fullName: user.user_metadata?.full_name || "",
-            isAdmin: true,
-            lastSignIn: user.last_sign_in_at,
-            createdAt: user.created_at,
-          });
-
-          // Fetch orders and users for admin display
-          await fetchOrders();
-          await fetchUsers(user.id);
-        }
-
-        setLoading(false);
-        return;
-      }
-
-      // Normal auth flow if local admin mode isn't enabled
+      // Get the current user
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -364,23 +335,26 @@ function AdminPage() {
       if (!user) {
         console.error("No user found");
         setIsAdmin(false);
-        navigate("/");
+        setLoading(false);
         return;
       }
 
-      // Check if the user is an admin
-      const adminStatus = await checkIfAdmin(user.id);
-      console.log("Admin status:", adminStatus);
-      setIsAdmin(adminStatus);
+      console.log("Current user:", user);
 
-      if (adminStatus) {
+      // Check if the user is an admin
+      const adminResult = await checkIfAdmin(user.id);
+      console.log("Admin check result:", adminResult);
+
+      if (adminResult.isAdmin) {
+        setIsAdmin(true);
+
         // Set current user
         setCurrentUser({
           id: user.id,
           email: user.email || "",
           fullName: user.user_metadata?.full_name || "",
           isAdmin: true,
-          lastSignIn: user.last_sign_in_at,
+          lastSignIn: null,
           createdAt: user.created_at,
         });
 
@@ -388,14 +362,29 @@ function AdminPage() {
         await fetchOrders();
         await fetchUsers(user.id);
       } else {
-        // Not an admin
-        toast.error(
-          "You don't have admin privileges. Try using Enable Local Admin Mode."
-        );
+        setIsAdmin(false);
+        toast.error("You don't have admin privileges");
+
+        // Try to grant admin privileges if this is the first user
+        if (adminResult.error && adminResult.error.includes("first user")) {
+          const grantResult = await grantAdminPrivileges(
+            user.id,
+            user.email || ""
+          );
+
+          if (grantResult.success) {
+            setIsAdmin(true);
+            toast.success("Admin privileges granted automatically");
+
+            // Fetch orders and users
+            await fetchOrders();
+            await fetchUsers(user.id);
+          }
+        }
       }
     } catch (err) {
-      console.error("Error checking auth and admin status:", err);
-      toast.error("Failed to check authentication and admin status");
+      console.error("Error checking admin status:", err);
+      toast.error("Failed to check admin status");
     } finally {
       setLoading(false);
     }
@@ -918,152 +907,118 @@ Please keep these details secure. You can copy them by selecting the text.
   };
 
   useEffect(() => {
-    const checkAuthAndAdmin = async () => {
+    const checkAuth = async () => {
       try {
-        setLoading(true);
-
-        // Check for local admin mode first
-        if (localStorage.getItem("adminMode") === "true") {
-          console.log("Local admin mode is enabled");
-          setIsAdmin(true);
-
-          // Get the current user for display
-          const {
-            data: { user },
-          } = await supabase.auth.getUser();
-
-          if (user) {
-            setCurrentUser({
-              id: user.id,
-              email: user.email || "",
-              fullName: user.user_metadata?.full_name || "",
-              isAdmin: true,
-              lastSignIn: user.last_sign_in_at,
-              createdAt: user.created_at,
-            });
-
-            // Fetch orders and users for admin display
-            await fetchOrders();
-            await fetchUsers(user.id);
-          }
-
-          setLoading(false);
-          return;
-        }
-
-        // Normal auth flow if local admin mode isn't enabled
         const {
-          data: { user },
-        } = await supabase.auth.getUser();
+          data: { session },
+        } = await supabase.auth.getSession();
 
-        if (!user) {
-          console.error("No user found");
-          setIsAdmin(false);
+        if (!session?.user) {
           navigate("/");
           return;
         }
 
-        // Check if the user is an admin
-        const adminStatus = await checkIfAdmin(user.id);
-        console.log("Admin status:", adminStatus);
+        setCurrentUser(session.user);
+
+        // Check if user is admin
+        const adminStatus = await checkIfAdmin(session.user.id);
         setIsAdmin(adminStatus);
 
-        if (adminStatus) {
-          // Set current user
-          setCurrentUser({
-            id: user.id,
-            email: user.email || "",
-            fullName: user.user_metadata?.full_name || "",
-            isAdmin: true,
-            lastSignIn: user.last_sign_in_at,
-            createdAt: user.created_at,
-          });
-
-          // Fetch orders and users
-          await fetchOrders();
-          await fetchUsers(user.id);
-        } else {
-          // Not an admin
-          toast.error(
-            "You don't have admin privileges. Try using Enable Local Admin Mode."
-          );
+        if (!adminStatus) {
+          toast.error("You don't have permission to access the admin page");
+          navigate("/");
+          return;
         }
+
+        // Fetch users with admin status
+        await fetchUsers(session.user.id);
       } catch (err) {
-        console.error("Error checking auth and admin status:", err);
-        toast.error("Failed to check authentication and admin status");
+        console.error("Error checking authentication:", err);
+        toast.error("Authentication error");
+        navigate("/");
       } finally {
         setLoading(false);
       }
     };
 
-    checkAuthAndAdmin();
-  }, []);
+    checkAuth();
+  }, [navigate]);
 
-  // Add this function to fetch users
   const fetchUsers = async (adminUserId: string) => {
     if (!adminUserId) {
       console.error("No admin user ID provided");
       return;
     }
 
+    setLoading(true);
+
     try {
-      // First try to get users with admin status
-      const result = await getAllUsersClientSide();
+      // Get the current user first
+      const {
+        data: { user: currentAuthUser },
+      } = await supabase.auth.getUser();
 
-      if (result.success && result.data) {
-        setUsers(result.data);
-
-        // Set current user
-        const currentUserData = result.data.find(
-          (user) => user.id === adminUserId
-        );
-        if (currentUserData) {
-          setCurrentUser(currentUserData);
-        }
-      } else {
-        console.error("Error fetching users:", result.error);
-
-        // Fallback to local user only
-        const localResult = await getLocalUsers(adminUserId);
-
-        if (localResult.success && localResult.data) {
-          setUsers(localResult.data);
-
-          // Set current user
-          const currentUserData = localResult.data.find(
-            (user) => user.id === adminUserId
-          );
-          if (currentUserData) {
-            setCurrentUser(currentUserData);
-          }
-        } else {
-          console.error("Error fetching local users:", localResult.error);
-
-          // Last resort: just use the current user
-          const {
-            data: { user },
-          } = await supabase.auth.getUser();
-
-          if (user) {
-            const currentUserData = {
-              id: user.id,
-              email: user.email || "",
-              fullName: user.user_metadata?.full_name || "",
-              isAdmin: true, // We know they're admin if they got this far
-              lastSignIn: null,
-              createdAt: user.created_at,
-            };
-
-            setUsers([currentUserData]);
-            setCurrentUser(currentUserData);
-          }
-        }
+      if (!currentAuthUser) {
+        toast.error("You must be logged in to view users");
+        setLoading(false);
+        return;
       }
+
+      // Get admin users from the admin_users table - use a more efficient query
+      const { data: adminUsers, error: adminError } = await supabase
+        .from("admin_users")
+        .select("user_id, user_email")
+        .order("granted_at", { ascending: false });
+
+      if (adminError) {
+        console.error("Error fetching admin users:", adminError);
+      }
+
+      // Create sets for quick lookups - more efficient than arrays for lookups
+      const adminUserIds = new Set(
+        (adminUsers || [])
+          .filter((admin) => admin.user_id)
+          .map((admin) => admin.user_id)
+      );
+
+      const adminEmails = new Set(
+        (adminUsers || [])
+          .filter((admin) => admin.user_email)
+          .map((admin) => admin.user_email)
+      );
+
+      // Create a user object for the current user
+      const currentUserData = {
+        id: currentAuthUser.id,
+        email: currentAuthUser.email || "",
+        fullName: currentAuthUser.user_metadata?.full_name || "",
+        isAdmin: true, // Current user is admin since they're viewing this page
+        lastSignIn: null,
+        createdAt: currentAuthUser.created_at,
+      };
+
+      // Add any admin users we know about by email - use a more efficient approach
+      const knownAdminUsers = Array.from(adminEmails)
+        .filter((email) => email !== currentAuthUser.email) // Exclude current user
+        .map((email) => ({
+          id: "unknown-" + Math.random().toString(36).substring(2, 15),
+          email: email,
+          fullName: "Admin User",
+          isAdmin: true,
+          lastSignIn: null,
+          createdAt: new Date().toISOString(),
+        }));
+
+      // Use a more efficient way to update state
+      setUsers([currentUserData, ...knownAdminUsers]);
+      setCurrentUser(currentUserData);
+
+      toast.success("Admin users loaded");
     } catch (err) {
       console.error("Error in fetchUsers:", err);
-      toast.error("Failed to fetch users");
+      toast.error("Failed to load user data");
 
-      // Last resort: just use the current user
+      // Fallback to just the current user
       try {
         const {
           data: { user },
@@ -1074,7 +1029,7 @@ Please keep these details secure. You can copy them by selecting the text.
             id: user.id,
             email: user.email || "",
             fullName: user.user_metadata?.full_name || "",
-            isAdmin: true, // We know they're admin if they got this far
+            isAdmin: true,
             lastSignIn: null,
             createdAt: user.created_at,
           };
@@ -1085,6 +1040,8 @@ Please keep these details secure. You can copy them by selecting the text.
       } catch (fallbackErr) {
         console.error("Error in fallback:", fallbackErr);
       }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1185,7 +1142,6 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   });
 
-  // Add this function to add an admin by email
   const addAdminByEmail = async () => {
     if (!newAdminEmail.trim()) {
       toast.error("Please enter an email address");
@@ -1195,101 +1151,39 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       setActionInProgress("adding-admin");
 
-      // First check if the user exists
-      const { data: userData, error: userError } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", newAdminEmail)
-        .single();
+      // First check if the user exists in auth
+      const {
+        data: { user: currentAuthUser },
+      } = await supabase.auth.getUser();
 
-      if (userError) {
-        // User not found in users table, try to find in auth
-        const { data: authData, error: authError } = await supabase.rpc(
-          "find_user_by_email",
-          {
-            email_to_find: newAdminEmail,
-          }
-        );
-
-        if (authError || !authData) {
-          console.error("Error finding user:", authError);
-          toast.error("User not found with that email address");
-          setActionInProgress(null);
-          return;
-        }
-
-        // User found in auth, add to users table
-        const { error: insertError } = await supabase.from("users").insert({
-          id: authData.id,
-          email: newAdminEmail,
-          is_admin: true,
-          created_at: new Date().toISOString(),
-        });
-
-        if (insertError) {
-          console.error("Error adding user to users table:", insertError);
-          toast.error("Failed to add user to users table");
-          setActionInProgress(null);
-          return;
-        }
-
-        // Add to admin_users table
-        const { error: adminError } = await supabase
-          .from("admin_users")
-          .insert({
-            user_id: authData.id,
-            granted_by: currentUser?.id,
-            granted_at: new Date().toISOString(),
-          });
-
-        if (adminError) {
-          console.error("Error adding user to admin_users table:", adminError);
-          toast.error("Failed to add user as admin");
-          setActionInProgress(null);
-          return;
-        }
-
-        toast.success(`Added ${newAdminEmail} as admin`);
-        setNewAdminEmail("");
-
-        // Refresh users list
-        fetchUsers(currentUser?.id || "");
-      } else {
-        // User found in users table, update is_admin flag
-        const { error: updateError } = await supabase
-          .from("users")
-          .update({ is_admin: true })
-          .eq("id", userData.id);
-
-        if (updateError) {
-          console.error("Error updating user as admin:", updateError);
-          toast.error("Failed to update user as admin");
-          setActionInProgress(null);
-          return;
-        }
-
-        // Add to admin_users table
-        const { error: adminError } = await supabase
-          .from("admin_users")
-          .insert({
-            user_id: userData.id,
-            granted_by: currentUser?.id,
-            granted_at: new Date().toISOString(),
-          });
-
-        if (adminError) {
-          console.error("Error adding user to admin_users table:", adminError);
-          toast.error("Failed to add user as admin");
-          setActionInProgress(null);
-          return;
-        }
-
-        toast.success(`Added ${newAdminEmail} as admin`);
-        setNewAdminEmail("");
-
-        // Refresh users list
-        fetchUsers(currentUser?.id || "");
+      if (!currentAuthUser) {
+        toast.error("You must be logged in to add an admin");
+        setActionInProgress(null);
+        return;
       }
+
+      // Add the admin directly by email
+      const { data: adminData, error: adminError } = await supabase
+        .from("admin_users")
+        .insert({
+          user_email: newAdminEmail.trim(),
+          granted_by: currentAuthUser.id,
+          granted_at: new Date().toISOString(),
+        })
+        .select();
+
+      if (adminError) {
+        console.error("Error adding admin:", adminError);
+        toast.error("Failed to add admin: " + adminError.message);
+        setActionInProgress(null);
+        return;
+      }
+
+      toast.success(`Admin privileges granted to ${newAdminEmail}`);
+      setNewAdminEmail("");
+
+      // Refresh the users list
+      fetchUsers(currentAuthUser.id);
     } catch (err) {
       console.error("Error adding admin by email:", err);
       toast.error("Failed to add admin");
@@ -1630,107 +1524,124 @@ Please keep these details secure. You can copy them by selecting the text.
   const renderSettingsTab = () => {
     return (
       <div>
-        <h2 className="text-xl text-white mb-6">Settings</h2>
+        <h2 className="text-xl text-white mb-6">Admin Settings</h2>
 
         <div className="space-y-6">
-          {/* Database Settings */}
+          {/* System Settings */}
           <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg font-medium text-white mb-4">
-              Database Management
-            </h3>
+            <h3 className="text-lg text-white mb-4">System Settings</h3>
 
             <div className="space-y-4">
-              <button
-                onClick={createRequiredTables}
-                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-              >
-                Create/Repair Database Tables
-              </button>
-
-              <button
-                onClick={checkDatabaseAccess}
-                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors ml-2"
-              >
-                Check Database Access
-              </button>
-
-              <button
-                onClick={debugAdminPermissions}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors ml-2"
-              >
-                Fix Admin Permissions
-              </button>
-            </div>
-
-            <div className="mt-4 text-white/70 text-sm">
-              <p>
-                Use these tools to manage database tables and fix permissions
-                issues.
-              </p>
-            </div>
-          </div>
-
-          {/* Cache Settings */}
-          <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg font-medium text-white mb-4">
-              Cache Management
-            </h3>
-
-            <div className="space-y-4">
-              <button
-                onClick={() => {
-                  localStorage.removeItem("admin_orders_cache");
-                  localStorage.removeItem("admin_orders_timestamp");
-                  toast.success("Cache cleared");
-                  fetchOrders();
-                }}
-                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
-              >
-                Clear Cache
-              </button>
-            </div>
-
-            <div className="mt-4 text-white/70 text-sm">
-              <p>Clear the local cache to fetch fresh data from the server.</p>
-            </div>
-          </div>
-
-          {/* User Settings */}
-          <div className="bg-white/5 rounded-lg p-6">
-            <h3 className="text-lg font-medium text-white mb-4">
-              User Settings
-            </h3>
-
-            {currentUser && (
-              <div className="text-white/70">
-                <p>
-                  <span className="text-white">Email:</span> {currentUser.email}
-                </p>
-                <p>
-                  <span className="text-white">Name:</span>{" "}
-                  {currentUser.fullName || "Not set"}
-                </p>
-                <p>
-                  <span className="text-white">Admin:</span>{" "}
-                  {currentUser.isAdmin ? "Yes" : "No"}
-                </p>
-                <p>
-                  <span className="text-white">Created:</span>{" "}
-                  {new Date(currentUser.createdAt).toLocaleString()}
-                </p>
+              <div>
+                <label className="block text-white/70 mb-2">Site Name</label>
+                <input
+                  type="text"
+                  value="Cipher Admin"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
               </div>
-            )}
 
-            <div className="mt-4">
+              <div>
+                <label className="block text-white/70 mb-2">
+                  Support Email
+                </label>
+                <input
+                  type="email"
+                  value="support@example.com"
+                  onChange={() => {}}
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
+                />
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="maintenance-mode"
+                  checked={false}
+                  onChange={() => {}}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <label htmlFor="maintenance-mode" className="ml-2 text-white">
+                  Enable Maintenance Mode
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-6">
               <button
-                onClick={() => {
-                  supabase.auth.signOut();
-                  navigate("/");
-                }}
-                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
+                onClick={() => toast.info("Settings saved (demo)")}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors"
               >
-                Sign Out
+                Save Settings
               </button>
+            </div>
+          </div>
+
+          {/* Database Management */}
+          <div className="bg-white/5 rounded-lg p-6">
+            <h3 className="text-lg text-white mb-4">Database Management</h3>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Backup Database</h4>
+                  <p className="text-white/70 text-sm">
+                    Create a backup of the current database
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.info("Database backup initiated (demo)")}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                >
+                  Create Backup
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Clear Cache</h4>
+                  <p className="text-white/70 text-sm">
+                    Clear the system cache
+                  </p>
+                </div>
+                <button
+                  onClick={() => toast.success("Cache cleared (demo)")}
+                  className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
+                >
+                  Clear Cache
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Danger Zone */}
+          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6">
+            <h3 className="text-lg text-red-400 mb-4">Danger Zone</h3>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-white">Reset All Settings</h4>
+                  <p className="text-white/70 text-sm">
+                    Reset all settings to default values
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Are you sure you want to reset all settings? This cannot be undone."
+                      )
+                    ) {
+                      toast.success("Settings reset to defaults (demo)");
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
+                >
+                  Reset Settings
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1766,7 +1677,7 @@ Please keep these details secure. You can copy them by selecting the text.
                 <input
                   type="text"
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={(e) => setFilteredSearchTerm(e.target.value)}
                   placeholder="Search orders..."
                   className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
                 />
@@ -2282,6 +2193,97 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       toast.info("Creating required database tables...");
 
+      // Create admin_users table if it doesn't exist
+      const { error: adminTableError } = await supabase.rpc(
+        "create_admin_users_table"
+      );
+
+      if (adminTableError) {
+        console.error("Error creating admin_users table:", adminTableError);
+
+        // Try direct SQL as fallback
+        const { error: sqlError } = await supabase.rpc("execute_sql", {
+          sql: `
+            CREATE TABLE IF NOT EXISTS admin_users (
+              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+              user_id UUID NOT NULL,
+              granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+              UNIQUE(user_id)
+            );
+          `,
+        });
+
+        if (sqlError) {
+          console.error("Error creating admin_users table via SQL:", sqlError);
+        }
+      }
+
+      // Create users table if it doesn't exist
+      const { error: usersTableError } = await supabase.rpc(
+        "create_users_table"
+      );
+
+      if (usersTableError) {
+        console.error("Error creating users table:", usersTableError);
+
+        // Try direct SQL as fallback
+        const { error: sqlError } = await supabase.rpc("execute_sql", {
+          sql: `
+            CREATE TABLE IF NOT EXISTS users (
+              id UUID PRIMARY KEY,
+              email TEXT,
+              full_name TEXT,
+              is_admin BOOLEAN DEFAULT FALSE,
+              created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+          `,
+        });
+
+        if (sqlError) {
+          console.error("Error creating users table via SQL:", sqlError);
+        }
+      }
+
+      toast.success("Database tables created successfully");
+
+      // Add current user to users table
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        const { error: insertError } = await supabase.from("users").upsert(
+          {
+            id: user.id,
+            email: user.email,
+            full_name: user.user_metadata?.full_name || "",
+            is_admin: true,
+            created_at: user.created_at,
+          },
+          { onConflict: "id" }
+        );
+
+        if (insertError) {
+          console.error(
+            "Error adding current user to users table:",
+            insertError
+          );
+        }
+      }
+
+      // Refresh the page to apply changes
+      window.location.reload();
+    } catch (err) {
+      console.error("Error creating required tables:", err);
+      toast.error("Failed to create database tables");
+    }
+  };
+
+  // Add this function to debug and fix admin permissions
+  const debugAdminPermissions = async () => {
+    try {
+      toast.info("Checking admin permissions...");
+
       // Get the current user
       const {
         data: { user },
@@ -2292,529 +2294,86 @@ Please keep these details secure. You can copy them by selecting the text.
         return;
       }
 
-      // Try to create admin_users table
-      const createAdminUsersSQL = `
-        CREATE TABLE IF NOT EXISTS admin_users (
-          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-          user_id UUID NOT NULL,
-          granted_by UUID,
-          granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-        -- Add unique constraint in a separate statement to avoid errors if it already exists
-        DO $$
-        BEGIN
-          BEGIN
-            ALTER TABLE admin_users ADD CONSTRAINT admin_users_user_id_key UNIQUE (user_id);
-          EXCEPTION WHEN duplicate_table THEN
-            NULL;
-          END;
-        END $$;
-      `;
+      console.log("Current user:", user);
 
-      // Try to create users table
-      const createUsersSQL = `
-        CREATE TABLE IF NOT EXISTS users (
-          id UUID PRIMARY KEY,
-          email TEXT,
-          full_name TEXT,
-          is_admin BOOLEAN DEFAULT FALSE,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-      `;
+      // Check if the user exists in the users table
+      const { data: existingUser, error: userError } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", user.id)
+        .single();
 
-      // Try to execute SQL
-      try {
-        // Create admin_users table
-        const { error: adminError } = await supabase.rpc("execute_sql", {
-          sql: createAdminUsersSQL,
-        });
+      if (userError) {
+        console.error("Error checking user in users table:", userError);
 
-        if (adminError) {
-          console.error("Error creating admin_users table:", adminError);
-          toast.error(
-            `Error creating admin_users table: ${adminError.message}`
-          );
-        } else {
-          toast.success("Admin users table created successfully");
-        }
-
-        // Create users table
-        const { error: usersError } = await supabase.rpc("execute_sql", {
-          sql: createUsersSQL,
-        });
-
-        if (usersError) {
-          console.error("Error creating users table:", usersError);
-          toast.error(`Error creating users table: ${usersError.message}`);
-        } else {
-          toast.success("Users table created successfully");
-        }
-      } catch (sqlError) {
-        console.error("SQL execution error:", sqlError);
-        toast.error("Error executing SQL. You might not have permission.");
-
-        // Fallback: try direct table creation via insert
-        try {
-          // Try to insert the current user as an admin
-          const { error: insertError } = await supabase
-            .from("admin_users")
-            .insert({
-              user_id: user.id,
-              granted_at: new Date().toISOString(),
-            });
-
-          if (insertError && !insertError.message.includes("already exists")) {
-            console.error("Error inserting admin user:", insertError);
-            toast.error(`Error adding admin user: ${insertError.message}`);
-          } else {
-            toast.success("You were added as an admin user");
-          }
-        } catch (insertError) {
-          console.error("Insert error:", insertError);
-          toast.error("Failed to create tables via insert");
-        }
-      }
-
-      // Add current user to users table
-      const { error: upsertError } = await supabase.from("users").upsert(
-        {
+        // Add the user to the users table
+        const { error: insertError } = await supabase.from("users").insert({
           id: user.id,
           email: user.email,
           full_name: user.user_metadata?.full_name || "",
           is_admin: true,
           created_at: user.created_at,
-        },
-        { onConflict: "id" }
-      );
+        });
 
-      if (upsertError) {
-        console.error("Error adding user to users table:", upsertError);
-        toast.error(`Error adding user: ${upsertError.message}`);
+        if (insertError) {
+          console.error("Error adding user to users table:", insertError);
+          toast.error("Failed to add user to users table");
+        } else {
+          toast.success("Added user to users table");
+        }
       } else {
-        toast.success("User details updated successfully");
+        console.log("User found in users table:", existingUser);
+
+        // Update the user's admin status
+        const { error: updateError } = await supabase
+          .from("users")
+          .update({ is_admin: true })
+          .eq("id", user.id);
+
+        if (updateError) {
+          console.error("Error updating user admin status:", updateError);
+          toast.error("Failed to update user admin status");
+        } else {
+          toast.success("Updated user admin status");
+        }
       }
 
-      // Add current user to admin_users table
-      const { error: adminInsertError } = await supabase
+      // Check if the user exists in the admin_users table
+      const { data: adminUser, error: adminError } = await supabase
         .from("admin_users")
-        .upsert(
-          {
-            user_id: user.id,
-            granted_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id" }
-        );
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
 
-      if (adminInsertError) {
-        console.error(
-          "Error adding user to admin_users table:",
-          adminInsertError
-        );
-        toast.error(`Error adding admin: ${adminInsertError.message}`);
-      } else {
-        toast.success("Admin privileges granted successfully");
-      }
+      if (adminError) {
+        console.error("Error checking user in admin_users table:", adminError);
 
-      // Refresh the page after a delay
-      toast.info("Refreshing page in 3 seconds...");
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
-    } catch (err) {
-      console.error("Error creating required tables:", err);
-      toast.error("Failed to create database tables");
-    }
-  };
-
-  // Add this function to debug and fix admin permissions
-  const debugAdminPermissions = async () => {
-    try {
-      toast.info("Debugging admin permissions...");
-
-      // Get the current user
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        toast.error("No user found. Please log in first.");
-        return;
-      }
-
-      console.log("Current user:", user);
-
-      // Step 1: Check if tables exist
-      toast.info("Checking database tables...");
-
-      // First check if admin_users table exists
-      try {
-        const { error: adminTableError } = await supabase
-          .from("admin_users")
-          .select("count(*)", { count: "exact", head: true });
-
-        if (adminTableError) {
-          console.error("admin_users table check error:", adminTableError);
-          toast.error("admin_users table doesn't exist or isn't accessible");
-
-          // Try to create the table
-          await createRequiredTables();
-          return;
-        } else {
-          toast.success("admin_users table exists");
-        }
-      } catch (err) {
-        console.error("Error checking admin_users table:", err);
-        toast.error("Failed to check admin_users table");
-      }
-
-      // Check if users table exists
-      try {
-        const { error: usersTableError } = await supabase
-          .from("users")
-          .select("count(*)", { count: "exact", head: true });
-
-        if (usersTableError) {
-          console.error("users table check error:", usersTableError);
-          toast.error("users table doesn't exist or isn't accessible");
-
-          // Try to create the table
-          await createRequiredTables();
-          return;
-        } else {
-          toast.success("users table exists");
-        }
-      } catch (err) {
-        console.error("Error checking users table:", err);
-        toast.error("Failed to check users table");
-      }
-
-      // Step 2: Check if user is in admin_users table
-      try {
-        const { data: adminUser, error: adminCheckError } = await supabase
-          .from("admin_users")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        if (adminCheckError) {
-          console.error("Error checking admin status:", adminCheckError);
-          toast.error("Failed to check admin status");
-        } else if (adminUser) {
-          toast.success("You're already in the admin_users table");
-        } else {
-          toast.warning("You're not in the admin_users table");
-
-          // Add user to admin_users
-          const { error: insertError } = await supabase
-            .from("admin_users")
-            .insert({
-              user_id: user.id,
-              granted_at: new Date().toISOString(),
-            });
-
-          if (insertError) {
-            console.error("Error adding to admin_users:", insertError);
-            toast.error("Failed to add you to admin_users table");
-          } else {
-            toast.success("Added you to admin_users table");
-          }
-        }
-      } catch (err) {
-        console.error("Error in admin check:", err);
-        toast.error("Failed to check/update admin status");
-      }
-
-      // Step 3: Check if user is in users table
-      try {
-        const { data: userRecord, error: userCheckError } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", user.id)
-          .maybeSingle();
-
-        if (userCheckError) {
-          console.error("Error checking user record:", userCheckError);
-          toast.error("Failed to check user record");
-        } else if (userRecord) {
-          toast.success("You're already in the users table");
-
-          // Ensure is_admin flag is set
-          if (!userRecord.is_admin) {
-            const { error: updateError } = await supabase
-              .from("users")
-              .update({ is_admin: true })
-              .eq("id", user.id);
-
-            if (updateError) {
-              console.error("Error updating is_admin flag:", updateError);
-              toast.error("Failed to update admin status in users table");
-            } else {
-              toast.success("Updated your admin status in users table");
-            }
-          }
-        } else {
-          toast.warning("You're not in the users table");
-
-          // Add user to users table
-          const { error: insertError } = await supabase.from("users").insert({
-            id: user.id,
-            email: user.email,
-            full_name: user.user_metadata?.full_name || "",
-            is_admin: true,
-            created_at: user.created_at,
-          });
-
-          if (insertError) {
-            console.error("Error adding to users table:", insertError);
-            toast.error("Failed to add you to users table");
-          } else {
-            toast.success("Added you to users table");
-          }
-        }
-      } catch (err) {
-        console.error("Error in user check:", err);
-        toast.error("Failed to check/update user record");
-      }
-
-      // Refresh the page after a delay
-      toast.info("Debug complete. Reloading page in 3 seconds...");
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
-    } catch (err) {
-      console.error("Error in debugAdminPermissions:", err);
-      toast.error("Failed to debug admin permissions");
-    }
-  };
-
-  // Add this function to check SQL capabilities of your environment
-  const checkSQLCapabilities = async () => {
-    try {
-      toast.info("Checking SQL capabilities...");
-
-      // Try a simple query to check if SQL functions work
-      const { data, error } = await supabase.rpc("check_sql_capabilities", {
-        sql_statement: "SELECT 1 as test",
-      });
-
-      if (error) {
-        console.error("SQL capabilities error:", error);
-        toast.error("Your environment doesn't support custom SQL via RPC");
-        return false;
-      }
-
-      toast.success("Your environment supports custom SQL via RPC");
-      console.log("SQL capabilities result:", data);
-      return true;
-    } catch (err) {
-      console.error("Error checking SQL capabilities:", err);
-      toast.error("Could not determine SQL capabilities");
-      return false;
-    }
-  };
-
-  // Create a simplified function to set up admin permissions
-  const setupAdminAccess = async () => {
-    try {
-      toast.info("Setting up admin access...");
-
-      // Get current user
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        toast.error("No user found. Please log in first.");
-        return;
-      }
-
-      toast.info("Attempting to create admin access for: " + user.email);
-
-      // First try direct insert to admin_users table
-      try {
-        const { error: adminInsertError } = await supabase
+        // Add the user to the admin_users table
+        const { error: insertError } = await supabase
           .from("admin_users")
           .insert({
             user_id: user.id,
             granted_at: new Date().toISOString(),
           });
 
-        if (adminInsertError) {
-          console.log(
-            "Admin insert error (this might be normal if table doesn't exist):",
-            adminInsertError
-          );
+        if (insertError) {
+          console.error("Error adding user to admin_users table:", insertError);
+          toast.error("Failed to add user to admin_users table");
         } else {
-          toast.success("Added to admin_users table");
+          toast.success("Added user to admin_users table");
         }
-      } catch (err) {
-        console.log("Error with admin_users table (might not exist yet):", err);
-      }
-
-      // Try to insert into users table
-      try {
-        // Try simple insert first
-        const { error: userInsertError } = await supabase.from("users").insert({
-          id: user.id,
-          email: user.email,
-          is_admin: true,
-        });
-
-        if (userInsertError) {
-          console.log("User insert error:", userInsertError);
-
-          // If simple insert fails, try update
-          const { error: updateError } = await supabase
-            .from("users")
-            .update({ is_admin: true })
-            .eq("id", user.id);
-
-          if (updateError) {
-            console.log("User update error:", updateError);
-          } else {
-            toast.success("Updated admin status in users table");
-          }
-        } else {
-          toast.success("Added to users table as admin");
-        }
-      } catch (err) {
-        console.log("Error with users table:", err);
-      }
-
-      // Try to call a serverless function to grant admin access
-      try {
-        const response = await fetch("/.netlify/functions/grant-admin-access", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ userId: user.id }),
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          toast.success("Admin access granted via serverless function");
-        } else {
-          console.log("Serverless function error:", result.error);
-        }
-      } catch (err) {
-        console.log("Error calling serverless function:", err);
-      }
-
-      // Refresh the page after delay
-      toast.info("Setup complete. Refreshing in 3 seconds...");
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
-    } catch (err) {
-      console.error("Error in setupAdminAccess:", err);
-      toast.error("Error setting up admin access");
-    }
-  };
-
-  // Add a function specifically to handle the infinite recursion policy error
-  const fixUsersTablePolicy = async () => {
-    try {
-      toast.info("Attempting to fix users table policies...");
-
-      // Try to use the Netlify function to fix policies
-      const response = await fetch("/.netlify/functions/fix-user-policies", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        toast.success("User table policies fixed successfully");
-
-        // Try setting up admin again after policies are fixed
-        await setupAdminAccess();
       } else {
-        toast.error("Failed to fix user policies: " + result.error);
-      }
-    } catch (err) {
-      console.error("Error fixing user policies:", err);
-      toast.error("Error communicating with serverless function");
-    }
-  };
-
-  // Add this function to force admin access for testing
-  const forceAdminAccess = async () => {
-    try {
-      toast.info("Attempting to force admin access for testing...");
-
-      // Get current user
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        toast.error("No user found. Please log in first.");
-        return;
+        console.log("User found in admin_users table:", adminUser);
+        toast.success("User already has admin privileges");
       }
 
-      // Try to call the serverless function to force admin access
-      try {
-        const response = await fetch("/.netlify/functions/force-admin-access", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            userId: user.id,
-            email: user.email,
-          }),
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          toast.success("Admin access forced via serverless function");
-
-          // Update the local session with the new metadata
-          await supabase.auth.refreshSession();
-
-          // Refresh the page after a delay
-          toast.info("Refreshing page in 3 seconds...");
-          setTimeout(() => {
-            window.location.reload();
-          }, 3000);
-        } else {
-          toast.error("Failed to force admin access: " + result.error);
-        }
-      } catch (err) {
-        console.error("Error calling serverless function:", err);
-        toast.error("Error communicating with serverless function");
-      }
-    } catch (err) {
-      console.error("Error in forceAdminAccess:", err);
-      toast.error("Failed to force admin access");
-    }
-  };
-
-  // Add a simpler function to set admin status in local storage
-  const enableLocalAdminMode = () => {
-    try {
-      toast.info("Enabling local admin mode...");
-
-      // Store admin status in localStorage
-      localStorage.setItem("adminMode", "true");
-      localStorage.setItem("adminModeEnabled", new Date().toISOString());
-
-      // Update state
-      setIsAdmin(true);
-
-      toast.success("Local admin mode enabled! This is for development only.");
-      toast.info("Refreshing page in 2 seconds...");
-
-      // Refresh after delay
+      // Refresh the page to apply changes
       setTimeout(() => {
         window.location.reload();
       }, 2000);
     } catch (err) {
-      console.error("Error enabling local admin mode:", err);
-      toast.error("Failed to enable local admin mode");
+      console.error("Error debugging admin permissions:", err);
+      toast.error("Failed to debug admin permissions");
     }
   };
 
@@ -2830,50 +2389,32 @@ Please keep these details secure. You can copy them by selecting the text.
 
   if (!isAdmin) {
     return (
-      <PageContainer>
+      <PageContainer title="ADMIN">
         <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
           <div className="text-center max-w-md">
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
             <p className="text-white/70 mb-6">
-              You don't have permission to access the admin page. Try these
-              options:
+              You don't have permission to access this page. If you believe this
+              is an error, you can try to set up the admin database tables.
             </p>
-            <div className="flex flex-col gap-3 items-center">
+            <div className="flex flex-col gap-4 items-center">
               <button
-                onClick={enableLocalAdminMode}
-                className="w-full px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg transition-colors"
+                onClick={createRequiredTables}
+                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors w-full"
               >
-                Enable Local Admin Mode
+                Set Up Admin Tables
               </button>
-
-              <button
-                onClick={setupAdminAccess}
-                className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
-              >
-                Setup Admin Access
-              </button>
-
-              <button
-                onClick={forceAdminAccess}
-                className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors"
-              >
-                Force Admin Access
-              </button>
-
-              <div className="border-t border-white/10 w-full my-2"></div>
-
-              <button
-                onClick={debugAdminPermissions}
-                className="w-full px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors"
-              >
-                Debug Admin Status
-              </button>
-
               <button
                 onClick={() => navigate("/")}
-                className="w-full px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors w-full"
               >
                 Go Home
+              </button>
+              <button
+                onClick={debugAdminPermissions}
+                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors w-full mt-2"
+              >
+                Debug Admin Permissions
               </button>
             </div>
           </div>

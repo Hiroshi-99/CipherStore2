@@ -6,67 +6,100 @@ import { safeInsert } from "./database";
  * @param userId The user ID to check
  * @returns True if the user is an admin, false otherwise
  */
-export const checkIfAdmin = async (userId: string): Promise<boolean> => {
+export const checkIfAdmin = async (
+  userId: string
+): Promise<{ isAdmin: boolean; error?: string }> => {
   try {
     if (!userId) {
       console.error("No user ID provided to checkIfAdmin");
-      return false;
+      return { isAdmin: false, error: "No user ID provided" };
     }
 
     console.log("Checking admin status for user:", userId);
 
-    // Approach 1: Check user metadata for admin role
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    // First check the admin_users table
+    const { data: adminUser, error: adminError } = await supabase
+      .from("admin_users")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
 
-      if (
-        user &&
-        (user.user_metadata?.role === "admin" ||
-          user.user_metadata?.is_admin === true)
-      ) {
-        console.log("User has admin role in metadata");
-        return true;
-      }
-
-      // Try email-based admin check for development
-      const adminEmails = [
-        "admin@example.com",
-        // Add other admin emails here
-      ];
-
-      if (
-        user &&
-        user.email &&
-        adminEmails.includes(user.email.toLowerCase())
-      ) {
-        console.log("User email is in admin list");
-        return true;
-      }
-    } catch (metadataErr) {
-      console.error("Error checking user metadata:", metadataErr);
+    if (adminError && !adminError.message.includes("No rows found")) {
+      console.error("Error checking admin_users table:", adminError);
     }
 
-    // Remove server-side checks since they're failing with 403/500 errors
+    if (adminUser) {
+      console.log("User found in admin_users table:", adminUser);
+      return { isAdmin: true };
+    }
 
-    // Approach 2: A fallback for localhost/development
-    if (
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1" ||
-      window.location.hostname.includes("netlify.app") // Allow admin for netlify preview sites
-    ) {
-      console.log(
-        "Running on localhost or netlify - granting admin privileges for development"
-      );
-      return true;
+    // If not found in admin_users, check the users table for is_admin flag
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("is_admin")
+      .eq("id", userId)
+      .single();
+
+    if (userError && !userError.message.includes("No rows found")) {
+      console.error("Error checking users table:", userError);
+    }
+
+    if (user && user.is_admin) {
+      console.log("User found in users table with is_admin=true:", user);
+
+      // Add the user to admin_users table for future checks
+      const { error: insertError } = await supabase.from("admin_users").insert({
+        user_id: userId,
+        granted_at: new Date().toISOString(),
+      });
+
+      if (insertError) {
+        console.error("Error adding user to admin_users table:", insertError);
+      }
+
+      return { isAdmin: true };
+    }
+
+    // As a fallback, check if this is the first user in the system
+    const { count, error: countError } = await supabase
+      .from("users")
+      .select("*", { count: "exact", head: true });
+
+    if (countError) {
+      console.error("Error counting users:", countError);
+    }
+
+    if (count === 1) {
+      console.log("This is the only user in the system, granting admin access");
+
+      // Update the user record
+      const { error: updateError } = await supabase
+        .from("users")
+        .update({ is_admin: true })
+        .eq("id", userId);
+
+      if (updateError) {
+        console.error("Error updating user as admin:", updateError);
+      }
+
+      // Add to admin_users table
+      const { error: insertError } = await supabase.from("admin_users").insert({
+        user_id: userId,
+        granted_at: new Date().toISOString(),
+      });
+
+      if (insertError) {
+        console.error("Error adding user to admin_users table:", insertError);
+      }
+
+      return { isAdmin: true };
     }
 
     console.log("User is not an admin");
-    return false;
+    return { isAdmin: false };
   } catch (error) {
     console.error("Error in checkIfAdmin:", error);
-    return false;
+    return { isAdmin: false, error: "Error checking admin status" };
   }
 };
 
