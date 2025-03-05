@@ -15,18 +15,25 @@ const AdminGuard: React.FC<AdminGuardProps> = ({ children }) => {
     const devOverride =
       window.localStorage.getItem("dev_admin_override") === "true";
 
-    if (devOverride && !isProduction) {
-      console.log("Using development admin override");
-    } else {
-      checkAdminStatus();
+    let initialCheckDone = false;
+
+    // Only check once on initial load
+    if (!initialCheckDone) {
+      initialCheckDone = true;
+
+      if (devOverride && !isProduction) {
+        console.log("Using development admin override in guard");
+      } else {
+        checkAdminStatus();
+      }
     }
 
-    // Create a periodic check to ensure admin status stays valid
+    // Create a periodic check but with a longer interval
     const intervalId = setInterval(() => {
       if (!devOverride || isProduction) {
         checkAdminStatus();
       }
-    }, 5 * 60 * 1000); // Check every 5 minutes
+    }, 15 * 60 * 1000); // Check every 15 minutes instead of 5
 
     return () => clearInterval(intervalId);
   }, [checkAdminStatus]);

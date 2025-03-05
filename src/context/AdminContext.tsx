@@ -46,6 +46,27 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
   const checkAdminStatus = async () => {
     setIsAdminLoading(true);
     try {
+      // FIRST check for development mode override BEFORE making any API calls
+      if (process.env.NODE_ENV === "development") {
+        const devOverride =
+          localStorage.getItem("dev_admin_override") === "true";
+        if (devOverride) {
+          console.log("Using development admin override");
+          setIsAdmin(true);
+          setIsAdminLoading(false);
+
+          // Cache result with timestamp
+          localStorage.setItem(
+            "admin_status",
+            JSON.stringify({
+              isAdmin: true,
+              timestamp: Date.now(),
+            })
+          );
+          return; // Exit early
+        }
+      }
+
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -59,6 +80,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
             timestamp: Date.now(),
           })
         );
+        setIsAdminLoading(false);
         return;
       }
 
@@ -77,27 +99,6 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
           timestamp: Date.now(),
         })
       );
-
-      // Add a development mode check first
-      if (process.env.NODE_ENV === "development") {
-        const devOverride =
-          localStorage.getItem("dev_admin_override") === "true";
-        if (devOverride) {
-          console.log("Using development admin override");
-          setIsAdmin(true);
-          setIsAdminLoading(false);
-
-          // Save to cache
-          localStorage.setItem(
-            "admin_status",
-            JSON.stringify({
-              isAdmin: true,
-              timestamp: Date.now(),
-            })
-          );
-          return;
-        }
-      }
     } catch (err) {
       console.error("Error checking admin status:", err);
       setIsAdmin(false);
