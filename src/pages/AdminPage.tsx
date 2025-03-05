@@ -57,6 +57,7 @@ import AutoSizer from "react-virtualized-auto-sizer";
 import { useAdminOrders } from "../hooks/useAdminOrders";
 import OrdersSkeleton from "../components/OrdersSkeleton";
 import { useAdmin } from "../context/AdminContext";
+import OrderActionButtons from "../components/admin/OrderActionButtons";
 
 interface Admin {
   id: string;
@@ -397,25 +398,23 @@ function AdminPage() {
         return;
       }
 
-      // Load orders and users if component is still mounted
-      fetchOrders();
-      fetchUsers();
+      // Don't fetch data here - moved to the other useEffect
       setLoading(false);
     };
 
     getCurrentUser();
-  }, [navigate]);
+  }, [navigate]); // Only depend on navigate, not fetchOrders and fetchUsers
 
-  // Effect to load data when tab changes
+  // Fix useEffect for data loading to properly depend on isAdmin
   useEffect(() => {
-    if (isAdmin) {
+    if (isAdmin && !loading) {
       if (selectedTab === "orders") {
         fetchOrders();
       } else if (selectedTab === "users") {
         fetchUsers();
       }
     }
-  }, [selectedTab, isAdmin, fetchOrders, fetchUsers]);
+  }, [selectedTab, isAdmin, loading, fetchOrders, fetchUsers]);
 
   // Update selected order detail when order ID changes
   useEffect(() => {
@@ -656,6 +655,58 @@ function AdminPage() {
       return false;
     }
   }, [user, supabase]);
+
+  // Add this function to handle order updates locally
+  const updateLocalOrderStatus = useCallback(
+    (orderId: string, newStatus: string) => {
+      setOrders((prevOrders) =>
+        prevOrders.map((order) =>
+          order.id === orderId ? { ...order, status: newStatus } : order
+        )
+      );
+
+      // Update stats as well
+      setStats((prevStats) => {
+        const newStats = { ...prevStats };
+        // Decrement from old status count (if order exists)
+        const order = orders.find((o) => o.id === orderId);
+        if (order) {
+          const oldStatus = order.status;
+          if (oldStatus in newStats) {
+            newStats[oldStatus as keyof typeof newStats] -= 1;
+          }
+        }
+
+        // Increment new status count
+        if (newStatus in newStats) {
+          newStats[newStatus as keyof typeof newStats] += 1;
+        }
+
+        return newStats;
+      });
+    },
+    [orders]
+  );
+
+  // Update the onApprove function
+  const onApprove = async (orderId: string) => {
+    const result = await handleApprove(orderId);
+    if (result?.success) {
+      updateLocalOrderStatus(orderId, "active");
+      toast.success("Order approved successfully");
+    }
+    return result;
+  };
+
+  // Update the onReject function
+  const onReject = async (orderId: string) => {
+    const result = await handleReject(orderId);
+    if (result?.success) {
+      updateLocalOrderStatus(orderId, "rejected");
+      toast.success("Order rejected successfully");
+    }
+    return result;
+  };
 
   // Render functions for tabs
   const renderUsersTab = () => {
@@ -913,41 +964,15 @@ function AdminPage() {
                       <div className="flex gap-2">
                         {order.status === "pending" && (
                           <>
-                            <button
-                              className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-full"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleApprove(order.id).then((result) => {
-                                  if (result?.success) {
-                                    // Update local state
-                                    setOrders((prevOrders) =>
-                                      prevOrders.map((o) =>
-                                        o.id === order.id
-                                          ? { ...o, status: "active" }
-                                          : o
-                                      )
-                                    );
-                                    // Update stats if needed
-                                    setStats((prev) => ({
-                                      ...prev,
-                                      pending: Math.max(0, prev.pending - 1),
-                                      approved: prev.approved + 1,
-                                    }));
-                                  }
-                                });
-                              }}
-                            >
-                              <CheckCircle size={20} />
-                            </button>
-                            <button
-                              className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleReject(order.id);
-                              }}
-                            >
-                              <XCircle size={20} />
-                            </button>
+                            <OrderActionButtons
+                              order={order}
+                              handleApprove={onApprove}
+                              handleReject={onReject}
+                              setSelectedOrderId={setSelectedOrderId}
+                              setSelectedOrderDetail={setSelectedOrderDetail}
+                              setOrders={setOrders}
+                              setStats={setStats}
+                            />
                           </>
                         )}
                         <button
