@@ -1508,6 +1508,50 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add this function to set up admin tables
+  const setupAdminTables = async () => {
+    try {
+      toast.info("Setting up admin database tables...");
+
+      // Get the current user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        toast.error("No user found. Please log in first.");
+        return;
+      }
+
+      // Call the serverless function to set up tables
+      const response = await fetch("/.netlify/functions/setup-admin-tables", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          email: user.email,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to set up admin tables");
+      }
+
+      toast.success("Admin tables set up successfully! Refreshing...");
+
+      // Reload the page after a short delay
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } catch (err) {
+      console.error("Error setting up admin tables:", err);
+      toast.error("Failed to set up admin tables");
+    }
+  };
+
   const renderSettingsTab = () => {
     return (
       <div>
