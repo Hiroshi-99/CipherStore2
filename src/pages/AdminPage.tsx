@@ -52,6 +52,8 @@ import {
 } from "../lib/adminService";
 import OrderDetailModal from "../components/admin/OrderDetailModal";
 import AccountDetailsForm from "../components/admin/AccountDetailsForm";
+import { FixedSizeList as List } from "react-window";
+import AutoSizer from "react-virtualized-auto-sizer";
 
 interface Admin {
   id: string;
@@ -148,6 +150,10 @@ function AdminPage() {
   const [selectedOrderDetail, setSelectedOrderDetail] = useState<Order | null>(
     null
   );
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [hasMoreOrders, setHasMoreOrders] = useState(true);
+  const [isFetchingNextPage, setIsFetchingNextPage] = useState(false);
 
   // This will define the selectedOrder based on the selectedOrderId
   const selectedOrder = selectedOrderId
@@ -184,8 +190,23 @@ function AdminPage() {
     }
   }, [selectedOrderId, orders]);
 
-  // Define handleApprove early in the component
-  const handleApprove = async (orderId: string) => {
+  // Memoize event handlers and computed values
+  const handleViewOrderDetails = useCallback(
+    (orderId: string) => {
+      setSelectedOrderId(orderId);
+      const order = orders.find((o) => o.id === orderId);
+      if (order) {
+        setSelectedOrderDetail(order);
+      }
+    },
+    [orders]
+  );
+
+  const handleApprove = useCallback(async (orderId: string) => {
+    if (!confirm("Are you sure you want to approve this order?")) {
+      return;
+    }
+
     try {
       setActionInProgress(orderId);
 
@@ -195,33 +216,25 @@ function AdminPage() {
         .update({ status: "active" })
         .eq("id", orderId);
 
-      if (error) {
-        console.error("Error approving order:", error);
-        toast.error("Failed to approve order");
-        return;
-      }
+      if (error) throw error;
 
-      // Update local state
-      setOrders(
-        orders.map((order) =>
+      // Update optimistically
+      setOrders((prevOrders) =>
+        prevOrders.map((order) =>
           order.id === orderId ? { ...order, status: "active" } : order
         )
       );
 
       toast.success("Order approved successfully");
-
-      // Refresh orders to get the latest data
-      fetchOrders();
     } catch (err) {
       console.error("Error in handleApprove:", err);
       toast.error("Failed to approve order");
     } finally {
       setActionInProgress(null);
     }
-  };
+  }, []);
 
-  // Add this function to handle rejecting orders
-  const handleReject = async (orderId: string) => {
+  const handleReject = useCallback(async (orderId: string) => {
     if (!confirm("Are you sure you want to reject this order?")) {
       return;
     }
@@ -235,30 +248,23 @@ function AdminPage() {
         .update({ status: "rejected" })
         .eq("id", orderId);
 
-      if (error) {
-        console.error("Error rejecting order:", error);
-        toast.error("Failed to reject order");
-        return;
-      }
+      if (error) throw error;
 
-      // Update local state
-      setOrders(
-        orders.map((order) =>
+      // Update optimistically
+      setOrders((prevOrders) =>
+        prevOrders.map((order) =>
           order.id === orderId ? { ...order, status: "rejected" } : order
         )
       );
 
       toast.success("Order rejected successfully");
-
-      // Refresh orders to get the latest data
-      fetchOrders();
     } catch (err) {
       console.error("Error in handleReject:", err);
       toast.error("Failed to reject order");
     } finally {
       setActionInProgress(null);
     }
-  };
+  }, []);
 
   useEffect(() => {
     setPageTitle("ADMIN");
@@ -267,11 +273,21 @@ function AdminPage() {
   }, []);
 
   // Optimize the fetchOrders function to properly retrieve all orders
-  const fetchOrders = async () => {
-    setRefreshing(true);
+  const fetchOrders = async (page = 1, append = false) => {
+    const pageToFetch = page || currentPage;
+
+    if (page === 1) {
+      setRefreshing(true);
+    } else {
+      setIsFetchingNextPage(true);
+    }
 
     try {
-      // Use a more efficient query with pagination and proper relations
+      // Calculate range for pagination
+      const from = (pageToFetch - 1) * pageSize;
+      const to = from + pageSize - 1;
+
+      // Use a more efficient query with pagination
       const { data: ordersData, error: ordersError } = await supabase
         .from("orders")
         .select(
@@ -282,7 +298,7 @@ function AdminPage() {
         `
         )
         .order("created_at", { ascending: false })
-        .limit(100); // Limit to 100 orders for better performance
+        .range(from, to);
 
       if (ordersError) {
         console.error("Error fetching orders:", ordersError);
@@ -291,37 +307,77 @@ function AdminPage() {
       }
 
       if (ordersData) {
-        console.log("Fetched orders:", ordersData); // Debug log
+        // If we got fewer items than requested, there are no more pages
+        setHasMoreOrders(ordersData.length === pageSize);
 
-        // Cache the orders
-        localStorage.setItem("admin_orders_cache", JSON.stringify(ordersData));
-        localStorage.setItem("admin_orders_timestamp", Date.now().toString());
+        // Update state based on whether we're appending or replacing
+        if (append) {
+          setOrders((prevOrders) => [...prevOrders, ...ordersData]);
+        } else {
+          setOrders(ordersData);
+        }
 
-        // Use a more efficient way to update state
-        setOrders(ordersData);
+        // Update the current page
+        setCurrentPage(pageToFetch);
 
         // Calculate statistics more efficiently
-        const statusCounts = ordersData.reduce((counts, order) => {
-          counts[order.status] = (counts[order.status] || 0) + 1;
-          return counts;
-        }, {} as Record<string, number>);
+        if (!append) {
+          const statusCounts = ordersData.reduce((counts, order) => {
+            counts[order.status] = (counts[order.status] || 0) + 1;
+            return counts;
+          }, {} as Record<string, number>);
 
-        setStats({
-          total: ordersData.length,
-          pending: statusCounts.pending || 0,
-          approved: statusCounts.active || 0,
-          rejected: statusCounts.rejected || 0,
-        });
-      } else {
-        console.log("No orders data returned"); // Debug log
+          setStats({
+            total: ordersData.length,
+            pending: statusCounts.pending || 0,
+            approved: statusCounts.active || 0,
+            rejected: statusCounts.rejected || 0,
+          });
+        }
       }
     } catch (err) {
       console.error("Error in fetchOrders:", err);
       toast.error("Failed to load orders");
     } finally {
       setRefreshing(false);
+      setIsFetchingNextPage(false);
     }
   };
+
+  // Add a function to load more orders
+  const loadMoreOrders = () => {
+    if (hasMoreOrders && !isFetchingNextPage) {
+      fetchOrders(currentPage + 1, true);
+    }
+  };
+
+  // Add an intersection observer to load more data when scrolling down
+  useEffect(() => {
+    const options = {
+      root: null,
+      rootMargin: "0px",
+      threshold: 0.5,
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting && hasMoreOrders && !isFetchingNextPage) {
+          loadMoreOrders();
+        }
+      });
+    }, options);
+
+    const loadMoreTrigger = document.getElementById("load-more-trigger");
+    if (loadMoreTrigger) {
+      observer.observe(loadMoreTrigger);
+    }
+
+    return () => {
+      if (loadMoreTrigger) {
+        observer.unobserve(loadMoreTrigger);
+      }
+    };
+  }, [hasMoreOrders, isFetchingNextPage]);
 
   const checkAdminStatus = async () => {
     try {
@@ -1132,15 +1188,18 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
-  // Filter users based on search term
-  const filteredUsers = users.filter((user) => {
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      user.email?.toLowerCase().includes(searchLower) ||
-      user.fullName?.toLowerCase().includes(searchLower) ||
-      user.id.toLowerCase().includes(searchLower)
-    );
-  });
+  // Memoize filtered users
+  const filteredUsers = useMemo(() => {
+    return users.filter((user) => {
+      if (!searchTerm) return true;
+
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        user.email.toLowerCase().includes(searchLower) ||
+        (user.fullName && user.fullName.toLowerCase().includes(searchLower))
+      );
+    });
+  }, [users, searchTerm]);
 
   const addAdminByEmail = async () => {
     if (!newAdminEmail.trim()) {
@@ -1649,7 +1708,134 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   };
 
-  // Add this function to render the orders tab
+  // Create a memoized order item renderer
+  const OrderRow = React.memo(({ index, style }) => {
+    const order = filteredOrders[index];
+    return (
+      <div style={style} className="px-4">
+        <div
+          key={order.id}
+          className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors my-2"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-white">
+                {order.full_name}
+              </h3>
+              <p className="text-white/70">{order.email}</p>
+              <p className="text-sm text-white/50">
+                {new Date(order.created_at).toLocaleString()}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                  className={`px-2 py-1 rounded text-xs ${
+                    order.status === "active"
+                      ? "bg-emerald-400/20 text-emerald-400"
+                      : order.status === "rejected"
+                      ? "bg-red-400/20 text-red-400"
+                      : order.status === "delivered"
+                      ? "bg-blue-400/20 text-blue-400"
+                      : "bg-yellow-400/20 text-yellow-400"
+                  }`}
+                >
+                  {order.status.toUpperCase()}
+                </span>
+                {order.account_file_url && (
+                  <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
+                    HAS ACCOUNT FILE
+                  </span>
+                )}
+                {order.messages && order.messages.length > 0 && (
+                  <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
+                    {order.messages.length} MESSAGES
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {order.payment_proofs && order.payment_proofs.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setCurrentImageUrl(order.payment_proofs[0].image_url);
+                      setShowImageModal(true);
+                    }}
+                    className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                    title="View payment proof"
+                  >
+                    <Eye className="text-white" size={20} />
+                  </button>
+                  {order.status === "pending" && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleApprove(order.id)}
+                        disabled={!!actionInProgress}
+                        className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+                        title="Approve order"
+                      >
+                        <CheckCircle className="text-green-400" size={20} />
+                      </button>
+                      <button
+                        onClick={() => handleReject(order.id)}
+                        disabled={!!actionInProgress}
+                        className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+                        title="Reject order"
+                      >
+                        <XCircle className="text-red-400" size={20} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button
+                onClick={() => handleViewOrderDetails(order.id)}
+                className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                title="View order details"
+              >
+                <Eye className="w-5 h-5" />
+              </button>
+
+              <Link
+                to={`/chat?order=${order.id}`}
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                title="Open chat"
+              >
+                <MessageSquare className="text-white" size={20} />
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  });
+
+  // Add a skeleton loader component
+  const OrdersSkeleton = () => (
+    <div className="space-y-4">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="bg-white/5 animate-pulse rounded-lg p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex-1">
+              <div className="h-6 bg-white/10 rounded w-1/3 mb-2"></div>
+              <div className="h-4 bg-white/10 rounded w-1/4 mb-2"></div>
+              <div className="h-4 bg-white/10 rounded w-1/5 mb-4"></div>
+              <div className="flex gap-2">
+                <div className="h-6 bg-white/10 rounded w-16"></div>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <div className="h-10 w-10 bg-white/10 rounded-full"></div>
+              <div className="h-10 w-10 bg-white/10 rounded-full"></div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Incorporate the skeleton in your render
   const renderOrdersTab = () => {
     const filteredOrdersToShow = filteredOrders || [];
 
@@ -1708,133 +1894,53 @@ Please keep these details secure. You can copy them by selecting the text.
           </div>
         </div>
 
-        {/* Orders List */}
-        {filteredOrdersToShow.length === 0 ? (
+        {/* Orders List with loading state */}
+        {refreshing && orders.length === 0 ? (
+          <OrdersSkeleton />
+        ) : filteredOrdersToShow.length === 0 ? (
           <div className="bg-white/5 rounded-lg p-8 text-center">
             <p className="text-white/70 mb-4">No orders found</p>
             <button
-              onClick={fetchOrders}
+              onClick={() => fetchOrders(1, false)}
               className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
             >
               Refresh Orders
             </button>
           </div>
         ) : (
-          <div className="space-y-4">
-            {filteredOrdersToShow.map((order) => (
-              <div
-                key={order.id}
-                className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-white">
-                      {order.full_name}
-                    </h3>
-                    <p className="text-white/70">{order.email}</p>
-                    <p className="text-sm text-white/50">
-                      {new Date(order.created_at).toLocaleString()}
-                    </p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span
-                        className={`px-2 py-1 rounded text-xs ${
-                          order.status === "active"
-                            ? "bg-emerald-400/20 text-emerald-400"
-                            : order.status === "rejected"
-                            ? "bg-red-400/20 text-red-400"
-                            : order.status === "delivered"
-                            ? "bg-blue-400/20 text-blue-400"
-                            : "bg-yellow-400/20 text-yellow-400"
-                        }`}
-                      >
-                        {order.status.toUpperCase()}
-                      </span>
-                      {order.account_file_url && (
-                        <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
-                          HAS ACCOUNT FILE
-                        </span>
-                      )}
-                      {order.messages && order.messages.length > 0 && (
-                        <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
-                          {order.messages.length} MESSAGES
-                        </span>
-                      )}
-                    </div>
-                  </div>
+          <>
+            {/* Virtualized list implementation */}
+            <div className="h-[calc(100vh-300px)] w-full">
+              <AutoSizer>
+                {({ height, width }) => (
+                  <List
+                    height={height}
+                    width={width}
+                    itemCount={filteredOrdersToShow.length}
+                    itemSize={180} // Adjust based on your row height
+                  >
+                    {OrderRow}
+                  </List>
+                )}
+              </AutoSizer>
+            </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {order.payment_proofs &&
-                      order.payment_proofs.length > 0 && (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              setCurrentImageUrl(
-                                order.payment_proofs[0].image_url
-                              );
-                              setShowImageModal(true);
-                            }}
-                            className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                            title="View payment proof"
-                          >
-                            <Eye className="text-white" size={20} />
-                          </button>
-                          {order.status === "pending" && (
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => handleApprove(order.id)}
-                                disabled={!!actionInProgress}
-                                className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-                                title="Approve order"
-                              >
-                                <CheckCircle
-                                  className="text-green-400"
-                                  size={20}
-                                />
-                              </button>
-                              <button
-                                onClick={() => handleReject(order.id)}
-                                disabled={!!actionInProgress}
-                                className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-                                title="Reject order"
-                              >
-                                <XCircle className="text-red-400" size={20} />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                    <button
-                      onClick={() => handleViewOrderDetails(order.id)}
-                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                      title="View order details"
-                    >
-                      <Eye className="w-5 h-5" />
-                    </button>
-
-                    <Link
-                      to={`/chat?order=${order.id}`}
-                      className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                      title="Open chat"
-                    >
-                      <MessageSquare className="text-white" size={20} />
-                    </Link>
-                  </div>
-                </div>
-
-                {order.status === "active" && !order.account_file_url && (
-                  <div className="mt-4">
-                    <FileUpload
-                      orderId={order.id}
-                      onUploadSuccess={(fileUrl) =>
-                        onFileUpload(order.id, fileUrl)
-                      }
-                    />
-                  </div>
+            {/* Load more indicator */}
+            {hasMoreOrders && (
+              <div id="load-more-trigger" className="py-4 text-center">
+                {isFetchingNextPage ? (
+                  <LoadingSpinner size="md" light />
+                ) : (
+                  <button
+                    onClick={loadMoreOrders}
+                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded transition-colors"
+                  >
+                    Load More Orders
+                  </button>
                 )}
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
     );
@@ -2062,15 +2168,6 @@ Please keep these details secure. You can copy them by selecting the text.
     } catch (err) {
       console.error("Error in onFileUpload:", err);
       toast.error("Failed to process file upload");
-    }
-  };
-
-  // Add this function to handle viewing order details
-  const handleViewOrderDetails = (orderId: string) => {
-    setSelectedOrderId(orderId);
-    const order = orders.find((o) => o.id === orderId);
-    if (order) {
-      setSelectedOrderDetail(order);
     }
   };
 
