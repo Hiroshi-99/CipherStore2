@@ -1,50 +1,49 @@
-import React from "react";
+import React, { Component, ErrorInfo, ReactNode } from "react";
 
-interface ErrorBoundaryProps {
-  children: React.ReactNode;
-  fallback?: React.ReactNode;
+interface Props {
+  children: ReactNode;
+  fallback?: ReactNode;
 }
 
-interface ErrorBoundaryState {
+interface State {
   hasError: boolean;
-  error?: Error;
+  error: Error | null;
 }
 
-class ErrorBoundary extends React.Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
-  constructor(props: ErrorBoundaryProps) {
+class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, error: null };
   }
 
-  static getDerivedStateFromError(error: Error) {
+  static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("Error caught by boundary:", error, errorInfo);
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
   }
 
-  render() {
+  render(): ReactNode {
     if (this.state.hasError) {
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+
+      // Default fallback UI
       return (
-        this.props.fallback || (
-          <div className="min-h-screen flex items-center justify-center bg-gray-900">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold text-white mb-4">
-                Something went wrong
-              </h2>
-              <button
-                onClick={() => window.location.reload()}
-                className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg transition-colors"
-              >
-                Refresh Page
-              </button>
-            </div>
-          </div>
-        )
+        <div className="p-6 bg-red-900/20 rounded-lg">
+          <h2 className="text-xl text-white mb-2">Something went wrong</h2>
+          <p className="text-white/70 mb-4">
+            {this.state.error?.message || "An unexpected error occurred"}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
+          >
+            Refresh Page
+          </button>
+        </div>
       );
     }
 

@@ -269,184 +269,161 @@ function AdminPage() {
   }, []);
 
   useEffect(() => {
-    setPageTitle("ADMIN");
-    fetchOrders();
-    checkAdminStatus();
-  }, []);
+    setPageTitle("Admin Dashboard");
 
-  // Optimize the fetchOrders function to properly retrieve all orders
-  const fetchOrders = async (page = 1, append = false) => {
-    const pageToFetch = page || currentPage;
+    const initializePage = async () => {
+      try {
+        setLoading(true);
 
-    if (page === 1) {
-      setRefreshing(true);
-    } else {
-      setIsFetchingNextPage(true);
-    }
+        // Fetch the current user
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
 
-    try {
-      // Calculate range for pagination
-      const from = (pageToFetch - 1) * pageSize;
-      const to = from + pageSize - 1;
-
-      // Use a more efficient query with pagination
-      const { data: ordersData, error: ordersError } = await supabase
-        .from("orders")
-        .select(
-          `
-          *,
-          payment_proofs:payment_proofs(*),
-          messages:messages(id)
-        `
-        )
-        .order("created_at", { ascending: false })
-        .range(from, to);
-
-      if (ordersError) {
-        console.error("Error fetching orders:", ordersError);
-        toast.error("Failed to load orders");
-        return;
-      }
-
-      if (ordersData) {
-        // If we got fewer items than requested, there are no more pages
-        setHasMoreOrders(ordersData.length === pageSize);
-
-        // Update state based on whether we're appending or replacing
-        if (append) {
-          setOrders((prevOrders) => [...prevOrders, ...ordersData]);
-        } else {
-          setOrders(ordersData);
+        if (!user) {
+          navigate("/login");
+          return;
         }
 
-        // Update the current page
-        setCurrentPage(pageToFetch);
+        // Check if the user is an admin
+        const { isAdmin: userIsAdmin } = await checkIfAdmin(user.id);
+        setIsAdmin(userIsAdmin);
 
-        // Calculate statistics more efficiently
-        if (!append) {
-          const statusCounts = ordersData.reduce((counts, order) => {
-            counts[order.status] = (counts[order.status] || 0) + 1;
-            return counts;
-          }, {} as Record<string, number>);
+        if (userIsAdmin) {
+          // Fetch initial data for the dashboard
+          fetchOrders();
 
-          setStats({
-            total: ordersData.length,
-            pending: statusCounts.pending || 0,
-            approved: statusCounts.active || 0,
-            rejected: statusCounts.rejected || 0,
-          });
-        }
-      }
-    } catch (err) {
-      console.error("Error in fetchOrders:", err);
-      toast.error("Failed to load orders");
-    } finally {
-      setRefreshing(false);
-      setIsFetchingNextPage(false);
-    }
-  };
-
-  // Add a function to load more orders
-  const loadMoreOrders = () => {
-    if (hasMoreOrders && !isFetchingNextPage) {
-      fetchOrders(currentPage + 1, true);
-    }
-  };
-
-  // Add an intersection observer to load more data when scrolling down
-  useEffect(() => {
-    const options = {
-      root: null,
-      rootMargin: "0px",
-      threshold: 0.5,
-    };
-
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting && hasMoreOrders && !isFetchingNextPage) {
-          loadMoreOrders();
-        }
-      });
-    }, options);
-
-    const loadMoreTrigger = document.getElementById("load-more-trigger");
-    if (loadMoreTrigger) {
-      observer.observe(loadMoreTrigger);
-    }
-
-    return () => {
-      if (loadMoreTrigger) {
-        observer.unobserve(loadMoreTrigger);
-      }
-    };
-  }, [hasMoreOrders, isFetchingNextPage]);
-
-  const checkAdminStatus = async () => {
-    try {
-      setLoading(true);
-
-      // Get the current user
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        console.error("No user found");
-        setIsAdmin(false);
-        setLoading(false);
-        return;
-      }
-
-      console.log("Current user:", user);
-
-      // Check if the user is an admin
-      const adminResult = await checkIfAdmin(user.id);
-      console.log("Admin check result:", adminResult);
-
-      if (adminResult.isAdmin) {
-        setIsAdmin(true);
-
-        // Set current user
-        setCurrentUser({
-          id: user.id,
-          email: user.email || "",
-          fullName: user.user_metadata?.full_name || "",
-          isAdmin: true,
-          lastSignIn: null,
-          createdAt: user.created_at,
-        });
-
-        // Fetch orders and users
-        await fetchOrders();
-        await fetchUsers(user.id);
-      } else {
-        setIsAdmin(false);
-        toast.error("You don't have admin privileges");
-
-        // Try to grant admin privileges if this is the first user
-        if (adminResult.error && adminResult.error.includes("first user")) {
-          const grantResult = await grantAdminPrivileges(
-            user.id,
-            user.email || ""
-          );
-
-          if (grantResult.success) {
-            setIsAdmin(true);
-            toast.success("Admin privileges granted automatically");
-
-            // Fetch orders and users
-            await fetchOrders();
-            await fetchUsers(user.id);
+          // Fetch users data if needed
+          if (selectedTab === "users") {
+            fetchUsers();
           }
         }
+      } catch (err) {
+        console.error("Error initializing admin page:", err);
+        toast.error("Failed to initialize admin dashboard");
+      } finally {
+        setLoading(false);
       }
+    };
+
+    initializePage();
+  }, []);
+
+  // Add a function to fetch users
+  const fetchUsers = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+
+      // Transform the data to match our User interface
+      const processedUsers = data.map((user) => ({
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name || user.email?.split("@")[0] || "Unknown",
+        isAdmin: user.is_admin || false,
+        lastSignIn: user.last_sign_in,
+        createdAt: user.created_at,
+      }));
+
+      setUsers(processedUsers);
     } catch (err) {
-      console.error("Error checking admin status:", err);
-      toast.error("Failed to check admin status");
-    } finally {
-      setLoading(false);
+      console.error("Error fetching users:", err);
+      toast.error("Failed to fetch users");
     }
-  };
+  }, [supabase]);
+
+  // Optimize the fetchOrders function to properly retrieve all orders
+  const fetchOrders = useCallback(
+    async (page = 1, append = false) => {
+      try {
+        setLoading(true);
+
+        // Calculate pagination limits
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
+
+        // Fetch orders from Supabase
+        const { data, error, count } = await supabase
+          .from("orders")
+          .select("*", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          throw error;
+        }
+
+        // Process the orders data
+        const processedOrders = data || [];
+
+        // Update the orders state based on append flag
+        if (append) {
+          setOrders((prev) => [...prev, ...processedOrders]);
+        } else {
+          setOrders(processedOrders);
+        }
+
+        // Calculate if there are more orders to fetch
+        const hasMore = count ? from + processedOrders.length < count : false;
+
+        // Update stats
+        const newStats = {
+          total: count || 0,
+          pending:
+            data?.filter((order) => order.status === "pending").length || 0,
+          approved:
+            data?.filter((order) => order.status === "active").length || 0,
+          rejected:
+            data?.filter((order) => order.status === "rejected").length || 0,
+        };
+        setStats(newStats);
+
+        return { data: processedOrders, error: null, hasMore };
+      } catch (err) {
+        console.error("Error fetching orders:", err);
+        toast.error("Failed to fetch orders");
+        return { data: [], error: err, hasMore: false };
+      } finally {
+        setLoading(false);
+      }
+    },
+    [pageSize, supabase]
+  );
+
+  // Add a function to load more orders
+  const loadMoreOrders = useCallback(async () => {
+    if (isFetchingNextPage || !hasMoreOrders) return;
+
+    setIsFetchingNextPage(true);
+    try {
+      // Calculate the next page to fetch
+      const nextPage = currentPage + 1;
+
+      // Fetch the next page of orders
+      const { data, error, hasMore } = await fetchOrders(nextPage, true);
+
+      if (error) {
+        throw error;
+      }
+
+      // Update the current page
+      setCurrentPage(nextPage);
+
+      // Update hasMoreOrders based on the response
+      setHasMoreOrders(hasMore);
+    } catch (err) {
+      console.error("Error loading more orders:", err);
+      toast.error("Failed to load more orders");
+    } finally {
+      setIsFetchingNextPage(false);
+    }
+  }, [currentPage, fetchOrders, hasMoreOrders, isFetchingNextPage]);
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -862,605 +839,16 @@ Please keep these details secure. You can copy them by selecting the text.
   };
 
   // Add this function to deliver account details to users
-  const deliverAccountDetails = async (
-    orderId: string,
-    accountDetails: AccountDetails
-  ) => {
-    try {
-      setActionInProgress(orderId);
-
-      // Validate account details
-      if (!accountDetails.accountId.trim()) {
-        toast.error("Account ID is required");
-        return false;
-      }
-
-      // Update the order with account details
-      const { error: updateError } = await supabase
-        .from("orders")
-        .update({
-          account_id: accountDetails.accountId,
-          account_password: accountDetails.password,
-          delivery_date: new Date().toISOString(),
-          status: "delivered",
-        })
-        .eq("id", orderId);
-
-      if (updateError) {
-        console.error(
-          "Error updating order with account details:",
-          updateError
-        );
-        toast.error("Failed to deliver account details");
-        return false;
-      }
-
-      // Send a message to the user with their account details
-      const { data: orderData } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("id", orderId)
-        .single();
-
-      if (orderData) {
-        // Create a message with the account details
-        const message = {
-          id: generateUUID(),
-          order_id: orderId,
-          content: `Your account is ready! Here are your login details:\n\nAccount ID: ${accountDetails.accountId}\nPassword: ${accountDetails.password}\n\nPlease save these details securely.`,
-          created_at: new Date().toISOString(),
-          user_id: null, // System message
-          is_read: false,
-          user_name: "Support Team",
-          user_avatar: "https://i.imgur.com/eyaDC8l.png",
-        };
-
-        // Insert the message
-        const { error: messageError } = await supabase
-          .from("messages")
-          .insert(message);
-
-        if (messageError) {
-          console.error("Error sending account details message:", messageError);
-          // Continue anyway since the order was updated
-        }
-      }
-
-      // Update local state
-      setOrders(
-        orders.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                status: "delivered",
-                account_id: accountDetails.accountId,
-                account_password: accountDetails.password,
-              }
-            : order
-        )
-      );
-
-      toast.success("Account details delivered successfully");
-
-      // Reset the account details form
-      setAccountDetails({
-        accountId: "",
-        password: "",
-      });
-
-      // Close any modals
-      setSelectedOrderId(null);
-
-      // Refresh orders to get the latest data
-      fetchOrders();
-
-      return true;
-    } catch (err) {
-      console.error("Error in deliverAccountDetails:", err);
-      toast.error("Failed to deliver account details");
-      return false;
-    } finally {
-      setActionInProgress(null);
-    }
-  };
-
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session?.user) {
-          navigate("/");
-          return;
-        }
-
-        setCurrentUser(session.user);
-
-        // Check if user is admin
-        const adminStatus = await checkIfAdmin(session.user.id);
-        setIsAdmin(adminStatus);
-
-        if (!adminStatus) {
-          toast.error("You don't have permission to access the admin page");
-          navigate("/");
-          return;
-        }
-
-        // Fetch users with admin status
-        await fetchUsers(session.user.id);
-      } catch (err) {
-        console.error("Error checking authentication:", err);
-        toast.error("Authentication error");
-        navigate("/");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkAuth();
-  }, [navigate]);
-
-  const fetchUsers = async (adminUserId: string) => {
-    if (!adminUserId) {
-      console.error("No admin user ID provided");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      // Get the current user first
-      const {
-        data: { user: currentAuthUser },
-      } = await supabase.auth.getUser();
-
-      if (!currentAuthUser) {
-        toast.error("You must be logged in to view users");
-        setLoading(false);
-        return;
-      }
-
-      // Get admin users from the admin_users table - use a more efficient query
-      const { data: adminUsers, error: adminError } = await supabase
-        .from("admin_users")
-        .select("user_id, user_email")
-        .order("granted_at", { ascending: false });
-
-      if (adminError) {
-        console.error("Error fetching admin users:", adminError);
-      }
-
-      // Create sets for quick lookups - more efficient than arrays for lookups
-      const adminUserIds = new Set(
-        (adminUsers || [])
-          .filter((admin) => admin.user_id)
-          .map((admin) => admin.user_id)
-      );
-
-      const adminEmails = new Set(
-        (adminUsers || [])
-          .filter((admin) => admin.user_email)
-          .map((admin) => admin.user_email)
-      );
-
-      // Create a user object for the current user
-      const currentUserData = {
-        id: currentAuthUser.id,
-        email: currentAuthUser.email || "",
-        fullName: currentAuthUser.user_metadata?.full_name || "",
-        isAdmin: true, // Current user is admin since they're viewing this page
-        lastSignIn: null,
-        createdAt: currentAuthUser.created_at,
-      };
-
-      // Add any admin users we know about by email - use a more efficient approach
-      const knownAdminUsers = Array.from(adminEmails)
-        .filter((email) => email !== currentAuthUser.email) // Exclude current user
-        .map((email) => ({
-          id: "unknown-" + Math.random().toString(36).substring(2, 15),
-          email: email,
-          fullName: "Admin User",
-          isAdmin: true,
-          lastSignIn: null,
-          createdAt: new Date().toISOString(),
-        }));
-
-      // Use a more efficient way to update state
-      setUsers([currentUserData, ...knownAdminUsers]);
-      setCurrentUser(currentUserData);
-
-      toast.success("Admin users loaded");
-    } catch (err) {
-      console.error("Error in fetchUsers:", err);
-      toast.error("Failed to load user data");
-
-      // Fallback to just the current user
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
-        if (user) {
-          const currentUserData = {
-            id: user.id,
-            email: user.email || "",
-            fullName: user.user_metadata?.full_name || "",
-            isAdmin: true,
-            lastSignIn: null,
-            createdAt: user.created_at,
-          };
-
-          setUsers([currentUserData]);
-          setCurrentUser(currentUserData);
-        }
-      } catch (fallbackErr) {
-        console.error("Error in fallback:", fallbackErr);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGrantAdmin = async (userId: string) => {
-    setActionInProgress(userId);
-
-    try {
-      const result = await grantAdminPrivileges(currentUser.id, userId);
-
-      if (result.success) {
-        toast.success("Admin privileges granted successfully");
-        // Update the local state
-        setUsers(
-          users.map((user) =>
-            user.id === userId ? { ...user, isAdmin: true } : user
-          )
-        );
-      } else {
-        toast.error(result.error);
-      }
-    } catch (err) {
-      console.error("Error granting admin privileges:", err);
-      toast.error("Failed to grant admin privileges");
-    } finally {
-      setActionInProgress(null);
-    }
-  };
-
-  const handleRevokeAdmin = async (userId: string) => {
-    // Prevent revoking your own admin privileges
-    if (userId === currentUser?.id) {
-      toast.error("You cannot revoke your own admin privileges");
-      return;
-    }
-
-    if (!confirm("Are you sure you want to revoke admin privileges?")) {
-      return;
-    }
-
-    try {
-      setActionInProgress(userId);
-
-      // Find the user's email
-      const userToRevoke = users.find((u) => u.id === userId);
-
-      if (!userToRevoke) {
-        toast.error("User not found");
-        setActionInProgress(null);
-        return;
-      }
-
-      // Delete from admin_users table by user_id or email
-      let deleteResult;
-
-      if (userId.startsWith("unknown-") && userToRevoke.email) {
-        // Delete by email
-        deleteResult = await supabase
-          .from("admin_users")
-          .delete()
-          .eq("user_email", userToRevoke.email);
-      } else {
-        // Delete by user_id
-        deleteResult = await supabase
-          .from("admin_users")
-          .delete()
-          .eq("user_id", userId);
-      }
-
-      if (deleteResult.error) {
-        toast.error(
-          `Error revoking admin privileges: ${deleteResult.error.message}`
-        );
-        return;
-      }
-
-      toast.success("Admin privileges revoked successfully");
-
-      // Update local state
-      setUsers(users.filter((user) => user.id !== userId));
-
-      // Refresh the users list
-      fetchUsers(currentUser?.id || "");
-    } catch (err) {
-      console.error("Error revoking admin privileges:", err);
-      toast.error("Failed to revoke admin privileges");
-    } finally {
-      setActionInProgress(null);
-    }
-  };
-
-  // Memoize filtered users
-  const filteredUsers = useMemo(() => {
-    return users.filter((user) => {
-      if (!searchTerm) return true;
-
-      const searchLower = searchTerm.toLowerCase();
-      return (
-        user.email.toLowerCase().includes(searchLower) ||
-        (user.fullName && user.fullName.toLowerCase().includes(searchLower))
-      );
-    });
-  }, [users, searchTerm]);
-
-  const addAdminByEmail = async () => {
-    if (!newAdminEmail.trim()) {
-      toast.error("Please enter an email address");
-      return;
-    }
-
-    try {
-      setActionInProgress("adding-admin");
-
-      // First check if the user exists in auth
-      const {
-        data: { user: currentAuthUser },
-      } = await supabase.auth.getUser();
-
-      if (!currentAuthUser) {
-        toast.error("You must be logged in to add an admin");
-        setActionInProgress(null);
-        return;
-      }
-
-      // Add the admin directly by email
-      const { data: adminData, error: adminError } = await supabase
-        .from("admin_users")
-        .insert({
-          user_email: newAdminEmail.trim(),
-          granted_by: currentAuthUser.id,
-          granted_at: new Date().toISOString(),
-        })
-        .select();
-
-      if (adminError) {
-        console.error("Error adding admin:", adminError);
-        toast.error("Failed to add admin: " + adminError.message);
-        setActionInProgress(null);
-        return;
-      }
-
-      toast.success(`Admin privileges granted to ${newAdminEmail}`);
-      setNewAdminEmail("");
-
-      // Refresh the users list
-      fetchUsers(currentAuthUser.id);
-    } catch (err) {
-      console.error("Error adding admin by email:", err);
-      toast.error("Failed to add admin");
-    } finally {
-      setActionInProgress(null);
-    }
-  };
-
-  // Add this function to handle batch actions on orders
-  const handleOrderBatchAction = async (action: BatchAction) => {
-    if (selectedOrderIds.size === 0) {
-      toast.error("No orders selected");
-      return;
-    }
-
-    setIsOrderActionInProgress(true);
-
-    try {
-      const orderIds = Array.from(selectedOrderIds);
-
-      switch (action) {
-        case "approve":
-          toast.info(`Approving ${orderIds.length} orders...`);
-
-          // Use a more efficient batch update
-          if (orderIds.length > 0) {
-            const { error } = await supabase
-              .from("orders")
-              .update({ status: "active" })
-              .in("id", orderIds);
-
-            if (error) {
-              throw error;
-            }
-          }
-
-          toast.success(`${orderIds.length} orders approved`);
-          break;
-
-        case "reject":
-          toast.info(`Rejecting ${orderIds.length} orders...`);
-
-          // Use a more efficient batch update
-          if (orderIds.length > 0) {
-            const { error } = await supabase
-              .from("orders")
-              .update({ status: "rejected" })
-              .in("id", orderIds);
-
-            if (error) {
-              throw error;
-            }
-          }
-
-          toast.success(`${orderIds.length} orders rejected`);
-          break;
-
-        case "export":
-          toast.info("Preparing export...");
-          setIsExporting(true);
-
-          // Get the selected orders
-          const { data: selectedOrders } = await supabase
-            .from("orders")
-            .select("*")
-            .in("id", orderIds);
-
-          if (selectedOrders && selectedOrders.length > 0) {
-            // Format the data for export
-            const exportData = selectedOrders.map((order) => ({
-              ID: order.id,
-              Name: order.full_name,
-              Email: order.email,
-              Status: order.status,
-              Created: new Date(order.created_at).toLocaleString(),
-              // Add other fields as needed
-            }));
-
-            // Convert to CSV
-            const headers = Object.keys(exportData[0]);
-            const csvContent = [
-              headers.join(","),
-              ...exportData.map((row) =>
-                headers
-                  .map((header) =>
-                    JSON.stringify(row[header as keyof typeof row])
-                  )
-                  .join(",")
-              ),
-            ].join("\n");
-
-            // Create download link
-            const blob = new Blob([csvContent], { type: "text/csv" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `orders-export-${
-              new Date().toISOString().split("T")[0]
-            }.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-
-            toast.success(`Exported ${selectedOrders.length} orders`);
-          } else {
-            toast.error("No orders found to export");
-          }
-
-          setIsExporting(false);
-          break;
-
-        case "delete":
-          if (
-            confirm(
-              `Are you sure you want to delete ${orderIds.length} orders? This action cannot be undone.`
-            )
-          ) {
-            toast.info(`Deleting ${orderIds.length} orders...`);
-
-            const { error } = await supabase
-              .from("orders")
-              .delete()
-              .in("id", orderIds);
-
-            if (error) {
-              toast.error(`Error deleting orders: ${error.message}`);
-            } else {
-              toast.success(`${orderIds.length} orders deleted`);
-            }
-          }
-          break;
-      }
-
-      // Refresh orders to get the latest data
-      fetchOrders();
-
-      // Clear selection after action
-      setSelectedOrderIds(new Set());
-    } catch (err) {
-      console.error(`Error performing batch action ${action}:`, err);
-      toast.error(`Failed to ${action} orders`);
-    } finally {
-      setIsOrderActionInProgress(false);
-    }
-  };
-
-  // Add this function to filter orders
-  const getFilteredOrders = () => {
-    return orders.filter((order) => {
-      // Filter by status
-      if (orderStatusFilter !== "all" && order.status !== orderStatusFilter) {
-        return false;
-      }
-
-      // Filter by search query
-      if (
-        orderSearchQuery &&
-        !order.full_name
-          .toLowerCase()
-          .includes(orderSearchQuery.toLowerCase()) &&
-        !order.email.toLowerCase().includes(orderSearchQuery.toLowerCase())
-      ) {
-        return false;
-      }
-
-      // Filter by date range
-      if (
-        orderDateRange.start &&
-        new Date(order.created_at) < orderDateRange.start
-      ) {
-        return false;
-      }
-
-      if (orderDateRange.end) {
-        const endDate = new Date(orderDateRange.end);
-        endDate.setHours(23, 59, 59, 999); // Set to end of day
-        if (new Date(order.created_at) > endDate) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-  };
-
-  // Add this function to calculate order statistics
-  const calculateOrderStats = () => {
-    const total = orders.length;
-    const pending = orders.filter((order) => order.status === "pending").length;
-    const active = orders.filter((order) => order.status === "active").length;
-    const rejected = orders.filter(
-      (order) => order.status === "rejected"
-    ).length;
-    const withAccountFiles = orders.filter(
-      (order) => order.account_file_url
-    ).length;
-
-    return { total, pending, active, rejected, withAccountFiles };
-  };
-
-  // Add this function to view order details
-  const viewOrderDetails = (order: Order) => {
-    setSelectedOrderDetail(order);
-  };
-
-  // Add this function to handle account delivery
-  const handleAccountDelivered = useCallback(
-    (orderId: string, accountId: string, password: string) => {
+  const deliverAccountDetails = useCallback(
+    (orderId: string, accountDetails: AccountDetails) => {
       // Update the orders list with the new account details
       setOrders((prevOrders) =>
         prevOrders.map((order) =>
           order.id === orderId
             ? {
                 ...order,
-                account_id: accountId,
-                account_password: password,
+                account_id: accountDetails.accountId,
+                account_password: accountDetails.password,
                 status: "delivered",
                 delivery_date: new Date().toISOString(),
               }
@@ -1844,6 +1232,58 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add implementation for addAdminByEmail function
+  const addAdminByEmail = useCallback(async () => {
+    if (!newAdminEmail) {
+      toast.error("Please enter an email address");
+      return;
+    }
+
+    try {
+      setActionInProgress("adding-admin");
+
+      // First try to find the user by email
+      const { data: foundUsers, error: findError } = await supabase
+        .from("users")
+        .select("id, email")
+        .ilike("email", newAdminEmail)
+        .limit(1);
+
+      if (findError) {
+        throw findError;
+      }
+
+      if (!foundUsers || foundUsers.length === 0) {
+        toast.error(`User with email ${newAdminEmail} not found`);
+        return;
+      }
+
+      const userId = foundUsers[0].id;
+
+      // Grant admin privileges to this user
+      const { success, error } = await grantAdminPrivileges(userId);
+
+      if (!success || error) {
+        throw new Error(error || "Failed to grant admin privileges");
+      }
+
+      // Add this user to our local list of admins
+      setUsers((prev) =>
+        prev.map((user) =>
+          user.id === userId ? { ...user, isAdmin: true } : user
+        )
+      );
+
+      toast.success(`Admin privileges granted to ${newAdminEmail}`);
+      setNewAdminEmail("");
+    } catch (err) {
+      console.error("Error adding admin:", err);
+      toast.error("Failed to add admin user");
+    } finally {
+      setActionInProgress(null);
+    }
+  }, [newAdminEmail, supabase, grantAdminPrivileges]);
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -2113,7 +1553,7 @@ Please keep these details secure. You can copy them by selecting the text.
         onFileUpload={onFileUpload}
         setCurrentImageUrl={setCurrentImageUrl}
         setShowImageModal={setShowImageModal}
-        onAccountDelivered={handleAccountDelivered}
+        onAccountDelivered={deliverAccountDetails}
       />
     </PageContainer>
   );
