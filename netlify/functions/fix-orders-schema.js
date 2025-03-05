@@ -19,164 +19,137 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    // Initialize Supabase client
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
+    // Validate environment variables
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    // First, check if the orders table exists
-    const { data: tableExists, error: tableError } = await supabase.rpc(
-      "table_exists",
-      { table_name: "orders" }
-    );
-
-    if (tableError || !tableExists) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Orders table doesn't exist" }),
-      };
-    }
-
-    // Run SQL migrations to add account columns
-    const { data, error } = await supabase.rpc("run_sql_migration", {
-      sql: `
-        -- First, create a function to check if a column exists
-        CREATE OR REPLACE FUNCTION column_exists(tbl text, col text) RETURNS boolean AS $$
-        BEGIN
-          RETURN EXISTS (
-            SELECT FROM information_schema.columns 
-            WHERE table_name = tbl AND column_name = col
-          );
-        END;
-        $$ LANGUAGE plpgsql;
-
-        -- Now add necessary columns if they don't exist
-        DO $$
-        BEGIN
-          -- Add account_id column if it doesn't exist
-          IF NOT column_exists('orders', 'account_id') THEN
-            ALTER TABLE orders ADD COLUMN account_id text;
-          END IF;
-
-          -- Add account_password column if it doesn't exist
-          IF NOT column_exists('orders', 'account_password') THEN
-            ALTER TABLE orders ADD COLUMN account_password text;
-          END IF;
-
-          -- Add account_delivered column if it doesn't exist
-          IF NOT column_exists('orders', 'account_delivered') THEN
-            ALTER TABLE orders ADD COLUMN account_delivered boolean DEFAULT false;
-          END IF;
-
-          -- Add account_delivered_at column if it doesn't exist
-          IF NOT column_exists('orders', 'account_delivered_at') THEN
-            ALTER TABLE orders ADD COLUMN account_delivered_at timestamp with time zone;
-          END IF;
-
-          -- Add metadata column if it doesn't exist (JSON format for flexible storage)
-          IF NOT column_exists('orders', 'metadata') THEN
-            ALTER TABLE orders ADD COLUMN metadata jsonb DEFAULT '{}'::jsonb;
-          END IF;
-        END $$;
-
-        -- Create a function for delivering account details
-        CREATE OR REPLACE FUNCTION deliver_account(
-          order_id text,
-          account_identifier text,
-          account_pass text
-        ) RETURNS json AS $$
-        DECLARE
-          result json;
-          order_exists boolean;
-          has_account_id boolean;
-          has_metadata boolean;
-          current_metadata jsonb;
-        BEGIN
-          -- Check if order exists
-          SELECT EXISTS(SELECT 1 FROM orders WHERE id = order_id) INTO order_exists;
-          
-          IF NOT order_exists THEN
-            RETURN json_build_object('success', false, 'error', 'Order not found');
-          END IF;
-          
-          -- Check which columns we have available
-          has_account_id := column_exists('orders', 'account_id');
-          has_metadata := column_exists('orders', 'metadata');
-          
-          -- Try updating with direct columns if they exist
-          IF has_account_id THEN
-            UPDATE orders 
-            SET 
-              account_id = account_identifier,
-              account_password = account_pass,
-              account_delivered = true,
-              account_delivered_at = now(),
-              status = 'active'
-            WHERE id = order_id;
-            
-            RETURN json_build_object(
-              'success', true, 
-              'method', 'direct', 
-              'account_id', account_identifier
-            );
-          END IF;
-          
-          -- Fall back to metadata field if available
-          IF has_metadata THEN
-            -- Get current metadata
-            SELECT COALESCE(metadata, '{}'::jsonb) INTO current_metadata 
-            FROM orders WHERE id = order_id;
-            
-            -- Update with new account info
-            UPDATE orders 
-            SET 
-              metadata = jsonb_set(
-                current_metadata, 
-                '{account}', 
-                jsonb_build_object(
-                  'id', account_identifier,
-                  'password', account_pass,
-                  'delivered', true,
-                  'delivered_at', now()
-                )
-              ),
-              status = 'active'
-            WHERE id = order_id;
-            
-            RETURN json_build_object(
-              'success', true, 
-              'method', 'metadata', 
-              'account_id', account_identifier
-            );
-          END IF;
-          
-          -- Last resort, just update status
-          UPDATE orders 
-          SET status = 'active'
-          WHERE id = order_id;
-          
-          RETURN json_build_object(
-            'success', true, 
-            'method', 'status_only', 
-            'account_id', account_identifier
-          );
-        END;
-        $$ LANGUAGE plpgsql;
-      `,
-    });
-
-    if (error) {
-      console.error("Migration error:", error);
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error("Missing Supabase environment variables");
       return {
         statusCode: 500,
         headers,
         body: JSON.stringify({
-          error: "Failed to update database schema",
-          details: error.message,
+          error: "Server configuration issue: Missing environment variables",
         }),
       };
+    }
+
+    // Initialize Supabase client with proper error handling
+    let supabase;
+    try {
+      supabase = createClient(supabaseUrl, supabaseServiceKey);
+    } catch (initError) {
+      console.error("Error initializing Supabase client:", initError);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          error: "Failed to initialize database client",
+          details: initError.message,
+        }),
+      };
+    }
+
+    // Simple connection test
+    try {
+      const { error: pingError } = await supabase
+        .from("orders")
+        .select("count")
+        .limit(1);
+      if (pingError) {
+        console.error("Database connection test failed:", pingError);
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({
+            error: "Database connection failed",
+            details: pingError.message,
+          }),
+        };
+      }
+    } catch (pingError) {
+      console.error("Database ping failed:", pingError);
+    }
+
+    // Use simpler approach with individual queries instead of RPC
+    // Add account_id column if it doesn't exist
+    try {
+      await supabase.from("orders").select("account_id").limit(1);
+    } catch (error) {
+      if (
+        error.message.includes("column") &&
+        error.message.includes("does not exist")
+      ) {
+        const { error: alterError } = await supabase.rpc("execute_sql", {
+          sql: "ALTER TABLE orders ADD COLUMN account_id TEXT;",
+        });
+
+        if (alterError) {
+          console.log("Error adding account_id column:", alterError);
+        } else {
+          console.log("Added account_id column successfully");
+        }
+      }
+    }
+
+    // Add account_password column if it doesn't exist
+    try {
+      await supabase.from("orders").select("account_password").limit(1);
+    } catch (error) {
+      if (
+        error.message.includes("column") &&
+        error.message.includes("does not exist")
+      ) {
+        const { error: alterError } = await supabase.rpc("execute_sql", {
+          sql: "ALTER TABLE orders ADD COLUMN account_password TEXT;",
+        });
+
+        if (alterError) {
+          console.log("Error adding account_password column:", alterError);
+        } else {
+          console.log("Added account_password column successfully");
+        }
+      }
+    }
+
+    // Add delivery_date column if it doesn't exist
+    try {
+      await supabase.from("orders").select("delivery_date").limit(1);
+    } catch (error) {
+      if (
+        error.message.includes("column") &&
+        error.message.includes("does not exist")
+      ) {
+        const { error: alterError } = await supabase.rpc("execute_sql", {
+          sql: "ALTER TABLE orders ADD COLUMN delivery_date TIMESTAMP WITH TIME ZONE;",
+        });
+
+        if (alterError) {
+          console.log("Error adding delivery_date column:", alterError);
+        } else {
+          console.log("Added delivery_date column successfully");
+        }
+      }
+    }
+
+    // Add account_file_url column if it doesn't exist
+    try {
+      await supabase.from("orders").select("account_file_url").limit(1);
+    } catch (error) {
+      if (
+        error.message.includes("column") &&
+        error.message.includes("does not exist")
+      ) {
+        const { error: alterError } = await supabase.rpc("execute_sql", {
+          sql: "ALTER TABLE orders ADD COLUMN account_file_url TEXT;",
+        });
+
+        if (alterError) {
+          console.log("Error adding account_file_url column:", alterError);
+        } else {
+          console.log("Added account_file_url column successfully");
+        }
+      }
     }
 
     return {
@@ -192,7 +165,11 @@ exports.handler = async (event, context) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "Internal server error" }),
+      body: JSON.stringify({
+        error: "Internal server error",
+        message: err.message,
+        stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      }),
     };
   }
 };

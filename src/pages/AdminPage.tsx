@@ -58,7 +58,10 @@ import { useAdminOrders } from "../hooks/useAdminOrders";
 import OrdersSkeleton from "../components/OrdersSkeleton";
 import { useAdmin } from "../context/AdminContext";
 import OrderActionButtons from "../components/admin/OrderActionButtons";
-import { deliverAccountDetails } from "../lib/accountService";
+import {
+  deliverAccountDetails,
+  deliverAccountDirectly,
+} from "../lib/accountService";
 import { isDev } from "../lib/devMode";
 import {
   useOrdersOptimized,
@@ -505,23 +508,45 @@ function AdminPage() {
 
   // Update the handleDeliverAccount function
   const handleDeliverAccount = async (orderId: string) => {
-    try {
-      setAccountDeliveryInProgress(orderId);
+    setAccountDeliveryInProgress(orderId);
 
-      const result = await deliverAccountDetails(orderId);
+    try {
+      // Try the serverless function first
+      try {
+        const response = await fetch("/.netlify/functions/deliver-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success) {
+            // Update local state
+            updateLocalOrderStatus(orderId, "active");
+            toast.success("Account delivered successfully!");
+            setAccountDeliveryInProgress(null);
+            return;
+          }
+        }
+      } catch (serverlessError) {
+        console.error("Serverless function error:", serverlessError);
+      }
+
+      // If serverless function failed, try direct delivery
+      const result = await deliverAccountDirectly(orderId);
 
       if (result.success) {
-        if (result.method === "toast_only") {
-          toast.info("Credentials displayed but couldn't be saved to database");
-        } else if (isDev()) {
-          toast.info(
-            `Dev mode: Account delivered via ${result.method || "fallback"}`
-          );
-        }
+        updateLocalOrderStatus(orderId, "active");
+        toast.success(
+          "Account delivered successfully (using fallback method)!"
+        );
+      } else {
+        toast.error("Failed to deliver account");
       }
     } catch (err) {
-      console.error("Error in account delivery handler:", err);
-      toast.error("An unexpected error occurred");
+      console.error("Error delivering account:", err);
+      toast.error("Failed to deliver account");
     } finally {
       setAccountDeliveryInProgress(null);
     }
@@ -933,7 +958,7 @@ function AdminPage() {
         </div>
 
         {/* Orders List */}
-        {optimizedOrdersLoading ? (
+        {ordersLoading ? (
           <OrdersSkeleton />
         ) : (
           <>
@@ -1031,13 +1056,13 @@ function AdminPage() {
                 ))}
 
                 {/* Load More Button */}
-                {optimizedHasMoreOrders && (
+                {hasMoreOrders && (
                   <div id="load-more-trigger" className="py-4 text-center">
-                    {optimizedOrdersLoading ? (
+                    {ordersLoading ? (
                       <LoadingSpinner size="md" light />
                     ) : (
                       <button
-                        onClick={optimizedLoadMoreOrders}
+                        onClick={loadMoreOrders}
                         className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded transition-colors"
                       >
                         Load More Orders

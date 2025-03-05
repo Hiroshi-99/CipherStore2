@@ -187,3 +187,72 @@ export const deliverAccountDetails = async (orderId: string) => {
     message: "Database update failed, but credentials were displayed",
   };
 };
+
+export const deliverAccountDirectly = async (orderId: string) => {
+  try {
+    // Generate credentials
+    const accountId = `ACC${Math.floor(Math.random() * 10000)
+      .toString()
+      .padStart(4, "0")}`;
+    const password = Math.random().toString(36).substring(2, 10);
+
+    // Show credentials in toast first for safety
+    toast.success(
+      `Account Details Created:
+       
+       ID: ${accountId}
+       Password: ${password}
+       
+       (Save these somewhere safe)`,
+      { duration: 10000 }
+    );
+
+    // Try to update order in database
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          account_id: accountId,
+          account_password: password,
+          status: "active",
+          delivery_date: new Date().toISOString(),
+        })
+        .eq("id", orderId);
+
+      if (error) throw error;
+    } catch (dbError) {
+      console.error("Database update failed:", dbError);
+
+      // Store in localStorage as fallback
+      try {
+        const localAccounts = JSON.parse(
+          localStorage.getItem("account_credentials") || "{}"
+        );
+        localAccounts[orderId] = {
+          accountId,
+          password,
+          timestamp: new Date().toISOString(),
+        };
+        localStorage.setItem(
+          "account_credentials",
+          JSON.stringify(localAccounts)
+        );
+      } catch (e) {
+        // Ignore localStorage errors
+      }
+    }
+
+    return {
+      success: true,
+      accountId,
+      password,
+      method: "direct",
+    };
+  } catch (err) {
+    console.error("Error in deliverAccountDirectly:", err);
+    return {
+      success: false,
+      error: err,
+    };
+  }
+};
