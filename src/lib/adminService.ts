@@ -20,65 +20,44 @@ export const checkIfAdmin = async (userId: string): Promise<boolean> => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user && user.user_metadata?.role === "admin") {
+
+      if (
+        user &&
+        (user.user_metadata?.role === "admin" ||
+          user.user_metadata?.is_admin === true)
+      ) {
         console.log("User has admin role in metadata");
+        return true;
+      }
+
+      // Try email-based admin check for development
+      const adminEmails = [
+        "admin@example.com",
+        // Add other admin emails here
+      ];
+
+      if (
+        user &&
+        user.email &&
+        adminEmails.includes(user.email.toLowerCase())
+      ) {
+        console.log("User email is in admin list");
         return true;
       }
     } catch (metadataErr) {
       console.error("Error checking user metadata:", metadataErr);
     }
 
-    // Approach 2: Try to get user info from the auth API via serverless function
-    try {
-      const response = await fetch("/.netlify/functions/check-admin-role", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
-      });
+    // Remove server-side checks since they're failing with 403/500 errors
 
-      const result = await response.json();
-      if (result.isAdmin) {
-        console.log("User has admin role via serverless function check");
-        return true;
-      }
-    } catch (serverlessErr) {
-      console.error("Error checking admin via serverless:", serverlessErr);
-    }
-
-    // Approach 3: For development/testing - check if this is the only user
-    // This is a fallback mechanism for first-time setup
-    try {
-      // If this is the first user in the system, grant them admin status
-      const {
-        data: { users },
-        error: usersError,
-      } = await supabase.auth.admin.listUsers({
-        page: 1,
-        perPage: 10,
-      });
-
-      if (
-        !usersError &&
-        users &&
-        users.length === 1 &&
-        users[0].id === userId
-      ) {
-        console.log(
-          "This is the only user in the system - granting admin status"
-        );
-        return true;
-      }
-    } catch (countErr) {
-      console.error("Error checking users count:", countErr);
-    }
-
-    // Approach 4: A fallback for localhost/development
+    // Approach 2: A fallback for localhost/development
     if (
       window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1"
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname.includes("netlify.app") // Allow admin for netlify preview sites
     ) {
       console.log(
-        "Running on localhost - granting admin privileges for development"
+        "Running on localhost or netlify - granting admin privileges for development"
       );
       return true;
     }

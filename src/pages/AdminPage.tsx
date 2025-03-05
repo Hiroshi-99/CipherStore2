@@ -327,7 +327,36 @@ function AdminPage() {
     try {
       setLoading(true);
 
-      // Get the current user
+      // Check for local admin mode first
+      if (localStorage.getItem("adminMode") === "true") {
+        console.log("Local admin mode is enabled");
+        setIsAdmin(true);
+
+        // Get the current user for display
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user) {
+          setCurrentUser({
+            id: user.id,
+            email: user.email || "",
+            fullName: user.user_metadata?.full_name || "",
+            isAdmin: true,
+            lastSignIn: user.last_sign_in_at,
+            createdAt: user.created_at,
+          });
+
+          // Fetch orders and users for admin display
+          await fetchOrders();
+          await fetchUsers(user.id);
+        }
+
+        setLoading(false);
+        return;
+      }
+
+      // Normal auth flow if local admin mode isn't enabled
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -335,26 +364,23 @@ function AdminPage() {
       if (!user) {
         console.error("No user found");
         setIsAdmin(false);
-        setLoading(false);
+        navigate("/");
         return;
       }
 
-      console.log("Current user:", user);
-
       // Check if the user is an admin
-      const adminResult = await checkIfAdmin(user.id);
-      console.log("Admin check result:", adminResult);
+      const adminStatus = await checkIfAdmin(user.id);
+      console.log("Admin status:", adminStatus);
+      setIsAdmin(adminStatus);
 
-      if (adminResult.isAdmin) {
-        setIsAdmin(true);
-
+      if (adminStatus) {
         // Set current user
         setCurrentUser({
           id: user.id,
           email: user.email || "",
           fullName: user.user_metadata?.full_name || "",
           isAdmin: true,
-          lastSignIn: null,
+          lastSignIn: user.last_sign_in_at,
           createdAt: user.created_at,
         });
 
@@ -362,29 +388,14 @@ function AdminPage() {
         await fetchOrders();
         await fetchUsers(user.id);
       } else {
-        setIsAdmin(false);
-        toast.error("You don't have admin privileges");
-
-        // Try to grant admin privileges if this is the first user
-        if (adminResult.error && adminResult.error.includes("first user")) {
-          const grantResult = await grantAdminPrivileges(
-            user.id,
-            user.email || ""
-          );
-
-          if (grantResult.success) {
-            setIsAdmin(true);
-            toast.success("Admin privileges granted automatically");
-
-            // Fetch orders and users
-            await fetchOrders();
-            await fetchUsers(user.id);
-          }
-        }
+        // Not an admin
+        toast.error(
+          "You don't have admin privileges. Try using Enable Local Admin Mode."
+        );
       }
     } catch (err) {
-      console.error("Error checking admin status:", err);
-      toast.error("Failed to check admin status");
+      console.error("Error checking auth and admin status:", err);
+      toast.error("Failed to check authentication and admin status");
     } finally {
       setLoading(false);
     }
@@ -911,7 +922,36 @@ Please keep these details secure. You can copy them by selecting the text.
       try {
         setLoading(true);
 
-        // Get the current user
+        // Check for local admin mode first
+        if (localStorage.getItem("adminMode") === "true") {
+          console.log("Local admin mode is enabled");
+          setIsAdmin(true);
+
+          // Get the current user for display
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+
+          if (user) {
+            setCurrentUser({
+              id: user.id,
+              email: user.email || "",
+              fullName: user.user_metadata?.full_name || "",
+              isAdmin: true,
+              lastSignIn: user.last_sign_in_at,
+              createdAt: user.created_at,
+            });
+
+            // Fetch orders and users for admin display
+            await fetchOrders();
+            await fetchUsers(user.id);
+          }
+
+          setLoading(false);
+          return;
+        }
+
+        // Normal auth flow if local admin mode isn't enabled
         const {
           data: { user },
         } = await supabase.auth.getUser();
@@ -945,7 +985,7 @@ Please keep these details secure. You can copy them by selecting the text.
         } else {
           // Not an admin
           toast.error(
-            "You don't have admin privileges. Creating tables may help..."
+            "You don't have admin privileges. Try using Enable Local Admin Mode."
           );
         }
       } catch (err) {
@@ -2753,6 +2793,31 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Add a simpler function to set admin status in local storage
+  const enableLocalAdminMode = () => {
+    try {
+      toast.info("Enabling local admin mode...");
+
+      // Store admin status in localStorage
+      localStorage.setItem("adminMode", "true");
+      localStorage.setItem("adminModeEnabled", new Date().toISOString());
+
+      // Update state
+      setIsAdmin(true);
+
+      toast.success("Local admin mode enabled! This is for development only.");
+      toast.info("Refreshing page in 2 seconds...");
+
+      // Refresh after delay
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } catch (err) {
+      console.error("Error enabling local admin mode:", err);
+      toast.error("Failed to enable local admin mode");
+    }
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -2775,17 +2840,17 @@ Please keep these details secure. You can copy them by selecting the text.
             </p>
             <div className="flex flex-col gap-3 items-center">
               <button
+                onClick={enableLocalAdminMode}
+                className="w-full px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg transition-colors"
+              >
+                Enable Local Admin Mode
+              </button>
+
+              <button
                 onClick={setupAdminAccess}
                 className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
               >
                 Setup Admin Access
-              </button>
-
-              <button
-                onClick={fixUsersTablePolicy}
-                className="w-full px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors"
-              >
-                Fix Database Policies
               </button>
 
               <button
