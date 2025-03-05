@@ -225,9 +225,6 @@ function AdminPage() {
     const [users, setUsers] = useState<User[]>([]);
     const [userSearchTerm, setUserSearchTerm] = useState("");
     const [newAdminEmail, setNewAdminEmail] = useState("");
-    const [actionInProgress, setActionInProgress] = useState<string | null>(
-      null
-    );
     const [fetchError, setFetchError] = useState<string | null>(null);
 
     // Fetch users function
@@ -281,8 +278,6 @@ function AdminPage() {
       }
 
       try {
-        setActionInProgress("adding-admin");
-
         // First try to find the user by email
         const { data: foundUsers, error: findError } = await supabase
           .from("users")
@@ -320,8 +315,6 @@ function AdminPage() {
       } catch (err) {
         console.error("Error adding admin:", err);
         toast.error("Failed to add admin user");
-      } finally {
-        setActionInProgress(null);
       }
     }, [newAdminEmail]);
 
@@ -351,7 +344,6 @@ function AdminPage() {
       newAdminEmail,
       setNewAdminEmail,
       addAdminByEmail,
-      actionInProgress,
       fetchError,
     };
   };
@@ -367,7 +359,6 @@ function AdminPage() {
     newAdminEmail,
     setNewAdminEmail,
     addAdminByEmail,
-    actionInProgress,
     fetchError,
   } = useUsersState();
 
@@ -385,7 +376,7 @@ function AdminPage() {
   const [currentImageUrl, setCurrentImageUrl] = useState("");
 
   // Inside your AdminPage component, add this near the top:
-  const { handleApprove, handleReject } = useAdmin();
+  const { actionInProgress, handleApprove, handleReject } = useAdmin();
 
   // Initialize the page
   useEffect(() => {
