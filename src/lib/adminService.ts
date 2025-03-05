@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { safeInsert } from "./database";
+import { getMockUsers, isDevelopmentWithNetworkIssues } from "./devFallbacks";
 
 /**
  * Checks if a user has admin privileges with better fallbacks
@@ -353,9 +354,20 @@ export async function getLocalUsers(adminUserId: string) {
   }
 }
 
-// Add this function to get users when direct DB access fails
+// Update the getAllUsersClientSide function to handle network issues gracefully
 export const getAllUsersClientSide = async () => {
   try {
+    // Check if we're in development with network issues
+    const hasNetworkIssues = await isDevelopmentWithNetworkIssues();
+
+    if (hasNetworkIssues && process.env.NODE_ENV === "development") {
+      console.log("Network issues detected in development, using mock data");
+      return {
+        success: true,
+        data: getMockUsers(),
+      };
+    }
+
     // Try direct database access first
     const { data, error } = await supabase
       .from("users")

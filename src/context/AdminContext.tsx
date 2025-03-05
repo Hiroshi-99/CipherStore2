@@ -46,61 +46,58 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
   const checkAdminStatus = async () => {
     setIsAdminLoading(true);
     try {
-      // FIRST check for development mode override BEFORE making any API calls
+      // Add this early check for development mode
       if (process.env.NODE_ENV === "development") {
-        const devOverride =
-          localStorage.getItem("dev_admin_override") === "true";
-        if (devOverride) {
-          console.log("Using development admin override");
+        const devMode = localStorage.getItem("dev_admin_override") === "true";
+        if (devMode) {
+          console.log("Using development override");
           setIsAdmin(true);
           setIsAdminLoading(false);
-
-          // Cache result with timestamp
-          localStorage.setItem(
-            "admin_status",
-            JSON.stringify({
-              isAdmin: true,
-              timestamp: Date.now(),
-            })
-          );
-          return; // Exit early
+          return;
         }
       }
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      // Add a try/catch for the auth session
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-      if (!session?.user) {
-        setIsAdmin(false);
+        if (!session?.user) {
+          setIsAdmin(false);
+          setIsAdminLoading(false);
+          return;
+        }
+
+        console.log("Checking admin status for user:", session.user.id);
+        const result = await checkIfAdmin(session.user.user_metadata.id);
+        console.log("Admin check result:", result);
+
+        const isAdminUser = !!(result?.isAdmin || result?.success);
+        setIsAdmin(isAdminUser);
+
+        // Cache result with timestamp
         localStorage.setItem(
           "admin_status",
           JSON.stringify({
-            isAdmin: false,
+            isAdmin: isAdminUser,
             timestamp: Date.now(),
           })
         );
-        setIsAdminLoading(false);
-        return;
+      } catch (sessionError) {
+        console.error("Error getting session:", sessionError);
+
+        // For development mode, we'll allow admin access if fetch fails
+        if (process.env.NODE_ENV === "development") {
+          console.log("Session error in development, granting admin access");
+          setIsAdmin(true);
+          return;
+        }
+
+        setIsAdmin(false);
       }
-
-      console.log("Checking admin status for user:", session.user.id);
-      const result = await checkIfAdmin(session.user.id);
-      console.log("Admin check result:", result);
-
-      const isAdminUser = !!(result?.isAdmin || result?.success);
-      setIsAdmin(isAdminUser);
-
-      // Cache result with timestamp
-      localStorage.setItem(
-        "admin_status",
-        JSON.stringify({
-          isAdmin: isAdminUser,
-          timestamp: Date.now(),
-        })
-      );
-    } catch (err) {
-      console.error("Error checking admin status:", err);
+    } catch (outerError) {
+      console.error("Outer error in checkAdminStatus:", outerError);
       setIsAdmin(false);
     } finally {
       setIsAdminLoading(false);
