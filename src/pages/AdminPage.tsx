@@ -382,6 +382,7 @@ function AdminPage() {
   );
   const [showImageModal, setShowImageModal] = useState(false);
   const [currentImageUrl, setCurrentImageUrl] = useState("");
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
   // Initialize the page
   useEffect(() => {
