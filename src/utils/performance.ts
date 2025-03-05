@@ -18,7 +18,7 @@ class PerformanceMonitor {
 
   // Start timing an operation
   start(operation: string): void {
-    this.timers.set(operation, performance.now());
+    this.timers.set(operation, window.performance.now());
   }
 
   // End timing and record the metrics
@@ -26,7 +26,7 @@ class PerformanceMonitor {
     const startTime = this.timers.get(operation);
     if (startTime === undefined) return null;
 
-    const endTime = performance.now();
+    const endTime = window.performance.now();
     const duration = endTime - startTime;
 
     this.timers.delete(operation);
@@ -98,18 +98,19 @@ class PerformanceMonitor {
   }
 }
 
-export const performance = new PerformanceMonitor();
+// Rename the exported instance to avoid colliding with the global performance object
+export const performanceMonitor = new PerformanceMonitor();
 
 // Add a React hook to measure component render time
 export function usePerformanceMonitor(componentName: string) {
   useEffect(() => {
-    performance.start(`render_${componentName}`);
+    performanceMonitor.start(`render_${componentName}`);
 
     return () => {
-      performance.end(`render_${componentName}`);
+      performanceMonitor.end(`render_${componentName}`);
     };
   });
 
   // Return the monitor for additional measurements
-  return performance;
+  return performanceMonitor;
 }
