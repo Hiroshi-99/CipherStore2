@@ -2573,6 +2573,133 @@ Please keep these details secure. You can copy them by selecting the text.
     }
   };
 
+  // Create a simplified function to set up admin permissions
+  const setupAdminAccess = async () => {
+    try {
+      toast.info("Setting up admin access...");
+
+      // Get current user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        toast.error("No user found. Please log in first.");
+        return;
+      }
+
+      toast.info("Attempting to create admin access for: " + user.email);
+
+      // First try direct insert to admin_users table
+      try {
+        const { error: adminInsertError } = await supabase
+          .from("admin_users")
+          .insert({
+            user_id: user.id,
+            granted_at: new Date().toISOString(),
+          });
+
+        if (adminInsertError) {
+          console.log(
+            "Admin insert error (this might be normal if table doesn't exist):",
+            adminInsertError
+          );
+        } else {
+          toast.success("Added to admin_users table");
+        }
+      } catch (err) {
+        console.log("Error with admin_users table (might not exist yet):", err);
+      }
+
+      // Try to insert into users table
+      try {
+        // Try simple insert first
+        const { error: userInsertError } = await supabase.from("users").insert({
+          id: user.id,
+          email: user.email,
+          is_admin: true,
+        });
+
+        if (userInsertError) {
+          console.log("User insert error:", userInsertError);
+
+          // If simple insert fails, try update
+          const { error: updateError } = await supabase
+            .from("users")
+            .update({ is_admin: true })
+            .eq("id", user.id);
+
+          if (updateError) {
+            console.log("User update error:", updateError);
+          } else {
+            toast.success("Updated admin status in users table");
+          }
+        } else {
+          toast.success("Added to users table as admin");
+        }
+      } catch (err) {
+        console.log("Error with users table:", err);
+      }
+
+      // Try to call a serverless function to grant admin access
+      try {
+        const response = await fetch("/.netlify/functions/grant-admin-access", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ userId: user.id }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          toast.success("Admin access granted via serverless function");
+        } else {
+          console.log("Serverless function error:", result.error);
+        }
+      } catch (err) {
+        console.log("Error calling serverless function:", err);
+      }
+
+      // Refresh the page after delay
+      toast.info("Setup complete. Refreshing in 3 seconds...");
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+    } catch (err) {
+      console.error("Error in setupAdminAccess:", err);
+      toast.error("Error setting up admin access");
+    }
+  };
+
+  // Add a function specifically to handle the infinite recursion policy error
+  const fixUsersTablePolicy = async () => {
+    try {
+      toast.info("Attempting to fix users table policies...");
+
+      // Try to use the Netlify function to fix policies
+      const response = await fetch("/.netlify/functions/fix-user-policies", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        toast.success("User table policies fixed successfully");
+
+        // Try setting up admin again after policies are fixed
+        await setupAdminAccess();
+      } else {
+        toast.error("Failed to fix user policies: " + result.error);
+      }
+    } catch (err) {
+      console.error("Error fixing user policies:", err);
+      toast.error("Error communicating with serverless function");
+    }
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
@@ -2590,23 +2717,32 @@ Please keep these details secure. You can copy them by selecting the text.
           <div className="text-center max-w-md">
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
             <p className="text-white/70 mb-6">
-              You don't have permission to access this page. If you believe this
-              is an error, you can try the following options:
+              You don't have permission to access this page. The following
+              options may help:
             </p>
-            <div className="flex flex-col gap-4 items-center">
+            <div className="flex flex-col gap-3 items-center">
               <button
-                onClick={createRequiredTables}
+                onClick={setupAdminAccess}
                 className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
               >
-                Create Database Tables
+                Setup Admin Access
+              </button>
+
+              <button
+                onClick={fixUsersTablePolicy}
+                className="w-full px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors"
+              >
+                Fix Database Policies
               </button>
 
               <button
                 onClick={debugAdminPermissions}
                 className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors"
               >
-                Fix Admin Permissions
+                Debug Admin Status
               </button>
+
+              <div className="border-t border-white/10 w-full my-2"></div>
 
               <button
                 onClick={() => navigate("/")}
