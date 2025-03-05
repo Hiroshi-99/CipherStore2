@@ -380,46 +380,44 @@ function AdminPage() {
 
   // Initialize the page
   useEffect(() => {
-    setPageTitle("Admin Dashboard");
-
-    const initializePage = async () => {
+    const checkIfUserIsAdmin = async () => {
       try {
         setLoading(true);
 
-        // Fetch the current user
+        // First, get current user
         const {
-          data: { user },
+          data: { user: currentUser },
         } = await supabase.auth.getUser();
 
-        if (!user) {
+        if (!currentUser) {
+          // Not logged in
           navigate("/login");
           return;
         }
 
-        setUser(user);
+        setUser(currentUser);
 
-        // Check if the user is an admin
-        const { isAdmin: userIsAdmin } = await checkIfAdmin(user.id);
-        setIsAdmin(userIsAdmin);
+        // Check admin status directly in this component
+        const { success } = await checkIfAdmin(currentUser.id);
 
-        if (userIsAdmin) {
-          // Fetch initial data
-          if (selectedTab === "orders") {
-            fetchOrders();
-          } else if (selectedTab === "users") {
-            fetchUsers();
-          }
+        if (success) {
+          setIsAdmin(true);
+          // Fetch initial data now that we know user is admin
+          fetchOrders();
+          fetchUsers();
+        } else {
+          console.log("User is not an admin");
+          // Keep isAdmin as false
         }
       } catch (err) {
-        console.error("Error initializing admin page:", err);
-        toast.error("Failed to initialize admin dashboard");
+        console.error("Error checking admin status:", err);
       } finally {
         setLoading(false);
       }
     };
 
-    initializePage();
-  }, []);
+    checkIfUserIsAdmin();
+  }, [navigate]);
 
   // Effect to load data when tab changes
   useEffect(() => {
@@ -638,6 +636,40 @@ function AdminPage() {
     filteredOrders,
   } = useOrderFilters(orders);
 
+  // Add this function to the AdminPage component
+  const checkManualAdmin = useCallback(async () => {
+    try {
+      // Try to directly check the admin_users table
+      const { data, error } = await supabase
+        .from("admin_users")
+        .select("*")
+        .eq("user_id", user?.id)
+        .single();
+
+      if (data && !error) {
+        console.log("Admin status found via direct table access");
+        setIsAdmin(true);
+        return true;
+      }
+
+      // If that fails, try role-based access control if supported
+      const { data: roleData, error: roleError } = await supabase.rpc(
+        "get_user_role"
+      );
+
+      if (!roleError && roleData === "admin") {
+        console.log("Admin status found via role check");
+        setIsAdmin(true);
+        return true;
+      }
+
+      return false;
+    } catch (err) {
+      console.error("Error in manual admin check:", err);
+      return false;
+    }
+  }, [user, supabase]);
+
   // Render functions for tabs
   const renderUsersTab = () => {
     return (
@@ -671,10 +703,9 @@ function AdminPage() {
             />
             <button
               onClick={addAdminByEmail}
-              disabled={actionInProgress === "adding-admin"}
-              className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded"
+              className="w-full px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center justify-center gap-2"
             >
-              Add Admin
+              Add Admin User
             </button>
           </div>
         </div>
@@ -918,7 +949,6 @@ function AdminPage() {
                                   }
                                 });
                               }}
-                              disabled={actionInProgress === order.id}
                             >
                               <CheckCircle size={20} />
                             </button>
@@ -928,7 +958,6 @@ function AdminPage() {
                                 e.stopPropagation();
                                 handleReject(order.id);
                               }}
-                              disabled={actionInProgress === order.id}
                             >
                               <XCircle size={20} />
                             </button>
@@ -1037,17 +1066,9 @@ function AdminPage() {
               </div>
               <button
                 onClick={addAdminByEmail}
-                disabled={actionInProgress === "adding-admin"}
                 className="w-full px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded transition-colors flex items-center justify-center gap-2"
               >
-                {actionInProgress === "adding-admin" ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Adding...
-                  </>
-                ) : (
-                  "Add Admin User"
-                )}
+                Add Admin User
               </button>
             </div>
           </div>
@@ -1059,7 +1080,7 @@ function AdminPage() {
   // Loading state
   if (loading) {
     return (
-      <PageContainer title="ADMIN">
+      <PageContainer title="ADMIN" user={user}>
         <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
           <LoadingSpinner size="lg" light />
         </div>
@@ -1070,7 +1091,7 @@ function AdminPage() {
   // Not admin state
   if (!isAdmin) {
     return (
-      <PageContainer title="ADMIN">
+      <PageContainer title="ADMIN" user={user}>
         <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
           <div className="text-center max-w-md">
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
@@ -1098,6 +1119,12 @@ function AdminPage() {
                 Check Database Access
               </button>
               <button
+                onClick={checkManualAdmin}
+                className="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors w-full"
+              >
+                Check Admin Status Again
+              </button>
+              <button
                 onClick={() => navigate("/")}
                 className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors w-full"
               >
@@ -1112,7 +1139,7 @@ function AdminPage() {
 
   // Main admin dashboard
   return (
-    <PageContainer title="ADMIN" showBack>
+    <PageContainer title="ADMIN" showBack user={user}>
       <main className="max-w-screen-xl mx-auto pb-16 px-4">
         <div className="bg-gray-900 rounded-xl p-6 mt-8">
           <h1 className="text-2xl font-bold text-white mb-6">

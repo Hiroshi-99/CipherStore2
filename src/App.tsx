@@ -8,7 +8,7 @@ import ChatPage from "./pages/ChatPage";
 import AdminGuard from "./components/AdminGuard";
 import { setPageTitle } from "./utils/title";
 import Fireflies from "./components/Fireflies";
-import { AdminProvider } from "./contexts/AdminContext";
+import { AdminProvider } from "./context/AdminContext";
 import LoadingSpinner from "./components/LoadingSpinner";
 
 // Use lazy loading for page components
