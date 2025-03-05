@@ -1585,6 +1585,180 @@ Please keep these details secure. You can copy them by selecting the text.
     [selectedOrderDetail, setSelectedOrderDetail, setOrders]
   );
 
+  // Add the renderOrdersTab function before the return statement
+  const renderOrdersTab = () => {
+    const filteredOrdersToShow = filteredOrders || [];
+
+    return (
+      <div>
+        <h2 className="text-xl text-white mb-6">Order Management</h2>
+
+        {/* Order Statistics */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Total</h3>
+            <p className="text-2xl font-bold text-white mt-1">{stats.total}</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Pending</h3>
+            <p className="text-2xl font-bold text-white mt-1">
+              {stats.pending}
+            </p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Approved</h3>
+            <p className="text-2xl font-bold text-white mt-1">
+              {stats.approved}
+            </p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-4">
+            <h3 className="text-white/70 text-sm uppercase">Rejected</h3>
+            <p className="text-2xl font-bold text-white mt-1">
+              {stats.rejected}
+            </p>
+          </div>
+        </div>
+
+        {/* Search and Filter Bar */}
+        <div className="bg-white/5 rounded-lg p-4 mb-6">
+          <div className="flex flex-wrap gap-4">
+            <div className="flex-1 min-w-[200px]">
+              <div className="relative">
+                <Search
+                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
+                  size={18}
+                />
+                <input
+                  type="text"
+                  placeholder="Search orders..."
+                  value={searchTerm}
+                  onChange={(e) => setFilteredSearchTerm(e.target.value)}
+                  className="w-full bg-white/10 border border-white/20 rounded-md pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setFilteredSelectedStatuses([])}
+                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded"
+              >
+                All
+              </button>
+              <button
+                onClick={() => setFilteredSelectedStatuses(["pending"])}
+                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded"
+              >
+                Pending
+              </button>
+              <button
+                onClick={() => setFilteredSelectedStatuses(["approved"])}
+                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded"
+              >
+                Approved
+              </button>
+              <button
+                onClick={() => setFilteredSelectedStatuses(["rejected"])}
+                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded"
+              >
+                Rejected
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Orders List */}
+        {loading ? (
+          <OrdersSkeleton />
+        ) : (
+          <>
+            {filteredOrdersToShow.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-white/70 text-lg mb-4">No orders found</p>
+                <button
+                  onClick={() => fetchOrders(1, false)}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md transition-colors inline-flex items-center gap-2"
+                >
+                  <RefreshCw size={16} />
+                  Refresh Orders
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredOrdersToShow.map((order) => (
+                  <div
+                    key={order.id}
+                    className="bg-white/5 hover:bg-white/10 transition-colors rounded-lg p-6 cursor-pointer"
+                    onClick={() => setSelectedOrderDetail(order)}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-medium text-white">
+                          {order.customer_name || "Unknown Customer"}
+                        </h3>
+                        <p className="text-white/70 mb-2">
+                          Order #{order.id?.substring(0, 8)}
+                        </p>
+                        <p className="text-white/50 text-sm mb-3">
+                          {new Date(order.created_at).toLocaleString()}
+                        </p>
+                        <div className="flex gap-2">
+                          <span
+                            className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              order.status === "pending"
+                                ? "bg-yellow-500/20 text-yellow-300"
+                                : order.status === "approved"
+                                ? "bg-green-500/20 text-green-300"
+                                : order.status === "rejected"
+                                ? "bg-red-500/20 text-red-300"
+                                : order.status === "delivered"
+                                ? "bg-blue-500/20 text-blue-300"
+                                : "bg-gray-500/20 text-gray-300"
+                            }`}
+                          >
+                            {order.status?.charAt(0).toUpperCase() +
+                              order.status?.slice(1)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedOrderDetail(order);
+                          }}
+                        >
+                          <Eye size={20} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Load More Button */}
+                {hasMoreOrders && (
+                  <div id="load-more-trigger" className="py-4 text-center">
+                    {loading ? (
+                      <LoadingSpinner size="md" light />
+                    ) : (
+                      <button
+                        onClick={loadMoreOrders}
+                        className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded transition-colors"
+                      >
+                        Load More Orders
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
