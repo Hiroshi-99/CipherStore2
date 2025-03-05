@@ -907,42 +907,57 @@ Please keep these details secure. You can copy them by selecting the text.
   };
 
   useEffect(() => {
-    const checkAuth = async () => {
+    const checkAuthAndAdmin = async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        setLoading(true);
 
-        if (!session?.user) {
+        // Get the current user
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          console.error("No user found");
+          setIsAdmin(false);
           navigate("/");
           return;
         }
 
-        setCurrentUser(session.user);
-
-        // Check if user is admin
-        const adminStatus = await checkIfAdmin(session.user.id);
+        // Check if the user is an admin
+        const adminStatus = await checkIfAdmin(user.id);
+        console.log("Admin status:", adminStatus);
         setIsAdmin(adminStatus);
 
-        if (!adminStatus) {
-          toast.error("You don't have permission to access the admin page");
-          navigate("/");
-          return;
-        }
+        if (adminStatus) {
+          // Set current user
+          setCurrentUser({
+            id: user.id,
+            email: user.email || "",
+            fullName: user.user_metadata?.full_name || "",
+            isAdmin: true,
+            lastSignIn: user.last_sign_in_at,
+            createdAt: user.created_at,
+          });
 
-        // Fetch users with admin status
-        await fetchUsers(session.user.id);
+          // Fetch orders and users
+          await fetchOrders();
+          await fetchUsers(user.id);
+        } else {
+          // Not an admin
+          toast.error(
+            "You don't have admin privileges. Creating tables may help..."
+          );
+        }
       } catch (err) {
-        console.error("Error checking authentication:", err);
-        toast.error("Authentication error");
-        navigate("/");
+        console.error("Error checking auth and admin status:", err);
+        toast.error("Failed to check authentication and admin status");
       } finally {
         setLoading(false);
       }
     };
 
-    checkAuth();
-  }, [navigate]);
+    checkAuthAndAdmin();
+  }, []);
 
   // Add this function to fetch users
   const fetchUsers = async (adminUserId: string) => {
@@ -2227,175 +2242,133 @@ Please keep these details secure. You can copy them by selecting the text.
     try {
       toast.info("Creating required database tables...");
 
-      // Check if we have permission to create tables
-      const { error: permissionError } = await supabase.rpc(
-        "check_admin_permission"
-      );
-
-      if (permissionError) {
-        console.error("Error checking permissions:", permissionError);
-
-        // Try to create tables directly
-        try {
-          // Create admin_users table if it doesn't exist
-          const { error: adminTableError } = await supabase.rpc(
-            "create_table_if_not_exists",
-            {
-              table_name: "admin_users",
-              table_definition: `
-              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-              user_id UUID NOT NULL,
-              granted_by UUID,
-              granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-              UNIQUE(user_id)
-            `,
-            }
-          );
-
-          if (adminTableError) {
-            console.error("Error creating admin_users table:", adminTableError);
-            toast.error("Failed to create admin_users table");
-          }
-
-          // Create users table if it doesn't exist
-          const { error: usersTableError } = await supabase.rpc(
-            "create_table_if_not_exists",
-            {
-              table_name: "users",
-              table_definition: `
-              id UUID PRIMARY KEY,
-              email TEXT,
-              full_name TEXT,
-              is_admin BOOLEAN DEFAULT FALSE,
-              created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            `,
-            }
-          );
-
-          if (usersTableError) {
-            console.error("Error creating users table:", usersTableError);
-            toast.error("Failed to create users table");
-          }
-        } catch (rpcError) {
-          console.error("RPC error:", rpcError);
-          toast.error("Failed to create tables via RPC");
-
-          // Try direct SQL as a last resort
-          try {
-            // Get the current user
-            const {
-              data: { user },
-            } = await supabase.auth.getUser();
-
-            if (user) {
-              // Try to insert the current user as an admin
-              const { error: insertError } = await supabase
-                .from("admin_users")
-                .insert({
-                  user_id: user.id,
-                  granted_at: new Date().toISOString(),
-                });
-
-              if (insertError) {
-                console.error("Error inserting admin user:", insertError);
-              } else {
-                toast.success("Added you as an admin user");
-              }
-            }
-          } catch (sqlError) {
-            console.error("SQL error:", sqlError);
-          }
-        }
-      } else {
-        toast.success("You have permission to create tables");
-
-        // Create admin_users table
-        const { error: createAdminError } = await supabase.rpc("execute_sql", {
-          sql: `
-            CREATE TABLE IF NOT EXISTS admin_users (
-              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-              user_id UUID NOT NULL,
-              granted_by UUID,
-              granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-              UNIQUE(user_id)
-            );
-          `,
-        });
-
-        if (createAdminError) {
-          console.error("Error creating admin_users table:", createAdminError);
-          toast.error("Failed to create admin_users table");
-        } else {
-          toast.success("Created admin_users table");
-        }
-
-        // Create users table
-        const { error: createUsersError } = await supabase.rpc("execute_sql", {
-          sql: `
-            CREATE TABLE IF NOT EXISTS users (
-              id UUID PRIMARY KEY,
-              email TEXT,
-              full_name TEXT,
-              is_admin BOOLEAN DEFAULT FALSE,
-              created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-          `,
-        });
-
-        if (createUsersError) {
-          console.error("Error creating users table:", createUsersError);
-          toast.error("Failed to create users table");
-        } else {
-          toast.success("Created users table");
-        }
-      }
-
-      // Add current user to users table and set as admin
+      // Get the current user
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (user) {
-        // Add to users table
-        const { error: insertUserError } = await supabase.from("users").upsert(
-          {
-            id: user.id,
-            email: user.email,
-            full_name: user.user_metadata?.full_name || "",
-            is_admin: true,
-            created_at: user.created_at,
-          },
-          { onConflict: "id" }
-        );
+      if (!user) {
+        toast.error("No user found. Please log in.");
+        return;
+      }
 
-        if (insertUserError) {
-          console.error("Error adding user to users table:", insertUserError);
+      // Try to create admin_users table
+      const createAdminUsersSQL = `
+        CREATE TABLE IF NOT EXISTS admin_users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL,
+          granted_by UUID,
+          granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          UNIQUE(user_id)
+        );
+      `;
+
+      // Try to create users table
+      const createUsersSQL = `
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY,
+          email TEXT,
+          full_name TEXT,
+          is_admin BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `;
+
+      // Try to execute SQL
+      try {
+        // Create admin_users table
+        const { error: adminError } = await supabase.rpc("execute_sql", {
+          sql: createAdminUsersSQL,
+        });
+
+        if (adminError) {
+          console.error("Error creating admin_users table:", adminError);
+          toast.error(
+            `Error creating admin_users table: ${adminError.message}`
+          );
         } else {
-          toast.success("Added you to users table as admin");
+          toast.success("Admin users table created successfully");
         }
 
-        // Add to admin_users table
-        const { error: insertAdminError } = await supabase
-          .from("admin_users")
-          .upsert(
-            {
+        // Create users table
+        const { error: usersError } = await supabase.rpc("execute_sql", {
+          sql: createUsersSQL,
+        });
+
+        if (usersError) {
+          console.error("Error creating users table:", usersError);
+          toast.error(`Error creating users table: ${usersError.message}`);
+        } else {
+          toast.success("Users table created successfully");
+        }
+      } catch (sqlError) {
+        console.error("SQL execution error:", sqlError);
+        toast.error("Error executing SQL. You might not have permission.");
+
+        // Fallback: try direct table creation via insert
+        try {
+          // Try to insert the current user as an admin
+          const { error: insertError } = await supabase
+            .from("admin_users")
+            .insert({
               user_id: user.id,
               granted_at: new Date().toISOString(),
-            },
-            { onConflict: "user_id" }
-          );
+            });
 
-        if (insertAdminError) {
-          console.error(
-            "Error adding user to admin_users table:",
-            insertAdminError
-          );
-        } else {
-          toast.success("Added you to admin_users table");
+          if (insertError && !insertError.message.includes("already exists")) {
+            console.error("Error inserting admin user:", insertError);
+            toast.error(`Error adding admin user: ${insertError.message}`);
+          } else {
+            toast.success("You were added as an admin user");
+          }
+        } catch (insertError) {
+          console.error("Insert error:", insertError);
+          toast.error("Failed to create tables via insert");
         }
       }
 
+      // Add current user to users table
+      const { error: upsertError } = await supabase.from("users").upsert(
+        {
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata?.full_name || "",
+          is_admin: true,
+          created_at: user.created_at,
+        },
+        { onConflict: "id" }
+      );
+
+      if (upsertError) {
+        console.error("Error adding user to users table:", upsertError);
+        toast.error(`Error adding user: ${upsertError.message}`);
+      } else {
+        toast.success("User details updated successfully");
+      }
+
+      // Add current user to admin_users table
+      const { error: adminInsertError } = await supabase
+        .from("admin_users")
+        .upsert(
+          {
+            user_id: user.id,
+            granted_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id" }
+        );
+
+      if (adminInsertError) {
+        console.error(
+          "Error adding user to admin_users table:",
+          adminInsertError
+        );
+        toast.error(`Error adding admin: ${adminInsertError.message}`);
+      } else {
+        toast.success("Admin privileges granted successfully");
+      }
+
       // Refresh the page after a delay
+      toast.info("Refreshing page in 3 seconds...");
       setTimeout(() => {
         window.location.reload();
       }, 3000);
@@ -2515,32 +2488,34 @@ Please keep these details secure. You can copy them by selecting the text.
 
   if (!isAdmin) {
     return (
-      <PageContainer title="ADMIN">
+      <PageContainer>
         <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
           <div className="text-center max-w-md">
             <h2 className="text-xl text-white mb-4">Access Denied</h2>
             <p className="text-white/70 mb-6">
               You don't have permission to access this page. If you believe this
-              is an error, you can try to set up the admin database tables.
+              is an error, you can try the following options:
             </p>
             <div className="flex flex-col gap-4 items-center">
               <button
                 onClick={createRequiredTables}
-                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors w-full"
+                className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
               >
-                Set Up Admin Tables
+                Create Database Tables
               </button>
-              <button
-                onClick={() => navigate("/")}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors w-full"
-              >
-                Go Home
-              </button>
+
               <button
                 onClick={debugAdminPermissions}
-                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors w-full mt-2"
+                className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors"
               >
-                Debug Admin Permissions
+                Fix Admin Permissions
+              </button>
+
+              <button
+                onClick={() => navigate("/")}
+                className="w-full px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors"
+              >
+                Go Home
               </button>
             </div>
           </div>

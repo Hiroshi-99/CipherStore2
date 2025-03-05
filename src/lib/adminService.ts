@@ -6,100 +6,95 @@ import { safeInsert } from "./database";
  * @param userId The user ID to check
  * @returns True if the user is an admin, false otherwise
  */
-export const checkIfAdmin = async (
-  userId: string
-): Promise<{ isAdmin: boolean; error?: string }> => {
+export const checkIfAdmin = async (userId: string): Promise<boolean> => {
   try {
     if (!userId) {
       console.error("No user ID provided to checkIfAdmin");
-      return { isAdmin: false, error: "No user ID provided" };
+      return false;
     }
 
     console.log("Checking admin status for user:", userId);
 
-    // First check the admin_users table
+    // Try multiple methods to check admin status
+
+    // Method 1: Check the admin_users table
     const { data: adminUser, error: adminError } = await supabase
       .from("admin_users")
       .select("*")
       .eq("user_id", userId)
       .single();
 
-    if (adminError && !adminError.message.includes("No rows found")) {
-      console.error("Error checking admin_users table:", adminError);
+    if (!adminError && adminUser) {
+      console.log("User found in admin_users table");
+      return true;
     }
 
-    if (adminUser) {
-      console.log("User found in admin_users table:", adminUser);
-      return { isAdmin: true };
-    }
-
-    // If not found in admin_users, check the users table for is_admin flag
+    // Method 2: Check the users table
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("is_admin")
       .eq("id", userId)
       .single();
 
-    if (userError && !userError.message.includes("No rows found")) {
-      console.error("Error checking users table:", userError);
+    if (!userError && user && user.is_admin) {
+      console.log("User found in users table with is_admin=true");
+
+      // Add to admin_users for future checks
+      await supabase
+        .from("admin_users")
+        .insert({
+          user_id: userId,
+          granted_at: new Date().toISOString(),
+        })
+        .then(({ error }) => {
+          if (error) console.error("Error adding user to admin_users:", error);
+        });
+
+      return true;
     }
 
-    if (user && user.is_admin) {
-      console.log("User found in users table with is_admin=true:", user);
-
-      // Add the user to admin_users table for future checks
-      const { error: insertError } = await supabase.from("admin_users").insert({
-        user_id: userId,
-        granted_at: new Date().toISOString(),
-      });
-
-      if (insertError) {
-        console.error("Error adding user to admin_users table:", insertError);
-      }
-
-      return { isAdmin: true };
-    }
-
-    // As a fallback, check if this is the first user in the system
+    // Method 3: Check if this is the first user in the system
     const { count, error: countError } = await supabase
       .from("users")
       .select("*", { count: "exact", head: true });
 
-    if (countError) {
-      console.error("Error counting users:", countError);
+    if (!countError && count === 1) {
+      console.log("This is the only user, granting admin access");
+
+      // Update user record and admin_users table
+      await Promise.all([
+        supabase.from("users").upsert(
+          {
+            id: userId,
+            is_admin: true,
+          },
+          { onConflict: "id" }
+        ),
+
+        supabase.from("admin_users").insert({
+          user_id: userId,
+          granted_at: new Date().toISOString(),
+        }),
+      ]);
+
+      return true;
     }
 
-    if (count === 1) {
-      console.log("This is the only user in the system, granting admin access");
+    // Method 4: Check if admin_users table exists, if not, grant admin
+    const { error: tableCheckError } = await supabase
+      .from("admin_users")
+      .select("*", { count: "exact", head: true });
 
-      // Update the user record
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({ is_admin: true })
-        .eq("id", userId);
-
-      if (updateError) {
-        console.error("Error updating user as admin:", updateError);
-      }
-
-      // Add to admin_users table
-      const { error: insertError } = await supabase.from("admin_users").insert({
-        user_id: userId,
-        granted_at: new Date().toISOString(),
-      });
-
-      if (insertError) {
-        console.error("Error adding user to admin_users table:", insertError);
-      }
-
-      return { isAdmin: true };
+    if (tableCheckError && tableCheckError.message.includes("does not exist")) {
+      console.log("admin_users table doesn't exist, consider user as admin");
+      return true;
     }
 
-    console.log("User is not an admin");
-    return { isAdmin: false };
+    return false;
   } catch (error) {
     console.error("Error in checkIfAdmin:", error);
-    return { isAdmin: false, error: "Error checking admin status" };
+    // In case of error, default to non-admin for security
+    return false;
   }
 };
 
