@@ -17,79 +17,57 @@ export const checkIfAdmin = async (
 
     console.log("Checking admin status for user:", userId);
 
-    // First check the admin_users table
-    const { data: adminUser, error: adminError } = await supabase
+    // First check the admin_users table (handle multiple results)
+    const { data: adminUsers, error: adminError } = await supabase
       .from("admin_users")
       .select("*")
-      .eq("user_id", userId)
-      .single();
+      .eq("user_id", userId);
 
-    if (adminError && !adminError.message.includes("No rows found")) {
+    if (adminError) {
       console.error("Error checking admin_users table:", adminError);
-    }
-
-    if (adminUser) {
-      console.log("User found in admin_users table:", adminUser);
+    } else if (adminUsers && adminUsers.length > 0) {
+      console.log("User found in admin_users table:", adminUsers[0]);
       return { isAdmin: true };
     }
 
-    // If not found in admin_users, check the users table for is_admin flag
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("is_admin")
-      .eq("id", userId)
-      .single();
-
-    if (userError && !userError.message.includes("No rows found")) {
-      console.error("Error checking users table:", userError);
-    }
-
-    if (user && user.is_admin) {
-      console.log("User found in users table with is_admin=true:", user);
-
-      // Add the user to admin_users table for future checks
-      const { error: insertError } = await supabase.from("admin_users").insert({
-        user_id: userId,
-        granted_at: new Date().toISOString(),
+    // Try to fetch user via Netlify function as fallback
+    try {
+      const response = await fetch("/.netlify/functions/check-admin-status", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ userId }),
       });
 
-      if (insertError) {
-        console.error("Error adding user to admin_users table:", insertError);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data && result.data.isAdmin) {
+          console.log("User is admin according to serverless function");
+          return { isAdmin: true };
+        }
       }
-
-      return { isAdmin: true };
+    } catch (fnError) {
+      console.error("Error checking admin status via function:", fnError);
     }
 
-    // As a fallback, check if this is the first user in the system
-    const { count, error: countError } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true });
+    // For development/testing - set specific users as admins
+    const adminEmails = ["teeangly034@gmail.com", "admin@example.com"];
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (countError) {
-      console.error("Error counting users:", countError);
-    }
+    if (user && user.email && adminEmails.includes(user.email)) {
+      console.log("User is admin by email match:", user.email);
 
-    if (count === 1) {
-      console.log("This is the only user in the system, granting admin access");
-
-      // Update the user record
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({ is_admin: true })
-        .eq("id", userId);
-
-      if (updateError) {
-        console.error("Error updating user as admin:", updateError);
-      }
-
-      // Add to admin_users table
-      const { error: insertError } = await supabase.from("admin_users").insert({
-        user_id: userId,
-        granted_at: new Date().toISOString(),
-      });
-
-      if (insertError) {
-        console.error("Error adding user to admin_users table:", insertError);
+      // Try to add to admin_users for future checks
+      try {
+        await supabase.from("admin_users").upsert({
+          user_id: userId,
+          granted_at: new Date().toISOString(),
+        });
+      } catch (upsertError) {
+        console.error("Could not add user to admin_users:", upsertError);
       }
 
       return { isAdmin: true };

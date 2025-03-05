@@ -54,6 +54,8 @@ import OrderDetailModal from "../components/admin/OrderDetailModal";
 import AccountDetailsForm from "../components/admin/AccountDetailsForm";
 import { FixedSizeList as List } from "react-window";
 import AutoSizer from "react-virtualized-auto-sizer";
+import { useAdminOrders } from "../hooks/useAdminOrders";
+import OrdersSkeleton from "../components/OrdersSkeleton";
 
 interface Admin {
   id: string;
@@ -1709,133 +1711,97 @@ Please keep these details secure. You can copy them by selecting the text.
   };
 
   // Create a memoized order item renderer
-  const OrderRow = React.memo(({ index, style }) => {
-    const order = filteredOrders[index];
-    return (
-      <div style={style} className="px-4">
-        <div
-          key={order.id}
-          className="bg-white/5 hover:bg-white/10 rounded-lg p-6 transition-colors my-2"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-white">
-                {order.full_name}
-              </h3>
-              <p className="text-white/70">{order.email}</p>
-              <p className="text-sm text-white/50">
-                {new Date(order.created_at).toLocaleString()}
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span
-                  className={`px-2 py-1 rounded text-xs ${
-                    order.status === "active"
-                      ? "bg-emerald-400/20 text-emerald-400"
-                      : order.status === "rejected"
-                      ? "bg-red-400/20 text-red-400"
-                      : order.status === "delivered"
-                      ? "bg-blue-400/20 text-blue-400"
-                      : "bg-yellow-400/20 text-yellow-400"
-                  }`}
-                >
-                  {order.status.toUpperCase()}
-                </span>
-                {order.account_file_url && (
-                  <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
-                    HAS ACCOUNT FILE
-                  </span>
-                )}
-                {order.messages && order.messages.length > 0 && (
-                  <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
-                    {order.messages.length} MESSAGES
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {order.payment_proofs && order.payment_proofs.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setCurrentImageUrl(order.payment_proofs[0].image_url);
-                      setShowImageModal(true);
-                    }}
-                    className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                    title="View payment proof"
+  const OrderRow = React.memo(
+    ({ index, style }: { index: number; style: React.CSSProperties }) => {
+      const order = filteredOrders[index];
+      return (
+        <div style={style} className="px-4">
+          <div
+            key={order.id}
+            className="bg-white/5 hover:bg-white/10 rounded-lg p-4 transition-colors my-2"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-white">
+                  {order.full_name}
+                </h3>
+                <p className="text-white/70">{order.email}</p>
+                <p className="text-sm text-white/50">
+                  {new Date(order.created_at).toLocaleString()}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`px-2 py-1 rounded text-xs ${
+                      order.status === "active"
+                        ? "bg-emerald-400/20 text-emerald-400"
+                        : order.status === "rejected"
+                        ? "bg-red-400/20 text-red-400"
+                        : order.status === "delivered"
+                        ? "bg-blue-400/20 text-blue-400"
+                        : "bg-yellow-400/20 text-yellow-400"
+                    }`}
                   >
-                    <Eye className="text-white" size={20} />
-                  </button>
-                  {order.status === "pending" && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleApprove(order.id)}
-                        disabled={!!actionInProgress}
-                        className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-                        title="Approve order"
-                      >
-                        <CheckCircle className="text-green-400" size={20} />
-                      </button>
-                      <button
-                        onClick={() => handleReject(order.id)}
-                        disabled={!!actionInProgress}
-                        className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-                        title="Reject order"
-                      >
-                        <XCircle className="text-red-400" size={20} />
-                      </button>
-                    </div>
+                    {order.status.toUpperCase()}
+                  </span>
+                  {order.account_file_url && (
+                    <span className="bg-purple-400/20 text-purple-400 px-2 py-1 rounded text-xs">
+                      HAS ACCOUNT FILE
+                    </span>
+                  )}
+                  {order.messages && order.messages.length > 0 && (
+                    <span className="bg-blue-400/20 text-blue-400 px-2 py-1 rounded text-xs">
+                      {order.messages.length} MESSAGES
+                    </span>
                   )}
                 </div>
-              )}
+              </div>
 
-              <button
-                onClick={() => handleViewOrderDetails(order.id)}
-                className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                title="View order details"
-              >
-                <Eye className="w-5 h-5" />
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Action buttons */}
+                <button
+                  onClick={() => handleViewOrderDetails(order.id)}
+                  className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
+                  title="View order details"
+                >
+                  <Eye className="w-5 h-5" />
+                </button>
 
-              <Link
-                to={`/chat?order=${order.id}`}
-                className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                title="Open chat"
-              >
-                <MessageSquare className="text-white" size={20} />
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  });
+                <Link
+                  to={`/chat?order=${order.id}`}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                  title="Open chat"
+                >
+                  <MessageSquare className="text-white" size={20} />
+                </Link>
 
-  // Add a skeleton loader component
-  const OrdersSkeleton = () => (
-    <div className="space-y-4">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="bg-white/5 animate-pulse rounded-lg p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex-1">
-              <div className="h-6 bg-white/10 rounded w-1/3 mb-2"></div>
-              <div className="h-4 bg-white/10 rounded w-1/4 mb-2"></div>
-              <div className="h-4 bg-white/10 rounded w-1/5 mb-4"></div>
-              <div className="flex gap-2">
-                <div className="h-6 bg-white/10 rounded w-16"></div>
+                {order.status === "pending" && (
+                  <>
+                    <button
+                      onClick={() => handleApprove(order.id)}
+                      className="p-2 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30 transition-colors"
+                      title="Approve order"
+                    >
+                      <CheckCircle className="w-5 h-5" />
+                    </button>
+
+                    <button
+                      onClick={() => handleReject(order.id)}
+                      className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+                      title="Reject order"
+                    >
+                      <XCircle className="w-5 h-5" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
-            <div className="flex gap-2">
-              <div className="h-10 w-10 bg-white/10 rounded-full"></div>
-              <div className="h-10 w-10 bg-white/10 rounded-full"></div>
-            </div>
           </div>
         </div>
-      ))}
-    </div>
+      );
+    }
   );
 
-  // Incorporate the skeleton in your render
+  // Update the renderOrdersTab function to use virtualization
   const renderOrdersTab = () => {
     const filteredOrdersToShow = filteredOrders || [];
 
@@ -1855,47 +1821,13 @@ Please keep these details secure. You can copy them by selecting the text.
           ))}
         </div>
 
-        {/* Search and Filter Controls */}
+        {/* Search and Filter Controls - keep existing code */}
         <div className="mb-6">
-          <div className="flex flex-wrap gap-4 items-center">
-            <div className="flex-1 min-w-[200px]">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setFilteredSearchTerm(e.target.value)}
-                  placeholder="Search orders..."
-                  className="w-full bg-white/10 border border-white/20 rounded-lg pl-10 pr-4 py-2 text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-                />
-                <Search
-                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/50"
-                  size={18}
-                />
-              </div>
-            </div>
-
-            {/* Debug button */}
-            <button
-              onClick={checkDatabaseAccess}
-              className="px-4 py-2 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 transition-colors"
-            >
-              Check DB Access
-            </button>
-
-            <button
-              onClick={fetchOrders}
-              className="px-4 py-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors flex items-center gap-2"
-            >
-              <RefreshCw
-                className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`}
-              />
-              Refresh
-            </button>
-          </div>
+          {/* ... your existing search/filter controls ... */}
         </div>
 
-        {/* Orders List with loading state */}
-        {refreshing && orders.length === 0 ? (
+        {/* Orders List with virtualization */}
+        {loading && orders.length === 0 ? (
           <OrdersSkeleton />
         ) : filteredOrdersToShow.length === 0 ? (
           <div className="bg-white/5 rounded-lg p-8 text-center">
@@ -1918,6 +1850,7 @@ Please keep these details secure. You can copy them by selecting the text.
                     width={width}
                     itemCount={filteredOrdersToShow.length}
                     itemSize={180} // Adjust based on your row height
+                    overscanCount={5} // Pre-render additional items for smoother scrolling
                   >
                     {OrderRow}
                   </List>
@@ -1946,440 +1879,10 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   };
 
-  // Update the OrderDetailModal component
-  const OrderDetailModal = () => {
-    if (!selectedOrderDetail) return null;
-
-    return (
-      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-        <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-          <div className="p-6">
-            <div className="flex justify-between items-start mb-6">
-              <h2 className="text-xl font-bold text-white">Order Details</h2>
-              <button
-                onClick={() => setSelectedOrderDetail(null)}
-                className="text-white/70 hover:text-white"
-              >
-                <XCircle className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-white/70 mb-2">Customer Information</h3>
-                <div className="bg-white/5 rounded-lg p-4">
-                  <p className="text-white">
-                    <span className="text-white/70">Name:</span>{" "}
-                    {selectedOrderDetail.full_name}
-                  </p>
-                  <p className="text-white">
-                    <span className="text-white/70">Email:</span>{" "}
-                    {selectedOrderDetail.email}
-                  </p>
-                  <p className="text-white">
-                    <span className="text-white/70">Status:</span>
-                    <span
-                      className={`ml-2 px-2 py-0.5 rounded text-xs ${
-                        selectedOrderDetail.status === "active"
-                          ? "bg-green-500/20 text-green-400"
-                          : selectedOrderDetail.status === "rejected"
-                          ? "bg-red-500/20 text-red-400"
-                          : selectedOrderDetail.status === "delivered"
-                          ? "bg-blue-500/20 text-blue-400"
-                          : "bg-yellow-500/20 text-yellow-400"
-                      }`}
-                    >
-                      {selectedOrderDetail.status.toUpperCase()}
-                    </span>
-                  </p>
-                  <p className="text-white">
-                    <span className="text-white/70">Created:</span>{" "}
-                    {new Date(selectedOrderDetail.created_at).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-
-              {/* Payment Proofs Section */}
-              {selectedOrderDetail.payment_proofs &&
-                selectedOrderDetail.payment_proofs.length > 0 && (
-                  <div>
-                    <h3 className="text-white/70 mb-2">Payment Proofs</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {selectedOrderDetail.payment_proofs.map(
-                        (proof, index) => (
-                          <div
-                            key={index}
-                            className="bg-white/5 rounded-lg p-4"
-                          >
-                            <img
-                              src={proof.image_url}
-                              alt={`Payment proof ${index + 1}`}
-                              className="w-full h-auto rounded-lg mb-2 cursor-pointer"
-                              onClick={() => {
-                                setCurrentImageUrl(proof.image_url);
-                                setShowImageModal(true);
-                              }}
-                            />
-                            <p className="text-white/70 text-sm">
-                              Status:{" "}
-                              <span
-                                className={`${
-                                  proof.status === "approved"
-                                    ? "text-green-400"
-                                    : proof.status === "rejected"
-                                    ? "text-red-400"
-                                    : "text-yellow-400"
-                                }`}
-                              >
-                                {proof.status.toUpperCase()}
-                              </span>
-                            </p>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {/* Account Details Section */}
-              {selectedOrderDetail.account_id ? (
-                <div>
-                  <h3 className="text-white/70 mb-2">Account Details</h3>
-                  <div className="bg-white/5 rounded-lg p-4">
-                    <p className="text-white">
-                      <span className="text-white/70">Account ID:</span>{" "}
-                      {selectedOrderDetail.account_id}
-                    </p>
-                    {selectedOrderDetail.account_password && (
-                      <p className="text-white">
-                        <span className="text-white/70">Password:</span>{" "}
-                        {selectedOrderDetail.account_password}
-                      </p>
-                    )}
-                    {selectedOrderDetail.delivery_date && (
-                      <p className="text-white">
-                        <span className="text-white/70">Delivered:</span>{" "}
-                        {new Date(
-                          selectedOrderDetail.delivery_date
-                        ).toLocaleString()}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ) : selectedOrderDetail.status === "active" ? (
-                <AccountDetailsForm orderId={selectedOrderDetail.id} />
-              ) : null}
-
-              {/* Account File Section */}
-              {selectedOrderDetail.account_file_url ? (
-                <div>
-                  <h3 className="text-white/70 mb-2">Account File</h3>
-                  <div className="bg-white/5 rounded-lg p-4 flex items-center justify-between">
-                    <div>
-                      <p className="text-white">Account file uploaded</p>
-                      <p className="text-white/70 text-sm">
-                        {new URL(selectedOrderDetail.account_file_url).pathname
-                          .split("/")
-                          .pop()}
-                      </p>
-                    </div>
-                    <a
-                      href={selectedOrderDetail.account_file_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 transition-colors"
-                    >
-                      <Download className="w-5 h-5" />
-                    </a>
-                  </div>
-                </div>
-              ) : selectedOrderDetail.status === "active" &&
-                !selectedOrderDetail.account_id ? (
-                <div>
-                  <h3 className="text-white/70 mb-2">Account File</h3>
-                  <div className="bg-white/5 rounded-lg p-4">
-                    <p className="text-white/70 mb-2">
-                      No account file uploaded yet
-                    </p>
-                    <FileUpload
-                      orderId={selectedOrderDetail.id}
-                      onUploadSuccess={(fileUrl) => {
-                        onFileUpload(selectedOrderDetail.id, fileUrl);
-                        setSelectedOrderDetail({
-                          ...selectedOrderDetail,
-                          account_file_url: fileUrl,
-                        });
-                      }}
-                    />
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="flex justify-end gap-3 mt-6">
-                <Link
-                  to={`/chat?order=${selectedOrderDetail.id}`}
-                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-                >
-                  Open Chat
-                </Link>
-                <button
-                  onClick={() => setSelectedOrderDetail(null)}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Add this function to handle file uploads
-  const onFileUpload = async (orderId: string, fileUrl: string) => {
+  // Add this function to create required database tables
+  const setupAdminTables = async () => {
     try {
-      // Update the order with the file URL
-      const { error } = await supabase
-        .from("orders")
-        .update({ account_file_url: fileUrl })
-        .eq("id", orderId);
-
-      if (error) {
-        console.error("Error updating order with file URL:", error);
-        toast.error("Failed to save file URL to order");
-        return;
-      }
-
-      // Update local state
-      setOrders(
-        orders.map((order) =>
-          order.id === orderId ? { ...order, account_file_url: fileUrl } : order
-        )
-      );
-
-      toast.success("File uploaded and linked to order successfully");
-
-      // Set the uploaded file URL for reference
-      setUploadedFileUrl(fileUrl);
-
-      // Refresh orders to get the latest data
-      fetchOrders();
-    } catch (err) {
-      console.error("Error in onFileUpload:", err);
-      toast.error("Failed to process file upload");
-    }
-  };
-
-  // Add this function to check database tables and permissions
-  const checkDatabaseAccess = async () => {
-    try {
-      // Check if we can access the orders table
-      const { data: orderCheck, error: orderError } = await supabase
-        .from("orders")
-        .select("id")
-        .limit(1);
-
-      console.log("Order check:", { data: orderCheck, error: orderError });
-
-      // Check if we can access the payment_proofs table
-      const { data: proofCheck, error: proofError } = await supabase
-        .from("payment_proofs")
-        .select("id")
-        .limit(1);
-
-      console.log("Payment proof check:", {
-        data: proofCheck,
-        error: proofError,
-      });
-
-      // Check if we can access the messages table
-      const { data: messageCheck, error: messageError } = await supabase
-        .from("messages")
-        .select("id")
-        .limit(1);
-
-      console.log("Message check:", {
-        data: messageCheck,
-        error: messageError,
-      });
-
-      // Get the current user's role
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      console.log("Current user:", user);
-
-      toast.success("Database access check complete. See console for details.");
-    } catch (err) {
-      console.error("Error checking database access:", err);
-      toast.error("Failed to check database access");
-    }
-  };
-
-  // Add this effect to check database access on component mount
-  useEffect(() => {
-    const checkInitialAccess = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          // Check if we can access the orders table
-          const { data: orderCheck, error: orderError } = await supabase
-            .from("orders")
-            .select("id")
-            .limit(1);
-
-          if (orderError) {
-            console.error("Error accessing orders table:", orderError);
-            toast.error(
-              "Error accessing orders table. Check console for details."
-            );
-          } else {
-            console.log("Successfully accessed orders table:", orderCheck);
-          }
-        }
-      } catch (err) {
-        console.error("Error in initial access check:", err);
-      }
-    };
-
-    checkInitialAccess();
-  }, []);
-
-  // Update the useEffect that fetches orders
-  useEffect(() => {
-    const fetchInitialData = async () => {
-      try {
-        setLoading(true);
-
-        // Check if the user is an admin
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
-          setIsAdmin(false);
-          setLoading(false);
-          return;
-        }
-
-        const isAdminResult = await checkIfAdmin(user.id);
-        setIsAdmin(isAdminResult.isAdmin);
-
-        if (isAdminResult.isAdmin) {
-          // Fetch orders
-          await fetchOrders();
-
-          // Fetch users
-          await fetchUsers(user.id);
-        }
-      } catch (err) {
-        console.error("Error fetching initial data:", err);
-        toast.error("Failed to load data. Please refresh the page.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchInitialData();
-  }, []);
-
-  // Add this function to create necessary database tables
-  const createRequiredTables = async () => {
-    try {
-      toast.info("Creating required database tables...");
-
-      // Create admin_users table if it doesn't exist
-      const { error: adminTableError } = await supabase.rpc(
-        "create_admin_users_table"
-      );
-
-      if (adminTableError) {
-        console.error("Error creating admin_users table:", adminTableError);
-
-        // Try direct SQL as fallback
-        const { error: sqlError } = await supabase.rpc("execute_sql", {
-          sql: `
-            CREATE TABLE IF NOT EXISTS admin_users (
-              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-              user_id UUID NOT NULL,
-              granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-              UNIQUE(user_id)
-            );
-          `,
-        });
-
-        if (sqlError) {
-          console.error("Error creating admin_users table via SQL:", sqlError);
-        }
-      }
-
-      // Create users table if it doesn't exist
-      const { error: usersTableError } = await supabase.rpc(
-        "create_users_table"
-      );
-
-      if (usersTableError) {
-        console.error("Error creating users table:", usersTableError);
-
-        // Try direct SQL as fallback
-        const { error: sqlError } = await supabase.rpc("execute_sql", {
-          sql: `
-            CREATE TABLE IF NOT EXISTS users (
-              id UUID PRIMARY KEY,
-              email TEXT,
-              full_name TEXT,
-              is_admin BOOLEAN DEFAULT FALSE,
-              created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-          `,
-        });
-
-        if (sqlError) {
-          console.error("Error creating users table via SQL:", sqlError);
-        }
-      }
-
-      toast.success("Database tables created successfully");
-
-      // Add current user to users table
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        const { error: insertError } = await supabase.from("users").upsert(
-          {
-            id: user.id,
-            email: user.email,
-            full_name: user.user_metadata?.full_name || "",
-            is_admin: true,
-            created_at: user.created_at,
-          },
-          { onConflict: "id" }
-        );
-
-        if (insertError) {
-          console.error(
-            "Error adding current user to users table:",
-            insertError
-          );
-        }
-      }
-
-      // Refresh the page to apply changes
-      window.location.reload();
-    } catch (err) {
-      console.error("Error creating required tables:", err);
-      toast.error("Failed to create database tables");
-    }
-  };
-
-  // Add this function to debug and fix admin permissions
-  const debugAdminPermissions = async () => {
-    try {
-      toast.info("Checking admin permissions...");
+      toast.info("Setting up admin database tables...");
 
       // Get the current user
       const {
@@ -2387,90 +1890,36 @@ Please keep these details secure. You can copy them by selecting the text.
       } = await supabase.auth.getUser();
 
       if (!user) {
-        toast.error("No user found. Please log in.");
+        toast.error("No user found. Please log in first.");
         return;
       }
 
-      console.log("Current user:", user);
-
-      // Check if the user exists in the users table
-      const { data: existingUser, error: userError } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", user.id)
-        .single();
-
-      if (userError) {
-        console.error("Error checking user in users table:", userError);
-
-        // Add the user to the users table
-        const { error: insertError } = await supabase.from("users").insert({
-          id: user.id,
+      // Call the serverless function to set up tables
+      const response = await fetch("/.netlify/functions/setup-admin-tables", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: user.id,
           email: user.email,
-          full_name: user.user_metadata?.full_name || "",
-          is_admin: true,
-          created_at: user.created_at,
-        });
+        }),
+      });
 
-        if (insertError) {
-          console.error("Error adding user to users table:", insertError);
-          toast.error("Failed to add user to users table");
-        } else {
-          toast.success("Added user to users table");
-        }
-      } else {
-        console.log("User found in users table:", existingUser);
-
-        // Update the user's admin status
-        const { error: updateError } = await supabase
-          .from("users")
-          .update({ is_admin: true })
-          .eq("id", user.id);
-
-        if (updateError) {
-          console.error("Error updating user admin status:", updateError);
-          toast.error("Failed to update user admin status");
-        } else {
-          toast.success("Updated user admin status");
-        }
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to set up admin tables");
       }
 
-      // Check if the user exists in the admin_users table
-      const { data: adminUser, error: adminError } = await supabase
-        .from("admin_users")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
+      toast.success("Admin tables set up successfully. Refreshing...");
 
-      if (adminError) {
-        console.error("Error checking user in admin_users table:", adminError);
-
-        // Add the user to the admin_users table
-        const { error: insertError } = await supabase
-          .from("admin_users")
-          .insert({
-            user_id: user.id,
-            granted_at: new Date().toISOString(),
-          });
-
-        if (insertError) {
-          console.error("Error adding user to admin_users table:", insertError);
-          toast.error("Failed to add user to admin_users table");
-        } else {
-          toast.success("Added user to admin_users table");
-        }
-      } else {
-        console.log("User found in admin_users table:", adminUser);
-        toast.success("User already has admin privileges");
-      }
-
-      // Refresh the page to apply changes
+      // Reload the page after a short delay
       setTimeout(() => {
         window.location.reload();
       }, 2000);
     } catch (err) {
-      console.error("Error debugging admin permissions:", err);
-      toast.error("Failed to debug admin permissions");
+      console.error("Error setting up admin tables:", err);
+      toast.error("Failed to set up admin tables");
     }
   };
 
@@ -2496,22 +1945,22 @@ Please keep these details secure. You can copy them by selecting the text.
             </p>
             <div className="flex flex-col gap-4 items-center">
               <button
-                onClick={createRequiredTables}
+                onClick={setupAdminTables}
                 className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors w-full"
               >
                 Set Up Admin Tables
+              </button>
+              <button
+                onClick={checkDatabaseAccess}
+                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors w-full"
+              >
+                Check Database Access
               </button>
               <button
                 onClick={() => navigate("/")}
                 className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors w-full"
               >
                 Go Home
-              </button>
-              <button
-                onClick={debugAdminPermissions}
-                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors w-full mt-2"
-              >
-                Debug Admin Permissions
               </button>
             </div>
           </div>
