@@ -383,32 +383,32 @@ function AdminPage() {
     const checkIfUserIsAdmin = async () => {
       try {
         setLoading(true);
-        
+
         // First, get current user
         const {
           data: { user: currentUser },
         } = await supabase.auth.getUser();
-        
+
         if (!currentUser) {
           // Not logged in
           navigate("/login");
           return;
         }
-        
+
         setUser(currentUser);
         console.log("Current user:", currentUser);
-        
+
         // Check admin status directly in this component
         const adminCheckResult = await checkIfAdmin(currentUser.id);
         console.log("Admin check result:", adminCheckResult);
-        
+
         // Handle different response formats
-        if ('isAdmin' in adminCheckResult && adminCheckResult.isAdmin) {
+        if ("isAdmin" in adminCheckResult && adminCheckResult.isAdmin) {
           setIsAdmin(true);
           // Fetch initial data now that we know user is admin
           fetchOrders();
           fetchUsers();
-        } else if ('success' in adminCheckResult && adminCheckResult.success) {
+        } else if ("success" in adminCheckResult && adminCheckResult.success) {
           setIsAdmin(true);
           // Fetch initial data now that we know user is admin
           fetchOrders();
@@ -951,45 +951,47 @@ function AdminPage() {
                         {order.status === "pending" && (
                           <>
                             <button
-                            className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-full"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleApprove(order.id).then((result) => {
-                                if (result?.success) {
-                                  // Update local state
-                                  setOrders((prevOrders) =>
-                                    prevOrders.map((o) =>
-                                      o.id === order.id
-                                        ? { ...o, status: "active" }
-                                        : o
-                                    )
-                                  );
-                                  // Update stats if needed
-                                  setStats((prev) => ({
-                                    ...prev,
-                                    pending: Math.max(0, prev.pending - 1),
-                                    approved: prev.approved + 1,
-                                  }));
-                                }
-                              });
-                            }}
-                          >
-                            <CheckCircle size={20} />
-                          </button>
-                          <button
-                            className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleReject(order.id);
-                            }}
-                          >
-                            <XCircle size={20} />
-                          </button>
+                              className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-full"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleApprove(order.id).then((result) => {
+                                  if (result?.success) {
+                                    // Update local state
+                                    setOrders((prevOrders) =>
+                                      prevOrders.map((o) =>
+                                        o.id === order.id
+                                          ? { ...o, status: "active" }
+                                          : o
+                                      )
+                                    );
+                                    // Update stats if needed
+                                    setStats((prev) => ({
+                                      ...prev,
+                                      pending: Math.max(0, prev.pending - 1),
+                                      approved: prev.approved + 1,
+                                    }));
+                                  }
+                                });
+                              }}
+                            >
+                              <CheckCircle size={20} />
+                            </button>
+                            <button
+                              className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReject(order.id);
+                              }}
+                            >
+                              <XCircle size={20} />
+                            </button>
+                          </>
                         )}
                         <button
                           className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-full"
                           onClick={(e) => {
                             e.stopPropagation();
+                            setSelectedOrderId(order.id);
                             setSelectedOrderDetail(order);
                           }}
                         >
