@@ -404,6 +404,11 @@ function AdminPage() {
     checkAdminStatus,
   } = useAdmin();
 
+  // Add a new state for tracking account delivery progress
+  const [accountDeliveryInProgress, setAccountDeliveryInProgress] = useState<
+    string | null
+  >(null);
+
   // Modified initialization to use context
   useEffect(() => {
     const getCurrentUser = async () => {
@@ -491,28 +496,109 @@ function AdminPage() {
     [selectedOrderDetail, setSelectedOrderDetail, setOrders]
   );
 
-  // Account delivery handler
-  const deliverAccountDetails = useCallback(
-    (orderId: string, accountId: string, password: string) => {
-      // Update the orders list with the new account details
-      setOrders((prevOrders) =>
-        prevOrders.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                account_id: accountId,
-                account_password: password,
-                status: "delivered",
-                delivery_date: new Date().toISOString(),
-              }
-            : order
-        )
+  // Add this function to handle account details delivery
+  const handleDeliverAccount = async (orderId: string) => {
+    try {
+      setAccountDeliveryInProgress(orderId);
+
+      // First check if we can get the order
+      const { data: order, error: orderError } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+
+      if (orderError) {
+        console.error("Error fetching order:", orderError);
+        toast.error("Could not find order");
+        return;
+      }
+
+      // Generate random account credentials
+      const accountId = `ACC${Math.floor(Math.random() * 10000)
+        .toString()
+        .padStart(4, "0")}`;
+      const password = Math.random().toString(36).substring(2, 10);
+
+      // Determine the right way to update the order
+      // Try to detect the schema we're working with
+      const hasAccountIdColumn = "account_id" in order;
+
+      let updateData = {};
+
+      if (hasAccountIdColumn) {
+        // Use the standard schema
+        updateData = {
+          account_id: accountId,
+          account_password: password,
+          account_delivered: true,
+          account_delivered_at: new Date().toISOString(),
+        };
+      } else {
+        // Use a metadata field approach instead
+        updateData = {
+          status: "active", // Mark as active
+          metadata: JSON.stringify({
+            ...JSON.parse(order.metadata || "{}"),
+            account: {
+              id: accountId,
+              password: password,
+              delivered: true,
+              delivered_at: new Date().toISOString(),
+            },
+          }),
+        };
+      }
+
+      // Update the order with the account details
+      const { error: updateError } = await supabase
+        .from("orders")
+        .update(updateData)
+        .eq("id", orderId);
+
+      if (updateError) {
+        console.error("Error delivering account:", updateError);
+        toast.error(`Failed to deliver account: ${updateError.message}`);
+        return;
+      }
+
+      // Show success message with account details
+      toast.success(
+        <div>
+          <p>Account details delivered!</p>
+          <p>
+            Account ID: <strong>{accountId}</strong>
+          </p>
+          <p>
+            Password: <strong>{password}</strong>
+          </p>
+        </div>
       );
 
-      toast.success("Account delivered successfully");
-    },
-    []
-  );
+      // Also try to send via email if we have customer email
+      if (order.email) {
+        try {
+          await fetch("/.netlify/functions/send-account-details", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: order.email,
+              accountId,
+              password,
+              orderId,
+            }),
+          });
+        } catch (emailError) {
+          console.log("Email delivery error (non-critical):", emailError);
+        }
+      }
+    } catch (err) {
+      console.error("Error in account delivery:", err);
+      toast.error("Failed to deliver account details");
+    } finally {
+      setAccountDeliveryInProgress(null);
+    }
+  };
 
   // Database utility functions
   const setupAdminTables = async () => {
@@ -983,12 +1069,20 @@ function AdminPage() {
                           <>
                             <OrderActionButtons
                               order={order}
-                              handleApprove={onApprove}
-                              handleReject={onReject}
-                              setSelectedOrderId={setSelectedOrderId}
-                              setSelectedOrderDetail={setSelectedOrderDetail}
-                              setOrders={setOrders}
-                              setStats={setStats}
+                              onApprove={onApprove}
+                              onReject={onReject}
+                              onDeliverAccount={handleDeliverAccount}
+                              isApproving={
+                                actionInProgress === order.id &&
+                                actionType === "approve"
+                              }
+                              isRejecting={
+                                actionInProgress === order.id &&
+                                actionType === "reject"
+                              }
+                              isDeliveringAccount={
+                                accountDeliveryInProgress === order.id
+                              }
                             />
                           </>
                         )}
@@ -1263,7 +1357,7 @@ function AdminPage() {
         onFileUpload={onFileUpload}
         setCurrentImageUrl={setCurrentImageUrl}
         setShowImageModal={setShowImageModal}
-        onAccountDelivered={deliverAccountDetails}
+        onAccountDelivered={handleDeliverAccount}
       />
     </PageContainer>
   );

@@ -1,6 +1,7 @@
 import React from "react";
-import { CheckCircle, XCircle, Eye } from "lucide-react";
+import { CheckCircle, XCircle, Eye, Key } from "lucide-react";
 import type { Order } from "../../hooks/useOrderFilters";
+import { LoadingSpinner } from "../../components/LoadingSpinner";
 
 interface OrderActionButtonsProps {
   order: Order;
@@ -18,6 +19,10 @@ interface OrderActionButtonsProps {
       delivered: number;
     }>
   >;
+  onDeliverAccount?: (orderId: string) => Promise<void>;
+  isApproving: boolean;
+  isRejecting: boolean;
+  isDeliveringAccount?: boolean;
 }
 
 function OrderActionButtons({
@@ -28,6 +33,10 @@ function OrderActionButtons({
   setSelectedOrderDetail,
   setOrders,
   setStats,
+  onDeliverAccount,
+  isApproving,
+  isRejecting,
+  isDeliveringAccount,
 }: OrderActionButtonsProps) {
   return (
     <div className="flex gap-2">
@@ -78,6 +87,24 @@ function OrderActionButtons({
       >
         <Eye size={20} />
       </button>
+      {onDeliverAccount && (
+        <button
+          onClick={() => onDeliverAccount(order.id)}
+          className={`px-3 py-1 text-xs rounded-full flex items-center gap-1 ${
+            order.status === "active"
+              ? "bg-blue-500 hover:bg-blue-600"
+              : "bg-gray-500"
+          } text-white`}
+          disabled={isDeliveringAccount || order.status !== "active"}
+        >
+          {isDeliveringAccount ? (
+            <LoadingSpinner size="xs" light />
+          ) : (
+            <Key size={14} />
+          )}
+          Deliver Account
+        </button>
+      )}
     </div>
   );
 }
