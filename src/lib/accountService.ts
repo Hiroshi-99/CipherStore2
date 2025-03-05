@@ -21,16 +21,12 @@ export const deliverAccountDetails = async (orderId: string) => {
 
   // Always show the credentials first so they're not lost
   toast.success(
-    <div>
-      <p>
-        <strong>Account Details</strong>
-      </p>
-      <p>ID: {accountId}</p>
-      <p>Password: {password}</p>
-      <p>
-        <small>(Save these somewhere safe)</small>
-      </p>
-    </div>,
+    `Account Details Created:
+     
+     ID: ${accountId}
+     Password: ${password}
+     
+     (Save these somewhere safe)`,
     { duration: 10000 } // Keep visible longer
   );
 
