@@ -1803,6 +1803,47 @@ Please keep these details secure. You can copy them by selecting the text.
     );
   };
 
+  // Add the missing checkDatabaseAccess function
+  const checkDatabaseAccess = async () => {
+    try {
+      toast.info("Checking database access...");
+
+      // Attempt to read from the database
+      const { data, error } = await supabase
+        .from("users")
+        .select("id")
+        .limit(1);
+
+      if (error) {
+        console.error("Database access check failed:", error);
+        toast.error(`Database access check failed: ${error.message}`);
+        return;
+      }
+
+      // Try to check admin status
+      const { isAdmin, error: adminError } = await checkIfAdmin(user?.id || "");
+
+      if (adminError) {
+        toast.error(`Admin check failed: ${adminError}`);
+        return;
+      }
+
+      if (isAdmin) {
+        toast.success("You have admin access! Refreshing...");
+
+        // Reload the page after a short delay
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      } else {
+        toast.error("You don't have admin access");
+      }
+    } catch (err) {
+      console.error("Error checking database access:", err);
+      toast.error("Failed to check database access");
+    }
+  };
+
   if (loading) {
     return (
       <PageContainer title="ADMIN">
