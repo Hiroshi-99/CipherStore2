@@ -1,12 +1,18 @@
 import React, { createContext, useState, useContext, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import { toast } from "sonner";
-import type { Order } from "../hooks/useOrderFilters";
+
+// Define interfaces inline to avoid circular imports
+interface OrderType {
+  id: string;
+  status: string;
+  // Add other required fields here
+}
 
 interface AdminContextType {
   actionInProgress: string | null;
-  handleApprove: (orderId: string) => Promise<void>;
-  handleReject: (orderId: string) => Promise<void>;
+  handleApprove: (orderId: string) => Promise<any>;
+  handleReject: (orderId: string) => Promise<any>;
   // Add other admin actions here
 }
 
@@ -19,7 +25,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const handleApprove = useCallback(async (orderId: string) => {
     if (!confirm("Are you sure you want to approve this order?")) {
-      return;
+      return { success: false };
     }
 
     try {
@@ -48,7 +54,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const handleReject = useCallback(async (orderId: string) => {
     if (!confirm("Are you sure you want to reject this order?")) {
-      return;
+      return { success: false };
     }
 
     try {

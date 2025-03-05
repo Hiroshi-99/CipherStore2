@@ -56,6 +56,7 @@ import { FixedSizeList as List } from "react-window";
 import AutoSizer from "react-virtualized-auto-sizer";
 import { useAdminOrders } from "../hooks/useAdminOrders";
 import OrdersSkeleton from "../components/OrdersSkeleton";
+import { useAdmin } from "../context/AdminContext";
 
 interface Admin {
   id: string;
@@ -382,7 +383,9 @@ function AdminPage() {
   );
   const [showImageModal, setShowImageModal] = useState(false);
   const [currentImageUrl, setCurrentImageUrl] = useState("");
-  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+
+  // Inside your AdminPage component, add this near the top:
+  const { handleApprove, handleReject } = useAdmin();
 
   // Initialize the page
   useEffect(() => {
@@ -634,95 +637,6 @@ function AdminPage() {
       toast.error("Failed to check database access");
     }
   };
-
-  // Handle approve and reject
-  const handleApprove = useCallback(
-    async (orderId: string) => {
-      if (!confirm("Are you sure you want to approve this order?")) {
-        return;
-      }
-
-      try {
-        setActionInProgress(orderId);
-
-        // Update the order status to active
-        const { error } = await supabase
-          .from("orders")
-          .update({ status: "active" })
-          .eq("id", orderId);
-
-        if (error) {
-          throw error;
-        }
-
-        // Update local state
-        setOrders((prevOrders) =>
-          prevOrders.map((order) =>
-            order.id === orderId ? { ...order, status: "active" } : order
-          )
-        );
-
-        // Update stats
-        setStats((prev) => ({
-          ...prev,
-          pending: Math.max(0, prev.pending - 1),
-          approved: prev.approved + 1,
-        }));
-
-        toast.success("Order approved successfully");
-      } catch (err) {
-        console.error("Error approving order:", err);
-        toast.error("Failed to approve order");
-      } finally {
-        setActionInProgress(null);
-      }
-    },
-    [setOrders, setStats, supabase]
-  );
-
-  const handleReject = useCallback(
-    async (orderId: string) => {
-      if (!confirm("Are you sure you want to reject this order?")) {
-        return;
-      }
-
-      try {
-        setActionInProgress(orderId);
-
-        // Update the order status to rejected
-        const { error } = await supabase
-          .from("orders")
-          .update({ status: "rejected" })
-          .eq("id", orderId);
-
-        if (error) {
-          throw error;
-        }
-
-        // Update local state
-        setOrders((prevOrders) =>
-          prevOrders.map((order) =>
-            order.id === orderId ? { ...order, status: "rejected" } : order
-          )
-        );
-
-        // Update stats
-        setStats((prev) => ({
-          ...prev,
-          pending: Math.max(0, prev.pending - 1),
-          rejected: prev.rejected + 1,
-        }));
-
-        toast.success("Order rejected successfully");
-      } catch (err) {
-        console.error("Error rejecting order:", err);
-        toast.error("Failed to reject order");
-      } finally {
-        setActionInProgress(null);
-      }
-    },
-    [setOrders, setStats, supabase]
-  );
 
   // Custom hook for order filtering
   const {
@@ -994,7 +908,24 @@ function AdminPage() {
                               className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-full"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleApprove(order.id);
+                                handleApprove(order.id).then((result) => {
+                                  if (result?.success) {
+                                    // Update local state
+                                    setOrders((prevOrders) =>
+                                      prevOrders.map((o) =>
+                                        o.id === order.id
+                                          ? { ...o, status: "active" }
+                                          : o
+                                      )
+                                    );
+                                    // Update stats if needed
+                                    setStats((prev) => ({
+                                      ...prev,
+                                      pending: Math.max(0, prev.pending - 1),
+                                      approved: prev.approved + 1,
+                                    }));
+                                  }
+                                });
                               }}
                               disabled={actionInProgress === order.id}
                             >
