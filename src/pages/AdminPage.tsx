@@ -228,112 +228,121 @@ function AdminPage() {
     const [newAdminEmail, setNewAdminEmail] = useState("");
     const [fetchError, setFetchError] = useState<string | null>(null);
 
-    // Fetch users function
+    const filteredUsers = useMemo(() => {
+      if (!userSearchTerm.trim()) return users;
+
+      const searchLower = userSearchTerm.toLowerCase();
+      return users.filter(
+        (user) =>
+          user.email.toLowerCase().includes(searchLower) ||
+          (user.fullName && user.fullName.toLowerCase().includes(searchLower))
+      );
+    }, [users, userSearchTerm]);
+
     const fetchUsers = useCallback(async () => {
       try {
-        setFetchError(null);
+        // Try direct fetch from Supabase first
+        const { data, error } = await supabase
+          .from("users")
+          .select("id, email, full_name, created_at, is_admin");
 
-        // Try a direct admin listing from adminService instead of the serverless function
-        try {
-          const { users, error } = await getAllUsersClientSide();
-
-          if (!error && users.length > 0) {
-            // Process users if successful
-            setUsers(users);
-            return;
-          }
-        } catch (directError) {
-          console.log("Direct client-side fetch failed:", directError);
+        if (!error && data && data.length > 0) {
+          const formattedUsers = data.map((user) => ({
+            id: user.id,
+            email: user.email || "",
+            fullName: user.full_name || "",
+            isAdmin: user.is_admin || false,
+            lastSignIn: null,
+            createdAt: user.created_at,
+          }));
+          setUsers(formattedUsers);
+          return;
         }
 
-        // Create a mock user list for development purposes
-        const mockUsers = [
-          {
-            id: user?.id || "current-user",
-            email: user?.email || "current@example.com",
-            fullName: user?.user_metadata?.full_name || "Current Admin",
-            isAdmin: true,
-            lastSignIn: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-          },
-        ];
+        // Try a direct admin listing from adminService instead
+        try {
+          const result = await getAllUsersClientSide();
 
-        // Set mock users as fallback
-        setUsers(mockUsers);
-        setFetchError("Using limited user data. Server functions unavailable.");
+          if (result.success && result.data) {
+            setUsers(result.data);
+          } else {
+            throw new Error(result.error || "Failed to get users");
+          }
+        } catch (clientSideError) {
+          console.error("Client-side admin fetch failed:", clientSideError);
+
+          // Try the serverless function as last resort
+          const response = await fetch(
+            "/.netlify/functions/admin-list-users-simple"
+          );
+          if (!response.ok)
+            throw new Error("Failed to fetch users from serverless function");
+
+          const data = await response.json();
+          if (data.users) {
+            setUsers(data.users);
+          } else {
+            throw new Error("No users returned from serverless function");
+          }
+        }
       } catch (err) {
         console.error("Error fetching users:", err);
-        toast.error("Failed to fetch users");
-        setFetchError("Failed to load users: " + (err.message || String(err)));
-
-        // Set empty users array as fallback
+        setFetchError("Failed to load users: " + String(err));
         setUsers([]);
       }
-    }, [user]);
+    }, []);
 
-    // Add admin function
-    const addAdminByEmail = useCallback(async () => {
+    const addAdminByEmail = async () => {
       if (!newAdminEmail) {
         toast.error("Please enter an email address");
         return;
       }
 
       try {
-        // First try to find the user by email
-        const { data: foundUsers, error: findError } = await supabase
-          .from("users")
-          .select("id, email")
-          .ilike("email", newAdminEmail)
-          .limit(1);
+        // Find user by email
+        const userToPromote = users.find(
+          (u) => u.email.toLowerCase() === newAdminEmail.toLowerCase()
+        );
 
-        if (findError) {
-          throw findError;
-        }
-
-        if (!foundUsers || foundUsers.length === 0) {
-          toast.error(`User with email ${newAdminEmail} not found`);
+        if (!userToPromote) {
+          toast.error("User not found with that email");
           return;
         }
 
-        const userId = foundUsers[0].id;
+        // Get current user as the admin
+        const {
+          data: { user: currentUser },
+        } = await supabase.auth.getUser();
+        if (!currentUser) {
+          toast.error("You must be logged in to perform this action");
+          return;
+        }
 
         // Grant admin privileges to this user
-        const { success, error } = await grantAdminPrivileges(userId);
+        const { success, error } = await grantAdminPrivileges(
+          currentUser.id,
+          userToPromote.id
+        );
 
         if (!success || error) {
           throw new Error(error || "Failed to grant admin privileges");
         }
 
-        // Add this user to our local list of admins
-        setUsers((prev) =>
-          prev.map((user) =>
-            user.id === userId ? { ...user, isAdmin: true } : user
+        toast.success(`Admin privileges granted to ${newAdminEmail}`);
+
+        // Update local state
+        setUsers((prevUsers) =>
+          prevUsers.map((u) =>
+            u.id === userToPromote.id ? { ...u, isAdmin: true } : u
           )
         );
 
-        toast.success(`Admin privileges granted to ${newAdminEmail}`);
         setNewAdminEmail("");
       } catch (err) {
-        console.error("Error adding admin:", err);
-        toast.error("Failed to add admin user");
+        console.error("Error granting admin privileges:", err);
+        toast.error("Failed to grant admin privileges: " + String(err));
       }
-    }, [newAdminEmail]);
-
-    // Filtered users
-    const filteredUsers = useMemo(() => {
-      if (!users.length) return [];
-
-      if (!userSearchTerm.trim()) return users;
-
-      const searchLower = userSearchTerm.toLowerCase();
-
-      return users.filter(
-        (user) =>
-          user.email?.toLowerCase().includes(searchLower) ||
-          user.fullName?.toLowerCase().includes(searchLower) ||
-          user.id?.toLowerCase().includes(searchLower)
-      );
-    }, [users, userSearchTerm]);
+    };
 
     return {
       users,
@@ -693,7 +702,6 @@ function AdminPage() {
     const result = await handleApprove(orderId);
     if (result?.success) {
       updateLocalOrderStatus(orderId, "active");
-      toast.success("Order approved successfully");
     }
     return result;
   };
@@ -703,7 +711,6 @@ function AdminPage() {
     const result = await handleReject(orderId);
     if (result?.success) {
       updateLocalOrderStatus(orderId, "rejected");
-      toast.success("Order rejected successfully");
     }
     return result;
   };

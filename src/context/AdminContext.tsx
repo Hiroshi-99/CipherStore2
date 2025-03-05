@@ -77,6 +77,27 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
           timestamp: Date.now(),
         })
       );
+
+      // Add a development mode check first
+      if (process.env.NODE_ENV === "development") {
+        const devOverride =
+          localStorage.getItem("dev_admin_override") === "true";
+        if (devOverride) {
+          console.log("Using development admin override");
+          setIsAdmin(true);
+          setIsAdminLoading(false);
+
+          // Save to cache
+          localStorage.setItem(
+            "admin_status",
+            JSON.stringify({
+              isAdmin: true,
+              timestamp: Date.now(),
+            })
+          );
+          return;
+        }
+      }
     } catch (err) {
       console.error("Error checking admin status:", err);
       setIsAdmin(false);

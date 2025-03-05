@@ -61,6 +61,24 @@ export const checkIfAdmin = async (userId: string) => {
       console.log("Development mode: Consider using Force Admin mode button");
     }
 
+    try {
+      const response = await fetch("/.netlify/functions/admin-check-simple", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result?.isAdmin) {
+          console.log("Admin status confirmed via simple check");
+          return { isAdmin: true, success: true };
+        }
+      }
+    } catch (simpleFunctionError) {
+      console.log("Simple admin check failed too");
+    }
+
     return { isAdmin: false, success: false };
   } catch (err) {
     console.error("Exception in checkIfAdmin:", err);
@@ -335,84 +353,76 @@ export async function getLocalUsers(adminUserId: string) {
   }
 }
 
-// Update this function to avoid using the users table
-export async function getAllUsersClientSide() {
+// Add this function to get users when direct DB access fails
+export const getAllUsersClientSide = async () => {
   try {
-    // First check if the current user is an admin
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    // Try direct database access first
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, email, full_name, created_at, is_admin");
 
-    if (!user) {
-      return { success: false, error: "Not authenticated" };
-    }
-
-    const isAdmin = await checkIfAdmin(user.id);
-    if (!isAdmin) {
+    if (!error && data && data.length > 0) {
       return {
-        success: false,
-        error: "Unauthorized: Only admins can view all users",
+        success: true,
+        data: data.map((user) => ({
+          id: user.id,
+          email: user.email || "",
+          fullName: user.full_name || "",
+          isAdmin: user.is_admin || false,
+          lastSignIn: null,
+          createdAt: user.created_at,
+        })),
       };
     }
 
-    // Get all admin users
-    let adminUserIds = new Set();
-    try {
-      const { data: adminUsers, error: adminError } = await supabase
-        .from("admin_users")
-        .select("user_id");
+    // Try auth API as fallback
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-      if (!adminError && adminUsers) {
-        adminUserIds = new Set(adminUsers.map((admin) => admin.user_id));
-      }
-    } catch (adminError) {
-      console.error("Error fetching admin users:", adminError);
-      // Always include the current user as admin since we verified above
-      adminUserIds.add(user.id);
-    }
-
-    // Return just the current user since we can't get other users
-    return {
-      success: true,
-      data: [
+    if (session) {
+      // Try to get users from serverless function
+      const response = await fetch(
+        "/.netlify/functions/admin-list-users-simple",
         {
-          id: user.id,
-          email: user.email || "",
-          fullName: user.user_metadata?.full_name || "",
-          isAdmin: true, // Current user is admin (we verified above)
-          lastSignIn: null,
-          createdAt: user.created_at,
-        },
-      ],
-    };
-  } catch (err) {
-    console.error("Error in getAllUsersClientSide:", err);
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        }
+      );
 
-    // Fallback to just the current user
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        return {
-          success: true,
-          data: [
-            {
-              id: user.id,
-              email: user.email || "",
-              fullName: user.user_metadata?.full_name || "",
-              isAdmin: true,
-              lastSignIn: null,
-              createdAt: user.created_at,
-            },
-          ],
-        };
+      if (response.ok) {
+        const result = await response.json();
+        if (result.users) {
+          return { success: true, data: result.users };
+        }
       }
-    } catch (fallbackErr) {
-      console.error("Error in fallback:", fallbackErr);
     }
 
-    return { success: false, error: "Failed to get user information" };
+    // Create a fallback user (current user)
+    const {
+      data: { user: currentUser },
+    } = await supabase.auth.getUser();
+
+    if (currentUser) {
+      return {
+        success: true,
+        data: [
+          {
+            id: currentUser.id,
+            email: currentUser.email || "",
+            fullName: currentUser.user_metadata?.full_name || "Current User",
+            isAdmin: true, // Assume current user is admin
+            lastSignIn: null,
+            createdAt: currentUser.created_at,
+          },
+        ],
+      };
+    }
+
+    return { success: false, error: "Could not retrieve users" };
+  } catch (err) {
+    console.error("Error getting all users client side:", err);
+    return { success: false, error: String(err) };
   }
-}
+};

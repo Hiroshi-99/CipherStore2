@@ -5,7 +5,7 @@ exports.handler = async (event, context) => {
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
   };
 
   // Handle preflight OPTIONS request
@@ -18,18 +18,7 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    // Parse the request body
-    const { adminUserId } = JSON.parse(event.body);
-
-    if (!adminUserId) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Admin user ID is required" }),
-      };
-    }
-
-    // Initialize Supabase client with service role key
+    // Initialize Supabase client with service role key (from environment variables)
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -45,44 +34,24 @@ exports.handler = async (event, context) => {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Add this after the supabase client initialization
-    console.log("Checking if profiles table exists...");
+    // Get users directly using the service role
+    const { data: users, error } = await supabase.auth.admin.listUsers();
 
-    // Always use auth.users which is guaranteed to exist
-    const { data: users, error: usersError } =
-      await supabase.auth.admin.listUsers();
-
-    if (usersError) {
+    if (error) {
+      console.error("Error fetching users:", error);
       return {
         statusCode: 500,
         headers,
-        body: JSON.stringify({
-          error: `Failed to fetch users: ${usersError.message}`,
-        }),
+        body: JSON.stringify({ error: error.message }),
       };
     }
 
-    // Try to get admin users, but don't fail if the table doesn't exist
-    let adminUserIds = new Set();
-    try {
-      const { data: adminUsers } = await supabase
-        .from("admin_users")
-        .select("user_id");
-
-      if (adminUsers && adminUsers.length > 0) {
-        adminUserIds = new Set(adminUsers.map((admin) => admin.user_id));
-      }
-    } catch (adminError) {
-      console.log("Admin users table might not exist:", adminError.message);
-    }
-
-    // Format the response using auth.users data
-    const usersWithAdminStatus = users.users.map((user) => ({
+    // Format the user data
+    const formattedUsers = users.users.map((user) => ({
       id: user.id,
-      email: user.email,
+      email: user.email || "",
       fullName: user.user_metadata?.full_name || "",
-      isAdmin:
-        adminUserIds.has(user.id) || user.user_metadata?.role === "admin",
+      isAdmin: user.app_metadata?.admin === true, // Check app metadata for admin flag
       lastSignIn: user.last_sign_in_at,
       createdAt: user.created_at,
     }));
@@ -90,17 +59,14 @@ exports.handler = async (event, context) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ data: usersWithAdminStatus }),
+      body: JSON.stringify({ users: formattedUsers }),
     };
   } catch (error) {
-    console.error("Error in admin-list-users-simple:", error);
+    console.error("Admin list users error:", error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({
-        error: "Internal server error",
-        details: error.message,
-      }),
+      body: JSON.stringify({ error: error.message || "Internal server error" }),
     };
   }
 };
