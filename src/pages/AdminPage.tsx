@@ -2255,12 +2255,20 @@ Please keep these details secure. You can copy them by selecting the text.
       // Try to create admin_users table
       const createAdminUsersSQL = `
         CREATE TABLE IF NOT EXISTS admin_users (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
           user_id UUID NOT NULL,
           granted_by UUID,
-          granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-          UNIQUE(user_id)
+          granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+        -- Add unique constraint in a separate statement to avoid errors if it already exists
+        DO $$
+        BEGIN
+          BEGIN
+            ALTER TABLE admin_users ADD CONSTRAINT admin_users_user_id_key UNIQUE (user_id);
+          EXCEPTION WHEN duplicate_table THEN
+            NULL;
+          END;
+        END $$;
       `;
 
       // Try to create users table
@@ -2381,7 +2389,7 @@ Please keep these details secure. You can copy them by selecting the text.
   // Add this function to debug and fix admin permissions
   const debugAdminPermissions = async () => {
     try {
-      toast.info("Checking admin permissions...");
+      toast.info("Debugging admin permissions...");
 
       // Get the current user
       const {
@@ -2389,90 +2397,179 @@ Please keep these details secure. You can copy them by selecting the text.
       } = await supabase.auth.getUser();
 
       if (!user) {
-        toast.error("No user found. Please log in.");
+        toast.error("No user found. Please log in first.");
         return;
       }
 
       console.log("Current user:", user);
 
-      // Check if the user exists in the users table
-      const { data: existingUser, error: userError } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", user.id)
-        .single();
+      // Step 1: Check if tables exist
+      toast.info("Checking database tables...");
 
-      if (userError) {
-        console.error("Error checking user in users table:", userError);
+      // First check if admin_users table exists
+      try {
+        const { error: adminTableError } = await supabase
+          .from("admin_users")
+          .select("count(*)", { count: "exact", head: true });
 
-        // Add the user to the users table
-        const { error: insertError } = await supabase.from("users").insert({
-          id: user.id,
-          email: user.email,
-          full_name: user.user_metadata?.full_name || "",
-          is_admin: true,
-          created_at: user.created_at,
-        });
+        if (adminTableError) {
+          console.error("admin_users table check error:", adminTableError);
+          toast.error("admin_users table doesn't exist or isn't accessible");
 
-        if (insertError) {
-          console.error("Error adding user to users table:", insertError);
-          toast.error("Failed to add user to users table");
+          // Try to create the table
+          await createRequiredTables();
+          return;
         } else {
-          toast.success("Added user to users table");
+          toast.success("admin_users table exists");
         }
-      } else {
-        console.log("User found in users table:", existingUser);
-
-        // Update the user's admin status
-        const { error: updateError } = await supabase
-          .from("users")
-          .update({ is_admin: true })
-          .eq("id", user.id);
-
-        if (updateError) {
-          console.error("Error updating user admin status:", updateError);
-          toast.error("Failed to update user admin status");
-        } else {
-          toast.success("Updated user admin status");
-        }
+      } catch (err) {
+        console.error("Error checking admin_users table:", err);
+        toast.error("Failed to check admin_users table");
       }
 
-      // Check if the user exists in the admin_users table
-      const { data: adminUser, error: adminError } = await supabase
-        .from("admin_users")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
+      // Check if users table exists
+      try {
+        const { error: usersTableError } = await supabase
+          .from("users")
+          .select("count(*)", { count: "exact", head: true });
 
-      if (adminError) {
-        console.error("Error checking user in admin_users table:", adminError);
+        if (usersTableError) {
+          console.error("users table check error:", usersTableError);
+          toast.error("users table doesn't exist or isn't accessible");
 
-        // Add the user to the admin_users table
-        const { error: insertError } = await supabase
+          // Try to create the table
+          await createRequiredTables();
+          return;
+        } else {
+          toast.success("users table exists");
+        }
+      } catch (err) {
+        console.error("Error checking users table:", err);
+        toast.error("Failed to check users table");
+      }
+
+      // Step 2: Check if user is in admin_users table
+      try {
+        const { data: adminUser, error: adminCheckError } = await supabase
           .from("admin_users")
-          .insert({
-            user_id: user.id,
-            granted_at: new Date().toISOString(),
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (adminCheckError) {
+          console.error("Error checking admin status:", adminCheckError);
+          toast.error("Failed to check admin status");
+        } else if (adminUser) {
+          toast.success("You're already in the admin_users table");
+        } else {
+          toast.warning("You're not in the admin_users table");
+
+          // Add user to admin_users
+          const { error: insertError } = await supabase
+            .from("admin_users")
+            .insert({
+              user_id: user.id,
+              granted_at: new Date().toISOString(),
+            });
+
+          if (insertError) {
+            console.error("Error adding to admin_users:", insertError);
+            toast.error("Failed to add you to admin_users table");
+          } else {
+            toast.success("Added you to admin_users table");
+          }
+        }
+      } catch (err) {
+        console.error("Error in admin check:", err);
+        toast.error("Failed to check/update admin status");
+      }
+
+      // Step 3: Check if user is in users table
+      try {
+        const { data: userRecord, error: userCheckError } = await supabase
+          .from("users")
+          .select("*")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (userCheckError) {
+          console.error("Error checking user record:", userCheckError);
+          toast.error("Failed to check user record");
+        } else if (userRecord) {
+          toast.success("You're already in the users table");
+
+          // Ensure is_admin flag is set
+          if (!userRecord.is_admin) {
+            const { error: updateError } = await supabase
+              .from("users")
+              .update({ is_admin: true })
+              .eq("id", user.id);
+
+            if (updateError) {
+              console.error("Error updating is_admin flag:", updateError);
+              toast.error("Failed to update admin status in users table");
+            } else {
+              toast.success("Updated your admin status in users table");
+            }
+          }
+        } else {
+          toast.warning("You're not in the users table");
+
+          // Add user to users table
+          const { error: insertError } = await supabase.from("users").insert({
+            id: user.id,
+            email: user.email,
+            full_name: user.user_metadata?.full_name || "",
+            is_admin: true,
+            created_at: user.created_at,
           });
 
-        if (insertError) {
-          console.error("Error adding user to admin_users table:", insertError);
-          toast.error("Failed to add user to admin_users table");
-        } else {
-          toast.success("Added user to admin_users table");
+          if (insertError) {
+            console.error("Error adding to users table:", insertError);
+            toast.error("Failed to add you to users table");
+          } else {
+            toast.success("Added you to users table");
+          }
         }
-      } else {
-        console.log("User found in admin_users table:", adminUser);
-        toast.success("User already has admin privileges");
+      } catch (err) {
+        console.error("Error in user check:", err);
+        toast.error("Failed to check/update user record");
       }
 
-      // Refresh the page to apply changes
+      // Refresh the page after a delay
+      toast.info("Debug complete. Reloading page in 3 seconds...");
       setTimeout(() => {
         window.location.reload();
-      }, 2000);
+      }, 3000);
     } catch (err) {
-      console.error("Error debugging admin permissions:", err);
+      console.error("Error in debugAdminPermissions:", err);
       toast.error("Failed to debug admin permissions");
+    }
+  };
+
+  // Add this function to check SQL capabilities of your environment
+  const checkSQLCapabilities = async () => {
+    try {
+      toast.info("Checking SQL capabilities...");
+
+      // Try a simple query to check if SQL functions work
+      const { data, error } = await supabase.rpc("check_sql_capabilities", {
+        sql_statement: "SELECT 1 as test",
+      });
+
+      if (error) {
+        console.error("SQL capabilities error:", error);
+        toast.error("Your environment doesn't support custom SQL via RPC");
+        return false;
+      }
+
+      toast.success("Your environment supports custom SQL via RPC");
+      console.log("SQL capabilities result:", data);
+      return true;
+    } catch (err) {
+      console.error("Error checking SQL capabilities:", err);
+      toast.error("Could not determine SQL capabilities");
+      return false;
     }
   };
 
