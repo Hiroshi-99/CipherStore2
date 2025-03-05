@@ -184,13 +184,58 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       setActionInProgress(orderId);
 
-      // Update the order status to active
+      // First try to get the order to check which schema is in use
+      const { data: order, error: fetchError } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+
+      if (fetchError) {
+        console.error("Error fetching order:", fetchError);
+        toast.error("Could not find order to approve");
+        return { success: false };
+      }
+
+      // Determine which columns exist in the schema
+      let updateData = { status: "active" };
+
+      // If the order has a status_updated_at field, update it too
+      if ("status_updated_at" in order) {
+        updateData = {
+          ...updateData,
+          status_updated_at: new Date().toISOString(),
+        };
+      }
+
+      // Update the order status
       const { error } = await supabase
         .from("orders")
-        .update({ status: "active" })
+        .update(updateData)
         .eq("id", orderId);
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error updating order status:", error);
+
+        // Try fallback approaches if the main one fails
+
+        // Try approach with an RPC call if available
+        try {
+          const { error: rpcError } = await supabase.rpc("approve_order", {
+            order_id: orderId,
+          });
+
+          if (!rpcError) {
+            toast.success("Order approved via fallback method");
+            return { success: true };
+          }
+        } catch (rpcErr) {
+          console.log("RPC fallback failed:", rpcErr);
+        }
+
+        toast.error(`Failed to approve order: ${error.message}`);
+        return { success: false, error };
+      }
 
       toast.success("Order approved successfully");
       return { success: true };
@@ -211,13 +256,56 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({
     try {
       setActionInProgress(orderId);
 
-      // Update the order status to rejected
+      // First try to get the order to check which schema is in use
+      const { data: order, error: fetchError } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+
+      if (fetchError) {
+        console.error("Error fetching order:", fetchError);
+        toast.error("Could not find order to reject");
+        return { success: false };
+      }
+
+      // Determine which columns exist in the schema
+      let updateData = { status: "rejected" };
+
+      // If the order has a status_updated_at field, update it too
+      if ("status_updated_at" in order) {
+        updateData = {
+          ...updateData,
+          status_updated_at: new Date().toISOString(),
+        };
+      }
+
+      // Update the order
       const { error } = await supabase
         .from("orders")
-        .update({ status: "rejected" })
+        .update(updateData)
         .eq("id", orderId);
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error rejecting order:", error);
+
+        // Try fallback approaches
+        try {
+          const { error: rpcError } = await supabase.rpc("reject_order", {
+            order_id: orderId,
+          });
+
+          if (!rpcError) {
+            toast.success("Order rejected via fallback method");
+            return { success: true };
+          }
+        } catch (rpcErr) {
+          console.log("RPC fallback failed:", rpcErr);
+        }
+
+        toast.error(`Failed to reject order: ${error.message}`);
+        return { success: false, error };
+      }
 
       toast.success("Order rejected successfully");
       return { success: true };
