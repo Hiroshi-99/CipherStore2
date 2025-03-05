@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 // Simple performance monitoring utility
 
 // Create a singleton for tracking performance metrics
